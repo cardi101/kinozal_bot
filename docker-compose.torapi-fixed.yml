@@ -1,0 +1,3 @@
+services:
+  torapi:
+    image: torapi:kinozal-fix
