@@ -40,6 +40,7 @@ from item_years import item_source_years, min_year_delta, extract_expected_tv_to
 from media_detection import is_non_video_release, detect_media_type
 from keyword_filters import parse_rating, normalize_keywords_input, build_keyword_haystacks, keyword_matches_item
 from title_prep import clean_release_title, looks_like_structured_numeric_title, is_release_group_candidate, normalize_structured_numeric_title, extract_structured_numeric_title_candidates, should_skip_tmdb_lookup, extract_title_aliases_from_text, split_title_parts, is_bad_tmdb_candidate
+from match_text import similarity, is_generic_cyrillic_title, normalize_match_text, text_tokens, raw_text_tokens, token_overlap_ratio
 from parsing_audio import parse_audio_variants, format_audio_variants, count_audio_variants, parse_audio_tracks, infer_release_type, format_release_full_title
 from keyboards import main_menu_kb, subscriptions_list_kb, sub_view_kb, sub_type_kb, year_preset_kb, rating_kb, format_kb, preset_kb, wizard_type_kb, wizard_years_kb, wizard_rating_kb, admin_invites_kb, admin_users_kb
 
@@ -565,66 +566,6 @@ def is_tv_revival_reset_match(
     if best_overlap < 0.72 and best_similarity_norm < 0.92:
         return False
     return True
-
-def similarity(a: str, b: str) -> float:
-    a = (a or "").lower()
-    b = (b or "").lower()
-    if not a or not b:
-        return 0.0
-    return SequenceMatcher(None, a, b).ratio()
-
-
-def is_generic_cyrillic_title(value: str) -> bool:
-    cleaned = clean_release_title(value or "")
-    if not cleaned:
-        return False
-    if re.search(r"[A-Za-z]", cleaned):
-        return False
-    if not re.search(r"[А-Яа-яЁё]", cleaned):
-        return False
-    tokens = text_tokens(cleaned)
-    return 1 <= len(tokens) <= 5
-
-
-def normalize_match_text(text: str) -> str:
-    text = compact_spaces(strip_html(text or "")).lower()
-    if not text:
-        return ""
-    translit_map = str.maketrans({
-        "ı": "i", "İ": "i", "ş": "s", "Ş": "s", "ğ": "g", "Ğ": "g",
-        "ç": "c", "Ç": "c", "ö": "o", "Ö": "o", "ü": "u", "Ü": "u",
-        "æ": "ae", "Æ": "ae", "œ": "oe", "Œ": "oe",
-    })
-    text = text.translate(translit_map)
-    text = "".join(ch for ch in unicodedata.normalize("NFKD", text) if not unicodedata.combining(ch))
-    text = re.sub(r"[^a-zа-яё0-9]+", " ", text, flags=re.I)
-    return compact_spaces(text)
-
-
-TITLE_STOPWORDS = {
-    "the", "a", "an", "and", "of", "to", "in", "on", "for", "at", "by", "with",
-    "la", "le", "el", "los", "las", "der", "die", "das", "de", "du",
-    "и", "в", "во", "на", "по", "с", "со", "к", "ко", "от", "до", "из", "у", "про",
-}
-
-
-def text_tokens(text: str) -> List[str]:
-    tokens = re.findall(r"[A-Za-zА-Яа-яЁё0-9]+", normalize_match_text(text or ""))
-    filtered = [t for t in tokens if t not in TITLE_STOPWORDS]
-    return filtered or tokens
-
-
-def raw_text_tokens(text: str) -> List[str]:
-    return re.findall(r"[A-Za-zА-Яа-яЁё0-9]+", normalize_match_text(text or ""))
-
-
-def token_overlap_ratio(a: str, b: str) -> float:
-    a_tokens = set(text_tokens(a))
-    b_tokens = set(text_tokens(b))
-    if not a_tokens or not b_tokens:
-        return 0.0
-    return len(a_tokens & b_tokens) / max(len(a_tokens), len(b_tokens), 1)
-
 
 def tmdb_match_looks_valid(item: Dict[str, Any], query: str, details: Dict[str, Any], requested_media_type: str) -> bool:
     source_is_tv = bool(item.get("source_episode_progress")) or str(item.get("media_type") or "") == "tv"
