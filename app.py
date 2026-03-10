@@ -67,6 +67,7 @@ from subscription_test_handlers import register_subscription_test_handlers
 from user_handlers import register_user_handlers
 from admin_match_handlers import register_admin_match_handlers
 from admin_access_handlers import register_admin_access_handlers
+from runtime_poller import process_new_items, poller
 from parsing_audio import parse_audio_variants, format_audio_variants, count_audio_variants, parse_audio_tracks, infer_release_type, format_release_full_title
 from keyboards import main_menu_kb, subscriptions_list_kb, sub_view_kb, sub_type_kb, year_preset_kb, rating_kb, format_kb, preset_kb, wizard_type_kb, wizard_years_kb, wizard_rating_kb, admin_invites_kb, admin_users_kb
 
@@ -2453,106 +2454,6 @@ async def cb_noop(callback: CallbackQuery) -> None:
     await callback.answer()
 
 
-async def process_new_items(bot: Bot) -> None:
-    items = await source.fetch_latest()
-    if not items:
-        log.info("Source returned no items")
-        return
-
-    first_run_seen = db.get_meta("bootstrap_done") == "1"
-    touched_item_ids: List[int] = []
-    new_item_ids: List[int] = []
-
-    for raw_item in items:
-        source_text = f"{raw_item.get('source_title') or ''} {raw_item.get('source_description') or ''}"
-        if raw_item.get("media_type") == "other" or is_non_video_release(source_text):
-            log.info("Skip non-video item: %s", raw_item.get("source_title"))
-            continue
-        enriched = await tmdb.enrich_item(raw_item)
-        if not enriched.get("tmdb_id") and compact_spaces(str(enriched.get("source_category_name") or "")):
-            log.info(
-                "TMDB no match, using source category fallback title=%s category=%s bucket=%s media=%s",
-                enriched.get("source_title"),
-                enriched.get("source_category_name"),
-                item_content_bucket(enriched),
-                enriched.get("media_type"),
-            )
-        item_id, is_new, materially_changed = db.save_item(enriched)
-        if is_new:
-            new_item_ids.append(item_id)
-            touched_item_ids.append(item_id)
-        elif materially_changed:
-            touched_item_ids.append(item_id)
-
-    enabled_subs = [db.get_subscription(int(sub["id"])) for sub in db.list_enabled_subscriptions()]
-    enabled_subs = [sub for sub in enabled_subs if sub]
-
-    if not first_run_seen and CFG.start_fetch_as_read:
-        for item_id in new_item_ids:
-            for sub in enabled_subs:
-                db.record_delivery(int(sub["tg_user_id"]), item_id, int(sub["id"]), [int(sub["id"])])
-        db.set_meta("bootstrap_done", "1")
-        log.info("Bootstrap complete: %s items marked as delivered", len(new_item_ids))
-        return
-
-    db.set_meta("bootstrap_done", "1")
-    if not touched_item_ids:
-        log.info("No new or enriched item versions")
-        return
-
-    for item_id in touched_item_ids:
-        item = db.get_item(item_id)
-        if not item:
-            continue
-
-        matches_by_user: Dict[int, List[Dict[str, Any]]] = {}
-        for sub in enabled_subs:
-            tg_user_id = int(sub["tg_user_id"])
-            if db.delivered(tg_user_id, item_id) or db.delivered_equivalent(tg_user_id, item):
-                continue
-            if not match_subscription(db, sub, item):
-                continue
-            matches_by_user.setdefault(tg_user_id, []).append(sub)
-
-        for tg_user_id, matched_subs in matches_by_user.items():
-            try:
-                previous_item = db.get_latest_delivered_related_item(tg_user_id, item)
-                if previous_item:
-                    log.info(
-                        "Delivering updated release item=%s to user=%s source_uid=%s reason=%s prev_item_id=%s",
-                        item_id,
-                        tg_user_id,
-                        item.get("source_uid"),
-                        describe_variant_change(previous_item, item),
-                        previous_item.get("id"),
-                    )
-                else:
-                    log.info(
-                        "Delivering new release item=%s to user=%s source_uid=%s",
-                        item_id,
-                        tg_user_id,
-                        item.get("source_uid"),
-                    )
-                await send_item_to_user(db, bot, tg_user_id, item, matched_subs)
-                db.record_delivery(tg_user_id, item_id, int(matched_subs[0]["id"]), [int(sub["id"]) for sub in matched_subs])
-                await asyncio.sleep(0.12)
-            except Exception:
-                log.exception("Failed to deliver item=%s to user=%s", item_id, tg_user_id)
-
-
-async def poller(bot: Bot) -> None:
-    while True:
-        try:
-            await process_new_items(bot)
-            await note_source_cycle_success(db, bot)
-        except asyncio.CancelledError:
-            raise
-        except Exception as exc:
-            await note_source_cycle_failure(db, bot, exc)
-            log.exception("Poller cycle failed")
-        await asyncio.sleep(CFG.poll_seconds)
-
-
 async def on_startup(bot: Bot) -> None:
     global poller_task
     if CFG.tmdb_token:
@@ -2566,7 +2467,7 @@ async def on_startup(bot: Bot) -> None:
             log.info("Preset rollout applied to %s existing subscriptions", updated_preset_subs)
     except Exception:
         log.exception("Preset rollout failed on startup")
-    poller_task = asyncio.create_task(poller(bot))
+    poller_task = asyncio.create_task(poller(db, source, tmdb, bot))
     log.info("Bot started")
 
 
