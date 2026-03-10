@@ -1,0 +1,46 @@
+services:
+  torapi:
+    image: lifailon/torapi:latest
+    container_name: torapi
+    restart: unless-stopped
+    ports:
+      - "8443:8443"
+    environment:
+      PORT: "8443"
+      PROXY_ADDRESS: ""
+      PROXY_PORT: ""
+      USERNAME: ""
+      PASSWORD: ""
+    networks:
+      - kinozal_net
+
+  app:
+    build: .
+    restart: unless-stopped
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    environment:
+      BOT_TOKEN: "${BOT_TOKEN}"
+      ADMIN_IDS: "${ADMIN_IDS}"
+      ALLOW_MODE: "${ALLOW_MODE}"
+      TMDB_TOKEN: "${TMDB_TOKEN}"
+      TORAPI_BASE: "http://host.docker.internal:8443"
+      POLL_SECONDS: "${POLL_SECONDS}"
+      REQUEST_TIMEOUT: "${REQUEST_TIMEOUT}"
+      DATABASE_URL: "${DATABASE_URL}"
+      REDIS_URL: "${REDIS_URL}"
+      DISABLE_WEB_PAGE_PREVIEW: "${DISABLE_WEB_PAGE_PREVIEW}"
+      BOOTSTRAP_AS_READ: "${BOOTSTRAP_AS_READ}"
+      SOURCE_FETCH_LIMIT: "${SOURCE_FETCH_LIMIT}"
+      CLEANUP_DUPLICATES_PREVIEW_LIMIT: "${CLEANUP_DUPLICATES_PREVIEW_LIMIT}"
+      CLEANUP_VERSIONS_PREVIEW_LIMIT: "${CLEANUP_VERSIONS_PREVIEW_LIMIT}"
+      CLEANUP_VERSIONS_KEEP_LAST: "${CLEANUP_VERSIONS_KEEP_LAST}"
+      DEEP_LINK_BOT_USERNAME: "${DEEP_LINK_BOT_USERNAME}"
+      TMDB_LANGUAGE: "${TMDB_LANGUAGE}"
+      STARTUP_DB_RETRIES: "${STARTUP_DB_RETRIES}"
+      STARTUP_DB_RETRY_DELAY: "${STARTUP_DB_RETRY_DELAY}"
+      TMDB_CACHE_TTL: "${TMDB_CACHE_TTL}"
+
+networks:
+  kinozal_net:
+    driver: bridge
