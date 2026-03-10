@@ -1,8 +1,9 @@
 import html
-import re
 from typing import Any, Dict, List, Optional, Tuple
 
 from config import CFG
+from release_versioning import extract_kinozal_id
+from subscription_text import sub_summary
 from text_access import format_dt, user_access_state, format_access_expiry
 from utils import compact_spaces
 
@@ -54,7 +55,7 @@ def format_admin_user_line(user: Dict[str, Any]) -> str:
     )
 
 
-def format_admin_user_details(user: Dict[str, Any]) -> str:
+def format_admin_user_details(db: Any, user: Dict[str, Any]) -> str:
     state = user_access_state(user)
     username = compact_spaces(str(user.get("username") or ""))
     first_name = compact_spaces(str(user.get("first_name") or ""))
@@ -71,7 +72,8 @@ def format_admin_user_details(user: Dict[str, Any]) -> str:
         lines.append("")
         lines.append("Подписки:")
         for sub in subs:
-            lines.append(sub_summary(db, db.get_subscription(int(sub["id"])) or sub))
+            sub_full = db.get_subscription(int(sub["id"])) or sub
+            lines.append(sub_summary(db, sub_full))
             lines.append("")
         if lines[-1] == "":
             lines.pop()
