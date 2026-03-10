@@ -23,3 +23,9 @@ nano .env
 docker compose up -d --build
 docker compose logs -f app
 ```
+
+## Ops notes
+
+- Для `TorAPI` и `Kinozal` используется локальный воспроизводимый patch: [ops/torapi/README.md](./ops/torapi/README.md)
+- Compose override для patched `TorAPI`: [docker-compose.torapi-fixed.yml](./docker-compose.torapi-fixed.yml)
+
