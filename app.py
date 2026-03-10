@@ -46,6 +46,7 @@ from content_buckets import anime_fallback_signal_score, item_content_bucket
 from tmdb_match_validation import is_anime_franchise_parent_fallback, is_tv_continuation_parent_match, is_tv_revival_reset_match, tmdb_match_looks_valid
 from subscription_presets import PRESET_ROLLOUT_VERSION, subscription_presets, apply_subscription_preset, detect_subscription_preset_key
 from genres_helpers import item_genre_names, sub_genre_names
+from subscription_matching import match_subscription
 from parsing_audio import parse_audio_variants, format_audio_variants, count_audio_variants, parse_audio_tracks, infer_release_type, format_release_full_title
 from keyboards import main_menu_kb, subscriptions_list_kb, sub_view_kb, sub_type_kb, year_preset_kb, rating_kb, format_kb, preset_kb, wizard_type_kb, wizard_years_kb, wizard_rating_kb, admin_invites_kb, admin_users_kb
 
@@ -1302,7 +1303,7 @@ class DB:
         sub = self.get_subscription(sub_id)
         if not sub:
             return []
-        matched = [item for item in items if item and match_subscription(sub, item)]
+        matched = [item for item in items if item and match_subscription(db, sub, item)]
         matched.sort(key=lambda item: (int(item.get("source_published_at") or 0), int(item.get("id") or 0)), reverse=True)
         return matched[:limit]
 
@@ -2409,89 +2410,6 @@ class KinozalSource:
 source = KinozalSource(CFG.torapi_base)
 
 
-def match_subscription(sub: Dict[str, Any], item: Dict[str, Any]) -> bool:
-    if not sub or not item:
-        return False
-    if not sub.get("is_enabled"):
-        return False
-
-    sub_media = sub.get("media_type") or "any"
-    item_media = item.get("media_type") or "movie"
-    if item_media == "other" and sub_media != "other":
-        return False
-    if sub_media != "any" and sub_media != item_media:
-        return False
-
-    year_from = sub.get("year_from")
-    year_to = sub.get("year_to")
-    item_years = item_filter_years(item)
-    if year_from is not None or year_to is not None:
-        if not item_years:
-            return False
-        lo = int(year_from) if year_from is not None else min(item_years)
-        hi = int(year_to) if year_to is not None else max(item_years)
-        if not any(lo <= int(year) <= hi for year in item_years):
-            return False
-
-    allow_formats = []
-    if sub.get("allow_720"):
-        allow_formats.append("720")
-    if sub.get("allow_1080"):
-        allow_formats.append("1080")
-    if sub.get("allow_2160"):
-        allow_formats.append("2160")
-    if allow_formats:
-        if (item.get("source_format") or "") not in allow_formats:
-            return False
-
-    min_rating = sub.get("min_tmdb_rating")
-    item_rating = item.get("tmdb_rating")
-    if min_rating is not None:
-        if item_rating is None or float(item_rating) < float(min_rating):
-            return False
-
-    sub_genres = set(sub.get("genre_ids") or db.get_subscription_genres(int(sub["id"])))
-    if sub_genres:
-        item_genres = {int(g) for g in item.get("genre_ids", [])}
-        if not (item_genres & sub_genres):
-            return False
-
-    content_filter = str(sub.get("content_filter") or "any")
-    bucket = item_content_bucket(item)
-    if content_filter == "only_anime" and bucket != "anime":
-        return False
-    if content_filter == "only_dorama" and bucket != "dorama":
-        return False
-    if content_filter == "exclude_anime" and bucket == "anime":
-        return False
-    if content_filter == "exclude_dorama" and bucket == "dorama":
-        return False
-    if content_filter == "exclude_anime_dorama" and bucket in {"anime", "dorama"}:
-        return False
-
-    item_countries = set(effective_item_countries(item))
-    sub_countries = set(parse_country_codes(sub.get("country_codes") or sub.get("country_codes_list")))
-    if sub_countries:
-        if not item_countries or not (item_countries & sub_countries):
-            return False
-
-    excluded_countries = set(parse_country_codes(sub.get("exclude_country_codes") or sub.get("exclude_country_codes_list")))
-    if excluded_countries and item_countries and (item_countries & excluded_countries):
-        return False
-
-    text_haystack, tech_haystack = build_keyword_haystacks(item)
-
-    include = [x.strip().lower() for x in (sub.get("include_keywords") or "").split(",") if x.strip()]
-    exclude = [x.strip().lower() for x in (sub.get("exclude_keywords") or "").split(",") if x.strip()]
-
-    if include and not any(keyword_matches_item(word, item, text_haystack, tech_haystack) for word in include):
-        return False
-    if exclude and any(keyword_matches_item(word, item, text_haystack, tech_haystack) for word in exclude):
-        return False
-
-    return True
-
-
 def sub_summary(sub: Dict[str, Any]) -> str:
     genres = sub_genre_names(db, sub)
     countries = human_country_names(sub.get("country_codes") or sub.get("country_codes_list"), limit=12)
@@ -3118,7 +3036,7 @@ async def cmd_route(message: Message) -> None:
         sub_full = db.get_subscription(int(sub["id"]))
         if not sub_full:
             continue
-        if not match_subscription(sub_full, item):
+        if not match_subscription(db, sub_full, item):
             continue
         matched_users += 1
         tg_user_id = int(sub_full["tg_user_id"])
@@ -3171,7 +3089,7 @@ def build_match_explanation(item: Dict[str, Any], live_item: Optional[Dict[str, 
         sub_full = db.get_subscription(int(sub["id"]))
         if not sub_full:
             continue
-        if match_subscription(sub_full, display_item):
+        if match_subscription(db, sub_full, display_item):
             matched_subs.append(sub_full)
 
     lines = [
@@ -3882,7 +3800,7 @@ async def get_live_test_items_for_subscription(sub_id: int, limit: int = 5) -> L
                 exc_info=True,
             )
 
-        if match_subscription(sub, item):
+        if match_subscription(db, sub, item):
             matched.append(item)
 
         if len(matched) >= limit:
@@ -4511,7 +4429,7 @@ async def process_new_items(bot: Bot) -> None:
             tg_user_id = int(sub["tg_user_id"])
             if db.delivered(tg_user_id, item_id) or db.delivered_equivalent(tg_user_id, item):
                 continue
-            if not match_subscription(sub, item):
+            if not match_subscription(db, sub, item):
                 continue
             matches_by_user.setdefault(tg_user_id, []).append(sub)
 
