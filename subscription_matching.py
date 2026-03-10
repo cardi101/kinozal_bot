@@ -6,7 +6,34 @@ from item_years import item_filter_years
 from keyword_filters import build_keyword_haystacks, keyword_matches_item
 
 
+def _item_field(item, *names):
+    for name in names:
+        if isinstance(item, dict):
+            value = item.get(name)
+        else:
+            value = getattr(item, name, None)
+        if value not in (None, ""):
+            return value
+    return ""
+
+
+def _is_globally_ignored_item(item) -> bool:
+    source_category = str(
+        _item_field(
+            item,
+            "source_category_name",
+            "source_category",
+            "api_category",
+            "category_api",
+        )
+    ).strip().lower()
+    return source_category == "кино - концерт" or "концерт" in source_category
+
+
 def match_subscription(db: Any, sub: Dict[str, Any], item: Dict[str, Any]) -> bool:
+    if _is_globally_ignored_item(item):
+        return False
+
     if not sub or not item:
         return False
     if not sub.get("is_enabled"):
