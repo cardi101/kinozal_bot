@@ -68,6 +68,7 @@ from user_handlers import register_user_handlers
 from admin_match_handlers import register_admin_match_handlers
 from admin_access_handlers import register_admin_access_handlers
 from runtime_poller import process_new_items, poller
+from runtime_app import AppRuntime
 from parsing_audio import parse_audio_variants, format_audio_variants, count_audio_variants, parse_audio_tracks, infer_release_type, format_release_full_title
 from keyboards import main_menu_kb, subscriptions_list_kb, sub_view_kb, sub_type_kb, year_preset_kb, rating_kb, format_kb, preset_kb, wizard_type_kb, wizard_years_kb, wizard_rating_kb, admin_invites_kb, admin_users_kb
 
@@ -2432,11 +2433,21 @@ source = KinozalSource(CFG.torapi_base)
 
 
 router = Router()
-bot_instance: Optional[Bot] = None
-poller_task: Optional[asyncio.Task] = None
-
-
 ADMIN_USERS_PAGE_SIZE = 12
+
+
+runtime = AppRuntime(
+    CFG,
+    router,
+    db,
+    source,
+    tmdb,
+    cache,
+    poller,
+    log,
+    PRESET_ROLLOUT_VERSION,
+)
+
 
 register_menu_handlers(router, db, ADMIN_USERS_PAGE_SIZE)
 register_subscription_basic_handlers(router, db)
@@ -2454,46 +2465,5 @@ async def cb_noop(callback: CallbackQuery) -> None:
     await callback.answer()
 
 
-async def on_startup(bot: Bot) -> None:
-    global poller_task
-    if CFG.tmdb_token:
-        try:
-            await tmdb.ensure_genres(force=False)
-        except Exception:
-            log.exception("TMDB genre sync failed on startup")
-    try:
-        updated_preset_subs = db.rollout_existing_preset_subscriptions(PRESET_ROLLOUT_VERSION)
-        if updated_preset_subs:
-            log.info("Preset rollout applied to %s existing subscriptions", updated_preset_subs)
-    except Exception:
-        log.exception("Preset rollout failed on startup")
-    poller_task = asyncio.create_task(poller(db, source, tmdb, bot))
-    log.info("Bot started")
-
-
-async def on_shutdown(*_: Any) -> None:
-    global poller_task
-    if poller_task:
-        poller_task.cancel()
-        try:
-            await poller_task
-        except Exception:
-            pass
-    await tmdb.close()
-    await cache.close()
-    await source.close()
-    log.info("Bot stopped")
-
-
-async def main() -> None:
-    global bot_instance
-    bot_instance = Bot(CFG.bot_token)
-    dp = Dispatcher()
-    dp.include_router(router)
-    dp.startup.register(on_startup)
-    dp.shutdown.register(on_shutdown)
-    await dp.start_polling(bot_instance)
-
-
 if __name__ == "__main__":
-    asyncio.run(main())
+    asyncio.run(runtime.main())
