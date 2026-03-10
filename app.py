@@ -57,6 +57,7 @@ from access_helpers import ensure_access_for_message, ensure_access_for_callback
 from dynamic_keyboards import genres_kb, countries_kb, content_filter_kb
 from match_debug_helpers import build_match_explanation, rematch_item_live
 from subscription_test_helpers import get_live_test_items_for_subscription
+from menu_views import show_main_menu
 from parsing_audio import parse_audio_variants, format_audio_variants, count_audio_variants, parse_audio_tracks, infer_release_type, format_release_full_title
 from keyboards import main_menu_kb, subscriptions_list_kb, sub_view_kb, sub_type_kb, year_preset_kb, rating_kb, format_kb, preset_kb, wizard_type_kb, wizard_years_kb, wizard_rating_kb, admin_invites_kb, admin_users_kb
 
@@ -3007,16 +3008,6 @@ async def cmd_broadcast(message: Message) -> None:
         more = " …" if len(failed_ids) > 20 else ""
         lines.append(f"Не доставлено user_id: <code>{html.escape(preview + more)}</code>")
     await message.answer("\n".join(lines), parse_mode=ParseMode.HTML, disable_web_page_preview=True)
-
-async def show_main_menu(target: Message | CallbackQuery) -> None:
-    uid = target.from_user.id if isinstance(target, CallbackQuery) else target.from_user.id
-    text = "Главное меню"
-    kb = main_menu_kb(is_admin(uid))
-    if isinstance(target, CallbackQuery):
-        await safe_edit(target, text, kb)
-    else:
-        await target.answer(text, reply_markup=kb)
-
 
 @router.callback_query(F.data == "menu:root")
 async def cb_menu_root(callback: CallbackQuery) -> None:
