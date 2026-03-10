@@ -45,6 +45,7 @@ from tmdb_aliases import ANIME_TITLE_MARKER_RE, expand_tmdb_candidate_variants, 
 from content_buckets import anime_fallback_signal_score, item_content_bucket
 from tmdb_match_validation import is_anime_franchise_parent_fallback, is_tv_continuation_parent_match, is_tv_revival_reset_match, tmdb_match_looks_valid
 from subscription_presets import PRESET_ROLLOUT_VERSION, subscription_presets, apply_subscription_preset, detect_subscription_preset_key
+from genres_helpers import item_genre_names, sub_genre_names
 from parsing_audio import parse_audio_variants, format_audio_variants, count_audio_variants, parse_audio_tracks, infer_release_type, format_release_full_title
 from keyboards import main_menu_kb, subscriptions_list_kb, sub_view_kb, sub_type_kb, year_preset_kb, rating_kb, format_kb, preset_kb, wizard_type_kb, wizard_years_kb, wizard_rating_kb, admin_invites_kb, admin_users_kb
 
@@ -2408,16 +2409,6 @@ class KinozalSource:
 source = KinozalSource(CFG.torapi_base)
 
 
-def item_genre_names(item: Dict[str, Any]) -> List[str]:
-    all_genres = db.get_all_genres_merged()
-    return [all_genres.get(int(gid), str(gid)) for gid in item.get("genre_ids", []) if int(gid) in all_genres]
-
-
-def sub_genre_names(sub: Dict[str, Any]) -> List[str]:
-    all_genres = db.get_all_genres_merged()
-    return [all_genres.get(int(gid), str(gid)) for gid in sub.get("genre_ids", []) if int(gid) in all_genres]
-
-
 def match_subscription(sub: Dict[str, Any], item: Dict[str, Any]) -> bool:
     if not sub or not item:
         return False
@@ -2502,7 +2493,7 @@ def match_subscription(sub: Dict[str, Any], item: Dict[str, Any]) -> bool:
 
 
 def sub_summary(sub: Dict[str, Any]) -> str:
-    genres = sub_genre_names(sub)
+    genres = sub_genre_names(db, sub)
     countries = human_country_names(sub.get("country_codes") or sub.get("country_codes_list"), limit=12)
     exclude_countries = human_country_names(sub.get("exclude_country_codes") or sub.get("exclude_country_codes_list"), limit=12)
     formats = []
@@ -2570,7 +2561,7 @@ def item_message(item: Dict[str, Any], matched_subs: Optional[Sequence[Dict[str,
     votes = item.get("tmdb_vote_count")
     year = item_display_year(item)
     fmt = item.get("source_format")
-    genres = item_genre_names(item)
+    genres = item_genre_names(db, item)
     release_type = infer_release_type(source_title)
     audio_variants = parse_audio_variants(source_title)
     if not audio_variants:
