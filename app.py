@@ -51,6 +51,7 @@ from subscription_text import sub_summary
 from delivery_formatting import item_message
 from service_helpers import safe_edit, _exc_brief, send_admins_text
 from source_health import _meta_int, note_source_cycle_success, note_source_cycle_failure
+from delivery_sender import send_item_to_user
 from parsing_audio import parse_audio_variants, format_audio_variants, count_audio_variants, parse_audio_tracks, infer_release_type, format_release_full_title
 from keyboards import main_menu_kb, subscriptions_list_kb, sub_view_kb, sub_type_kb, year_preset_kb, rating_kb, format_kb, preset_kb, wizard_type_kb, wizard_years_kb, wizard_rating_kb, admin_invites_kb, admin_users_kb
 
@@ -2414,52 +2415,6 @@ class KinozalSource:
 source = KinozalSource(CFG.torapi_base)
 
 
-async def send_item_to_user(bot: Bot, tg_user_id: int, item: Dict[str, Any], subs: Optional[Sequence[Dict[str, Any]]]) -> None:
-    text = item_message(db, item, subs)
-    plain_text = html_to_plain_text(text)
-    poster = item.get("tmdb_poster_url")
-    full_html_text = short(text, 3900)
-    full_plain_text = short(plain_text, 3900)
-    caption_html = short(text, 1000)
-    caption_plain = short(plain_text, 1000)
-
-    if poster:
-        try:
-            await bot.send_photo(
-                tg_user_id,
-                photo=poster,
-                caption=caption_html,
-                parse_mode=ParseMode.HTML,
-            )
-            return
-        except Exception:
-            log.warning("send_photo failed for user=%s item=%s", tg_user_id, item.get("id"), exc_info=True)
-            try:
-                await bot.send_photo(
-                    tg_user_id,
-                    photo=poster,
-                    caption=caption_plain,
-                )
-                return
-            except Exception:
-                log.warning("send_photo plain fallback failed for user=%s item=%s", tg_user_id, item.get("id"), exc_info=True)
-
-    try:
-        await bot.send_message(
-            tg_user_id,
-            text=full_html_text,
-            parse_mode=ParseMode.HTML,
-            disable_web_page_preview=CFG.disable_preview,
-        )
-    except Exception:
-        log.warning("send_message HTML failed for user=%s item=%s", tg_user_id, item.get("id"), exc_info=True)
-        await bot.send_message(
-            tg_user_id,
-            text=full_plain_text,
-            disable_web_page_preview=CFG.disable_preview,
-        )
-
-
 def genres_kb(sub_id: int, page: int = 0) -> InlineKeyboardMarkup:
     all_genres = list(db.get_all_genres_merged().items())
     selected = set(db.get_subscription_genres(sub_id))
@@ -2726,7 +2681,7 @@ async def cmd_latest(message: Message) -> None:
         await message.answer("Пока ещё нет сохранённых релизов.")
         return
     for item in items:
-        await send_item_to_user(message.bot, message.chat.id, item, None)
+        await send_item_to_user(db, message.bot, message.chat.id, item, None)
 
 
 @router.message(Command("route"))
@@ -2785,7 +2740,7 @@ async def cmd_route(message: Message) -> None:
                     tg_user_id,
                     item.get("source_uid"),
                 )
-            await send_item_to_user(message.bot, tg_user_id, item, [sub_full])
+            await send_item_to_user(db, message.bot, tg_user_id, item, [sub_full])
             db.record_delivery(tg_user_id, int(item["id"]), int(sub_full["id"]), [int(sub_full["id"])])
             delivered_count += 1
         except Exception:
@@ -3352,7 +3307,7 @@ async def cb_menu_latest(callback: CallbackQuery) -> None:
         return
     await callback.message.answer("Последние сохранённые релизы:")
     for item in items:
-        await send_item_to_user(callback.bot, callback.message.chat.id, item, None)
+        await send_item_to_user(db, callback.bot, callback.message.chat.id, item, None)
     await callback.answer()
 
 
@@ -3553,7 +3508,7 @@ async def cb_sub_test(callback: CallbackQuery) -> None:
             disable_web_page_preview=CFG.disable_preview,
         )
         for item in items:
-            await send_item_to_user(callback.bot, callback.message.chat.id, item, [sub])
+            await send_item_to_user(db, callback.bot, callback.message.chat.id, item, [sub])
         await callback.answer("Показал свежие")
         return
 
@@ -3565,7 +3520,7 @@ async def cb_sub_test(callback: CallbackQuery) -> None:
             disable_web_page_preview=CFG.disable_preview,
         )
         for item in fallback_items:
-            await send_item_to_user(callback.bot, callback.message.chat.id, item, [sub])
+            await send_item_to_user(db, callback.bot, callback.message.chat.id, item, [sub])
         await callback.answer("Показал из базы")
         return
 
@@ -4177,7 +4132,7 @@ async def process_new_items(bot: Bot) -> None:
                         tg_user_id,
                         item.get("source_uid"),
                     )
-                await send_item_to_user(bot, tg_user_id, item, matched_subs)
+                await send_item_to_user(db, bot, tg_user_id, item, matched_subs)
                 db.record_delivery(tg_user_id, item_id, int(matched_subs[0]["id"]), [int(sub["id"]) for sub in matched_subs])
                 await asyncio.sleep(0.12)
             except Exception:

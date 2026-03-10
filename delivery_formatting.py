@@ -52,7 +52,7 @@ def item_message(db: Any, item: Dict[str, Any], matched_subs: Optional[Sequence[
     votes = item.get("tmdb_vote_count")
     year = item_display_year(item)
     fmt = item.get("source_format")
-    genres = item_genre_names(db, db, item)
+    genres = item_genre_names(db, item)
     release_type = infer_release_type(source_title)
     audio_variants = parse_audio_variants(source_title)
     if not audio_variants:
