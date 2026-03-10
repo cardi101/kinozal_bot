@@ -56,6 +56,7 @@ from admin_helpers import is_admin, extract_kinozal_id_from_text, parse_admin_ro
 from access_helpers import ensure_access_for_message, ensure_access_for_callback
 from dynamic_keyboards import genres_kb, countries_kb, content_filter_kb
 from match_debug_helpers import build_match_explanation, rematch_item_live
+from subscription_test_helpers import get_live_test_items_for_subscription
 from parsing_audio import parse_audio_variants, format_audio_variants, count_audio_variants, parse_audio_tracks, infer_release_type, format_release_full_title
 from keyboards import main_menu_kb, subscriptions_list_kb, sub_view_kb, sub_type_kb, year_preset_kb, rating_kb, format_kb, preset_kb, wizard_type_kb, wizard_years_kb, wizard_rating_kb, admin_invites_kb, admin_users_kb
 
@@ -3207,43 +3208,6 @@ async def cb_sub_delete(callback: CallbackQuery) -> None:
     await callback.answer("Удалено")
 
 
-async def get_live_test_items_for_subscription(sub_id: int, limit: int = 5) -> List[Dict[str, Any]]:
-    sub = db.get_subscription(sub_id)
-    if not sub:
-        return []
-
-    try:
-        fresh_items = await source.fetch_latest()
-    except Exception:
-        log.warning("Live test fetch failed for sub=%s", sub_id, exc_info=True)
-        return []
-
-    matched: List[Dict[str, Any]] = []
-
-    for raw_item in fresh_items:
-        item = dict(raw_item)
-        source_text = f"{item.get('source_title') or ''} {item.get('source_description') or ''}"
-        if item.get("media_type") == "other" or is_non_video_release(source_text):
-            continue
-        try:
-            item = await tmdb.enrich_item(item)
-        except Exception:
-            log.warning(
-                "TMDB enrich failed during subscription test for sub=%s title=%s",
-                sub_id,
-                item.get("source_title"),
-                exc_info=True,
-            )
-
-        if match_subscription(db, sub, item):
-            matched.append(item)
-
-        if len(matched) >= limit:
-            break
-
-    return matched
-
-
 @router.callback_query(F.data.startswith("sub:test:"))
 async def cb_sub_test(callback: CallbackQuery) -> None:
     if not await ensure_access_for_callback(db, callback):
@@ -3254,7 +3218,7 @@ async def cb_sub_test(callback: CallbackQuery) -> None:
         return
 
     sub = db.get_subscription(sub_id)
-    items = await get_live_test_items_for_subscription(sub_id, limit=5)
+    items = await get_live_test_items_for_subscription(db, source, tmdb, sub_id, limit=5)
 
     if items:
         await callback.message.answer(
