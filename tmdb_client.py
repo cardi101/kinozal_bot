@@ -24,7 +24,7 @@ class TMDBClient:
         self.token = token
         self.language = language
         self.client = httpx.AsyncClient(timeout=self.cfg.request_timeout)
-        self.base = "https://api.themovieself.db.org/3"
+        self.base = "https://api.themoviedb.org/3"
 
     async def close(self) -> None:
         await self.client.aclose()
@@ -353,7 +353,7 @@ class TMDBClient:
         original = data.get("original_title") or data.get("original_name") or ""
         release_date = data.get("release_date") or data.get("first_air_date") or ""
         poster_path = data.get("poster_path") or ""
-        poster_url = f"https://image.tmself.db.org/t/p/w500{poster_path}" if poster_path else None
+        poster_url = f"https://image.tmdb.org/t/p/w500{poster_path}" if poster_path else None
         imdb_id = None
         ext = data.get("external_ids") or {}
         if ext.get("imdb_id"):

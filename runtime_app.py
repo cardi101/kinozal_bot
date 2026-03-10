@@ -62,8 +62,10 @@ class AppRuntime:
             self.poller_task.cancel()
             try:
                 await self.poller_task
-            except Exception:
+            except asyncio.CancelledError:
                 pass
+            except Exception:
+                self.log.exception("Poller task shutdown failed")
 
         await self.tmdb.close()
         await self.cache.close()
