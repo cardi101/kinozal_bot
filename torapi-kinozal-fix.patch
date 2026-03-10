@@ -1,0 +1,34 @@
+diff --git a/main.js b/main.js
+index 840b208..6a33371 100644
+--- a/main.js
++++ b/main.js
+@@ -706,13 +706,23 @@ async function Kinozal(query, categoryId, page, year, format) {
+     }
+     // Загружаем HTML-страницу с помощью Cheerio
+     const data = cheerio.load(html)
+-    // Поиск таблицы с классом (.) t_peer, его дочернего элемента tbody и вложенных tr для перебора строк таблицы и извлечения данных из каждой строки
+-    data('.t_peer tbody tr').each((_, element) => {
+-        // Проверяем, что элемент с названием не пустой (пропустить первый элемент наименование столбцов)
+-        const checkData = data(element).find('.nam a')
++
++    // Старый селектор Kinozal (.t_peer tbody tr) стал нестабилен.
++    // Сначала пробуем старую таблицу, затем fallback по ссылкам details.php?id=...
++    let rows = data('.t_peer tbody tr')
++    if (rows.length === 0) {
++        rows = data('tr').filter((_, el) => {
++            const row = data(el)
++            return row.find('.nam a[href*="details.php?id="], a[href*="details.php?id="]').length > 0
++        })
++    }
++
++    rows.each((_, element) => {
++        // Проверяем, что в строке есть ссылка на раздачу
++        const checkData = data(element).find('.nam a[href*="details.php?id="], a[href*="details.php?id="]').first()
+         if (checkData.length > 0) {
+-            // Ищем дочерний элемент с классом 'nam' и его вложенным элементом 'a'
+-            torrentName = data(element).find('.nam a')
++            // Берём ссылку из .nam a, а если её нет — любую ссылку details.php?id=...
++            torrentName = checkData
+             // Забираем текст заголовка и разбиваем его на массив
+             const Title = torrentName.text().trim()
+             const arrTitle = Title.split(" / ")
