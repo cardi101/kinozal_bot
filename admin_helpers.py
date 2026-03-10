@@ -72,8 +72,8 @@ def format_admin_user_details(db: Any, user: Dict[str, Any]) -> str:
         lines.append("")
         lines.append("Подписки:")
         for sub in subs:
-            sub_full = db.get_subscription(int(sub["id"])) or sub
-            lines.append(sub_summary(db, sub_full))
+            hydrated_sub = db.get_subscription(int(sub["id"])) or sub
+            lines.append(sub_summary(db, hydrated_sub))
             lines.append("")
         if lines[-1] == "":
             lines.pop()
