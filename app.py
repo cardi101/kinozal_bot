@@ -49,6 +49,7 @@ from genres_helpers import item_genre_names, sub_genre_names
 from subscription_matching import match_subscription
 from subscription_text import sub_summary
 from delivery_formatting import item_message
+from service_helpers import safe_edit, _exc_brief, send_admins_text
 from parsing_audio import parse_audio_variants, format_audio_variants, count_audio_variants, parse_audio_tracks, infer_release_type, format_release_full_title
 from keyboards import main_menu_kb, subscriptions_list_kb, sub_view_kb, sub_type_kb, year_preset_kb, rating_kb, format_kb, preset_kb, wizard_type_kb, wizard_years_kb, wizard_rating_kb, admin_invites_kb, admin_users_kb
 
@@ -2536,23 +2537,6 @@ bot_instance: Optional[Bot] = None
 poller_task: Optional[asyncio.Task] = None
 
 
-async def safe_edit(callback: CallbackQuery, text: str, reply_markup: Optional[InlineKeyboardMarkup] = None) -> None:
-    try:
-        await callback.message.edit_text(
-            text,
-            reply_markup=reply_markup,
-            parse_mode=ParseMode.HTML,
-            disable_web_page_preview=CFG.disable_preview,
-        )
-    except TelegramBadRequest:
-        await callback.message.answer(
-            text,
-            reply_markup=reply_markup,
-            parse_mode=ParseMode.HTML,
-            disable_web_page_preview=CFG.disable_preview,
-        )
-
-
 def is_admin(user_id: int) -> bool:
     return user_id in CFG.admin_ids
 
@@ -2563,26 +2547,6 @@ def _meta_int(key: str, default: int = 0) -> int:
         return int(value) if value is not None else default
     except Exception:
         return default
-
-
-def _exc_brief(exc: Exception) -> str:
-    text = compact_spaces(f"{type(exc).__name__}: {exc}")
-    return short(text, 500)
-
-
-async def send_admins_text(bot: Bot, text: str) -> None:
-    if not CFG.admin_ids:
-        return
-    for admin_id in CFG.admin_ids:
-        try:
-            await bot.send_message(
-                int(admin_id),
-                text,
-                parse_mode=ParseMode.HTML,
-                disable_web_page_preview=CFG.disable_preview,
-            )
-        except Exception:
-            log.warning("admin alert send failed admin=%s", admin_id, exc_info=True)
 
 
 async def note_source_cycle_success(bot: Bot) -> None:
