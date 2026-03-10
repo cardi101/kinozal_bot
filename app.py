@@ -64,6 +64,7 @@ from subscription_filter_handlers import register_subscription_filter_handlers
 from subscription_input_handlers import register_subscription_input_handlers
 from subscription_wizard_handlers import register_subscription_wizard_handlers
 from subscription_test_handlers import register_subscription_test_handlers
+from user_handlers import register_user_handlers
 from parsing_audio import parse_audio_variants, format_audio_variants, count_audio_variants, parse_audio_tracks, infer_release_type, format_release_full_title
 from keyboards import main_menu_kb, subscriptions_list_kb, sub_view_kb, sub_type_kb, year_preset_kb, rating_kb, format_kb, preset_kb, wizard_type_kb, wizard_years_kb, wizard_rating_kb, admin_invites_kb, admin_users_kb
 
@@ -2440,69 +2441,7 @@ register_subscription_filter_handlers(router, db)
 register_subscription_input_handlers(router, db)
 register_subscription_wizard_handlers(router, db)
 register_subscription_test_handlers(router, db, source, tmdb)
-
-
-@router.message(CommandStart(deep_link=True))
-@router.message(CommandStart())
-async def cmd_start(message: Message, command: CommandObject) -> None:
-    user_id = message.from_user.id
-    db.ensure_user(
-        user_id,
-        message.from_user.username or "",
-        message.from_user.first_name or "",
-        auto_grant=(CFG.allow_mode == "open" or is_admin(user_id)),
-    )
-
-    code = (command.args or "").strip() if command else ""
-    if code and CFG.allow_mode == "invite" and not db.user_has_access(user_id):
-        if db.redeem_invite(code, user_id):
-            await message.answer("✅ Доступ активирован. Добро пожаловать.", reply_markup=main_menu_kb(is_admin(user_id)))
-            return
-        await message.answer("❌ Инвайт не подошёл: просрочен, исчерпан или неверный.")
-        return
-
-    if not db.user_has_access(user_id):
-        await message.answer(
-            "Привет. Это бот для персональных новостей Kinozal.\n\n" + require_access_message()
-        )
-        return
-
-    text = (
-        "Привет ✨\n"
-        "Тут можно настроить личные выборки новинок с Kinozal,\n"
-        "дотянуть жанры/рейтинг/постер из TMDB и получать только то, что подходит тебе."
-    )
-    await message.answer(text, reply_markup=main_menu_kb(is_admin(user_id)))
-
-
-@router.message(Command("menu"))
-@router.message(Command("whoami"))
-async def cmd_whoami(message: Message) -> None:
-    db.ensure_user(
-        message.from_user.id,
-        message.from_user.username or "",
-        message.from_user.first_name or "",
-        auto_grant=(CFG.allow_mode == "open" or is_admin(message.from_user.id)),
-    )
-    user = db.get_user(message.from_user.id) or {}
-    await message.answer(
-        f"Твой Telegram user_id: <code>{message.from_user.id}</code>\n"
-        f"Статус доступа: {html.escape(user_access_state(user))}\n"
-        f"Доступ до: {html.escape(format_access_expiry(user.get('access_expires_at')))}",
-        parse_mode=ParseMode.HTML,
-    )
-
-
-@router.message(Command("latest"))
-async def cmd_latest(message: Message) -> None:
-    if not await ensure_access_for_message(db, message):
-        return
-    items = db.get_last_items(5)
-    if not items:
-        await message.answer("Пока ещё нет сохранённых релизов.")
-        return
-    for item in items:
-        await send_item_to_user(db, message.bot, message.chat.id, item, None)
+register_user_handlers(router, db)
 
 
 @router.message(Command("route"))
