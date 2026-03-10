@@ -35,6 +35,7 @@ from parsing_basic import parse_year, parse_years, parse_format, parse_imdb_id
 from text_access import format_dt, user_access_state, format_access_expiry, human_media_type, html_to_plain_text, require_access_message
 from source_categories import normalize_source_category_id, resolve_source_category_name, source_category_is_non_video, source_category_forced_media_type, source_category_bucket_hint, source_category_fallback_country_codes
 from release_versioning import parse_episode_progress, normalize_episode_progress_signature, extract_kinozal_id, resolve_item_kinozal_id, build_source_uid, normalize_audio_tracks_signature, version_release_type_signature, build_variant_signature, build_item_variant_signature, get_variant_components, get_item_variant_components, describe_variant_change, format_variant_summary, build_version_signature
+from country_helpers import ANIME_COUNTRY_CODES, parse_jsonish_list, parse_country_codes, country_name_ru, human_country_names, effective_item_countries, normalize_tmdb_language, has_asian_script, asian_dorama_signal_score, human_content_filter
 from parsing_audio import parse_audio_variants, format_audio_variants, count_audio_variants, parse_audio_tracks, infer_release_type, format_release_full_title
 from keyboards import main_menu_kb, subscriptions_list_kb, sub_view_kb, sub_type_kb, year_preset_kb, rating_kb, format_kb, preset_kb, wizard_type_kb, wizard_years_kb, wizard_rating_kb, admin_invites_kb, admin_users_kb
 
@@ -1378,188 +1379,6 @@ def keyword_matches_item(token: str, item: Dict[str, Any], text_haystack: Option
     return token in text_haystack
 
 
-COUNTRY_NAMES_RU: Dict[str, str] = {
-    "AE": "ОАЭ",
-    "AR": "Аргентина",
-    "AT": "Австрия",
-    "AU": "Австралия",
-    "BE": "Бельгия",
-    "BG": "Болгария",
-    "BR": "Бразилия",
-    "CA": "Канада",
-    "CH": "Швейцария",
-    "CL": "Чили",
-    "CN": "Китай",
-    "CO": "Колумбия",
-    "CZ": "Чехия",
-    "DE": "Германия",
-    "DK": "Дания",
-    "EG": "Египет",
-    "ES": "Испания",
-    "FI": "Финляндия",
-    "FR": "Франция",
-    "GB": "Великобритания",
-    "GR": "Греция",
-    "HK": "Гонконг",
-    "HR": "Хорватия",
-    "HU": "Венгрия",
-    "ID": "Индонезия",
-    "IE": "Ирландия",
-    "IL": "Израиль",
-    "IN": "Индия",
-    "IR": "Иран",
-    "IS": "Исландия",
-    "IT": "Италия",
-    "JP": "Япония",
-    "KR": "Южная Корея",
-    "KZ": "Казахстан",
-    "LT": "Литва",
-    "LV": "Латвия",
-    "MX": "Мексика",
-    "MY": "Малайзия",
-    "NL": "Нидерланды",
-    "NO": "Норвегия",
-    "NZ": "Новая Зеландия",
-    "PH": "Филиппины",
-    "PL": "Польша",
-    "PT": "Португалия",
-    "RO": "Румыния",
-    "RS": "Сербия",
-    "RU": "Россия",
-    "SE": "Швеция",
-    "SG": "Сингапур",
-    "TH": "Таиланд",
-    "TR": "Турция",
-    "TW": "Тайвань",
-    "UA": "Украина",
-    "US": "США",
-    "VN": "Вьетнам",
-    "ZA": "ЮАР",
-}
-
-
-def parse_jsonish_list(value: Any) -> List[str]:
-    if isinstance(value, list):
-        items = value
-    elif isinstance(value, str):
-        raw = value.strip()
-        if not raw:
-            return []
-        try:
-            loaded = json.loads(raw)
-            items = loaded if isinstance(loaded, list) else [loaded]
-        except Exception:
-            items = [x.strip() for x in raw.split(",") if x.strip()]
-    else:
-        return []
-
-    result: List[str] = []
-    seen = set()
-    for item in items:
-        value_str = compact_spaces(str(item or "")).strip()
-        if not value_str:
-            continue
-        value_key = value_str.lower()
-        if value_key in seen:
-            continue
-        seen.add(value_key)
-        result.append(value_str)
-    return result
-
-
-def parse_country_codes(value: Any) -> List[str]:
-    result: List[str] = []
-    seen = set()
-    for code in parse_jsonish_list(value):
-        normalized = compact_spaces(str(code)).upper()
-        if not normalized:
-            continue
-        if normalized in seen:
-            continue
-        seen.add(normalized)
-        result.append(normalized)
-    return result
-
-
-def country_name_ru(code: str) -> str:
-    normalized = compact_spaces(str(code or "")).upper()
-    if not normalized:
-        return ""
-    if normalized in COUNTRY_NAMES_RU:
-        return COUNTRY_NAMES_RU[normalized]
-    if pycountry is not None:
-        try:
-            country = pycountry.countries.get(alpha_2=normalized)
-            if country and getattr(country, "name", None):
-                return str(country.name)
-        except Exception:
-            pass
-    return normalized
-
-
-def human_country_names(value: Any, limit: Optional[int] = None) -> List[str]:
-    names = [country_name_ru(code) for code in parse_country_codes(value)]
-    return names[:limit] if limit is not None else names
-
-
-def effective_item_countries(item: Dict[str, Any]) -> List[str]:
-    manual = parse_country_codes(item.get("manual_country_codes"))
-    if manual:
-        return manual
-    tmdb_countries = parse_country_codes(item.get("tmdb_countries"))
-    if tmdb_countries:
-        return tmdb_countries
-    return parse_country_codes(source_category_fallback_country_codes(item))
-
-
-ANIME_COUNTRY_CODES = {"JP", "CN", "TW", "HK", "KR"}
-DORAMA_COUNTRY_CODES = {
-    "BN", "CN", "HK", "ID", "JP", "KH", "KR", "LA", "MM", "MO", "MY", "PH", "SG", "TH", "TW", "VN",
-}
-DORAMA_LANGUAGE_CODES = {"cn", "id", "ja", "ko", "ms", "th", "tl", "vi", "zh"}
-ASIAN_SCRIPT_RE = re.compile(r"[぀-ヿ㐀-䶿一-鿿豈-﫿가-힯฀-๿]")
-
-
-def normalize_tmdb_language(value: Any) -> str:
-    lang = compact_spaces(str(value or "")).lower()
-    lang = lang.replace("_", "-")
-    if not lang:
-        return ""
-    if lang in {"jp", "kr"}:
-        return {"jp": "ja", "kr": "ko"}[lang]
-    primary = lang.split("-", 1)[0]
-    if primary in {"jp", "kr"}:
-        return {"jp": "ja", "kr": "ko"}[primary]
-    return primary
-
-
-def has_asian_script(text: Any) -> bool:
-    return bool(ASIAN_SCRIPT_RE.search(compact_spaces(str(text or ""))))
-
-
-def asian_dorama_signal_score(item: Dict[str, Any]) -> int:
-    score = 0
-    countries = set(effective_item_countries(item))
-    if countries & DORAMA_COUNTRY_CODES:
-        score += 2
-
-    lang = normalize_tmdb_language(item.get("tmdb_original_language"))
-    if lang in DORAMA_LANGUAGE_CODES:
-        score += 2
-
-    original_title = item.get("tmdb_original_title") or ""
-    tmdb_title = item.get("tmdb_title") or ""
-    source_title = item.get("source_title") or ""
-    if has_asian_script(original_title):
-        score += 2
-    elif has_asian_script(tmdb_title):
-        score += 1
-    elif has_asian_script(source_title):
-        score += 1
-
-    return score
-
-
 def anime_fallback_signal_score(item: Dict[str, Any]) -> int:
     score = 0
     genres = {int(g) for g in parse_jsonish_list(item.get("genre_ids")) if str(g).isdigit()}
@@ -1631,18 +1450,6 @@ def item_content_bucket(item: Dict[str, Any]) -> str:
         if asian_dorama_signal_score(item) >= 2:
             return "dorama"
     return "regular"
-
-
-def human_content_filter(value: str) -> str:
-    mapping = {
-        "any": "любое",
-        "only_anime": "только аниме",
-        "only_dorama": "только дорамы",
-        "exclude_anime": "без аниме",
-        "exclude_dorama": "без дорам",
-        "exclude_anime_dorama": "без аниме и дорам",
-    }
-    return mapping.get(str(value or "any"), str(value or "any"))
 
 
 def subscription_presets() -> Dict[str, Dict[str, Any]]:
