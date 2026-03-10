@@ -32,6 +32,7 @@ from config import CFG, ACCESS_EXPIRY_UNSET
 from states import EditInputState
 from utils import utc_ts, now_utc, parse_dt, compact_spaces, strip_html, short, md5_text, sha1_text
 from parsing_basic import parse_year, parse_years, parse_format, parse_imdb_id
+from text_access import format_dt, user_access_state, format_access_expiry, human_media_type, html_to_plain_text, require_access_message
 from parsing_audio import parse_audio_variants, format_audio_variants, count_audio_variants, parse_audio_tracks, infer_release_type, format_release_full_title
 from keyboards import main_menu_kb, subscriptions_list_kb, sub_view_kb, sub_type_kb, year_preset_kb, rating_kb, format_kb, preset_kb, wizard_type_kb, wizard_years_kb, wizard_rating_kb, admin_invites_kb, admin_users_kb
 
@@ -4655,37 +4656,6 @@ def match_subscription(sub: Dict[str, Any], item: Dict[str, Any]) -> bool:
     return True
 
 
-def format_dt(ts: Optional[int]) -> str:
-    if not ts:
-        return "—"
-    return datetime.fromtimestamp(int(ts), tz=timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
-
-
-def user_access_state(user: Optional[Dict[str, Any]]) -> str:
-    if not user:
-        return "не найден"
-    if int(user.get("is_active") or 0) != 1:
-        return "неактивен"
-    if int(user.get("access_granted") or 0) != 1:
-        return "без доступа"
-    expires_at = user.get("access_expires_at")
-    if expires_at is not None and int(expires_at) <= utc_ts():
-        return "истёк"
-    if expires_at is None:
-        return "активен бессрочно"
-    return "активен"
-
-
-def format_access_expiry(ts: Optional[int]) -> str:
-    if ts is None:
-        return "без срока"
-    return format_dt(ts)
-
-
-def human_media_type(value: str) -> str:
-    return {"movie": "Фильмы", "tv": "Сериалы", "any": "Всё", "other": "Прочее"}.get(value or "any", value or "any")
-
-
 def sub_summary(sub: Dict[str, Any]) -> str:
     genres = sub_genre_names(sub)
     countries = human_country_names(sub.get("country_codes") or sub.get("country_codes_list"), limit=12)
@@ -4866,19 +4836,6 @@ def item_message(item: Dict[str, Any], matched_subs: Optional[Sequence[Dict[str,
     return text.strip()
 
 
-def html_to_plain_text(text: str) -> str:
-    text = text or ""
-    text = re.sub(r"(?i)<br\s*/?>", "\n", text)
-    text = re.sub(r"(?i)</p>", "\n\n", text)
-    text = re.sub(r"(?i)</?(?:b|strong|i|em|u|code)>", "", text)
-    text = re.sub(r'(?i)<a\s+[^>]*href="([^"]+)"[^>]*>(.*?)</a>', r'\2 (\1)', text)
-    text = re.sub(r"(?s)<[^>]+>", "", text)
-    text = html.unescape(text).replace("\xa0", " ")
-    text = re.sub(r"\n{3,}", "\n\n", text)
-    text = re.sub(r"[ 	]+\n", "\n", text)
-    return text.strip()
-
-
 async def send_item_to_user(bot: Bot, tg_user_id: int, item: Dict[str, Any], subs: Optional[Sequence[Dict[str, Any]]]) -> None:
     text = item_message(item, subs)
     plain_text = html_to_plain_text(text)
@@ -4923,14 +4880,6 @@ async def send_item_to_user(bot: Bot, tg_user_id: int, item: Dict[str, Any], sub
             text=full_plain_text,
             disable_web_page_preview=CFG.disable_preview,
         )
-
-
-def require_access_message() -> str:
-    if CFG.allow_mode == "open":
-        return "Доступ должен выдаваться автоматически. Если не пустило — проверь конфиг."
-    if CFG.allow_mode == "invite":
-        return "У тебя пока нет доступа. Пришли /start КОД_ИНВАЙТА"
-    return "У тебя пока нет доступа. Пусть админ добавит тебя через /grant USER_ID"
 
 
 def genres_kb(sub_id: int, page: int = 0) -> InlineKeyboardMarkup:
