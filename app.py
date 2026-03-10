@@ -47,6 +47,7 @@ from tmdb_match_validation import is_anime_franchise_parent_fallback, is_tv_cont
 from subscription_presets import PRESET_ROLLOUT_VERSION, subscription_presets, apply_subscription_preset, detect_subscription_preset_key
 from genres_helpers import item_genre_names, sub_genre_names
 from subscription_matching import match_subscription
+from subscription_text import sub_summary
 from parsing_audio import parse_audio_variants, format_audio_variants, count_audio_variants, parse_audio_tracks, infer_release_type, format_release_full_title
 from keyboards import main_menu_kb, subscriptions_list_kb, sub_view_kb, sub_type_kb, year_preset_kb, rating_kb, format_kb, preset_kb, wizard_type_kb, wizard_years_kb, wizard_rating_kb, admin_invites_kb, admin_users_kb
 
@@ -2410,42 +2411,6 @@ class KinozalSource:
 source = KinozalSource(CFG.torapi_base)
 
 
-def sub_summary(sub: Dict[str, Any]) -> str:
-    genres = sub_genre_names(db, sub)
-    countries = human_country_names(sub.get("country_codes") or sub.get("country_codes_list"), limit=12)
-    exclude_countries = human_country_names(sub.get("exclude_country_codes") or sub.get("exclude_country_codes_list"), limit=12)
-    formats = []
-    if sub.get("allow_720"):
-        formats.append("720")
-    if sub.get("allow_1080"):
-        formats.append("1080")
-    if sub.get("allow_2160"):
-        formats.append("2160")
-    years = "любой"
-    if sub.get("year_from") or sub.get("year_to"):
-        years = f"{sub.get('year_from') or '…'}–{sub.get('year_to') or '…'}"
-    rating = f"{float(sub['min_tmdb_rating']):.1f}" if sub.get("min_tmdb_rating") is not None else "без фильтра"
-    keywords = []
-    if sub.get("include_keywords"):
-        keywords.append("+" + sub["include_keywords"].replace(",", ", +"))
-    if sub.get("exclude_keywords"):
-        keywords.append("-" + sub["exclude_keywords"].replace(",", ", -"))
-    return (
-        f"#{sub['id']} {'🟢' if sub.get('is_enabled') else '⏸'} <b>{html.escape(sub['name'])}</b>\n"
-        f"Тип: {human_media_type(sub.get('media_type'))}\n"
-        f"Подтип: {human_content_filter(sub.get('content_filter') or 'any')}\n"
-        f"Годы: {years}\n"
-        f"Форматы: {', '.join(formats) if formats else 'любые'}\n"
-        f"Рейтинг TMDB: {rating}\n"
-        f"Жанры: {', '.join(genres) if genres else 'любые'}\n"
-        f"Страны: {', '.join(countries) if countries else 'любые'}\n"
-        f"Искл. страны: {', '.join(exclude_countries) if exclude_countries else 'нет'}\n"
-        f"Ключи: {' '.join(keywords) if keywords else 'без фильтра'}"
-    )
-
-
-
-
 def item_message(item: Dict[str, Any], matched_subs: Optional[Sequence[Dict[str, Any]]] = None) -> str:
     def human_date(value: Optional[str]) -> Optional[str]:
         if not value:
@@ -2880,7 +2845,7 @@ def format_admin_user_details(user: Dict[str, Any]) -> str:
         lines.append("")
         lines.append("Подписки:")
         for sub in subs:
-            lines.append(sub_summary(db.get_subscription(int(sub["id"])) or sub))
+            lines.append(sub_summary(db, db.get_subscription(int(sub["id"])) or sub))
             lines.append("")
         if lines[-1] == "":
             lines.pop()
@@ -2988,7 +2953,7 @@ async def cmd_subs(message: Message) -> None:
     if not subs:
         await message.answer("У тебя пока нет подписок.", reply_markup=main_menu_kb(is_admin(message.from_user.id)))
         return
-    text = "Твои подписки:\n\n" + "\n\n".join(sub_summary(db.get_subscription(int(x["id"]))) for x in subs[:10])
+    text = "Твои подписки:\n\n" + "\n\n".join(sub_summary(db, db.get_subscription(int(x["id"]))) for x in subs[:10])
     await message.answer(text, reply_markup=subscriptions_list_kb(subs), parse_mode=ParseMode.HTML)
 
 
@@ -3599,7 +3564,7 @@ async def cb_menu_subs(callback: CallbackQuery) -> None:
         await safe_edit(callback, "У тебя пока нет подписок.", main_menu_kb(is_admin(callback.from_user.id)))
         await callback.answer()
         return
-    text = "Твои подписки:\n\n" + "\n\n".join(sub_summary(db.get_subscription(int(x["id"]))) for x in subs[:10])
+    text = "Твои подписки:\n\n" + "\n\n".join(sub_summary(db, db.get_subscription(int(x["id"]))) for x in subs[:10])
     await safe_edit(callback, text, subscriptions_list_kb(subs))
     await callback.answer()
 
@@ -3736,7 +3701,7 @@ async def cb_sub_view(callback: CallbackQuery) -> None:
         await callback.answer("Это не твоя подписка", show_alert=True)
         return
     sub = db.get_subscription(sub_id)
-    await safe_edit(callback, sub_summary(sub), sub_view_kb(sub_id, sub))
+    await safe_edit(callback, sub_summary(db, sub), sub_view_kb(sub_id, sub))
     await callback.answer()
 
 
@@ -3751,7 +3716,7 @@ async def cb_sub_toggle(callback: CallbackQuery) -> None:
     sub = db.get_subscription(sub_id)
     db.update_subscription(sub_id, is_enabled=0 if sub.get("is_enabled") else 1)
     sub = db.get_subscription(sub_id)
-    await safe_edit(callback, sub_summary(sub), sub_view_kb(sub_id, sub))
+    await safe_edit(callback, sub_summary(db, sub), sub_view_kb(sub_id, sub))
     await callback.answer("Готово")
 
 
@@ -3879,7 +3844,7 @@ async def cb_sub_preset_apply(callback: CallbackQuery) -> None:
             await callback.answer("Переходим к своей настройке")
             return
         sub = db.get_subscription(sub_id)
-        await safe_edit(callback, sub_summary(sub), sub_view_kb(sub_id, sub))
+        await safe_edit(callback, sub_summary(db, sub), sub_view_kb(sub_id, sub))
         await callback.answer("Оставил текущую настройку")
         return
 
@@ -3889,7 +3854,7 @@ async def cb_sub_preset_apply(callback: CallbackQuery) -> None:
         return
 
     suffix = "Пресет применён. Подправь что нужно вручную." if flow == "edit" else "Пресет создан. Можно пользоваться сразу или подправить вручную."
-    await safe_edit(callback, f"{sub_summary(sub)}\n\n<i>{suffix}</i>", sub_view_kb(sub_id, sub))
+    await safe_edit(callback, f"{sub_summary(db, sub)}\n\n<i>{suffix}</i>", sub_view_kb(sub_id, sub))
     await callback.answer("Пресет применён")
 
 
@@ -3916,7 +3881,7 @@ async def cb_sub_content_filter(callback: CallbackQuery) -> None:
         return
     db.update_subscription(sub_id, content_filter=code)
     sub = db.get_subscription(sub_id)
-    await safe_edit(callback, sub_summary(sub), sub_view_kb(sub_id, sub))
+    await safe_edit(callback, sub_summary(db, sub), sub_view_kb(sub_id, sub))
     await callback.answer("Подтип обновлён")
 
 
@@ -3943,7 +3908,7 @@ async def cb_subtype(callback: CallbackQuery) -> None:
         return
     db.update_subscription(sub_id, media_type=media_type)
     sub = db.get_subscription(sub_id)
-    await safe_edit(callback, sub_summary(sub), sub_view_kb(sub_id, sub))
+    await safe_edit(callback, sub_summary(db, sub), sub_view_kb(sub_id, sub))
     await callback.answer("Тип обновлён")
 
 
@@ -3973,7 +3938,7 @@ async def cb_subyear(callback: CallbackQuery) -> None:
     else:
         db.update_subscription(sub_id, year_from=int(code), year_to=2100)
     sub = db.get_subscription(sub_id)
-    await safe_edit(callback, sub_summary(sub), sub_view_kb(sub_id, sub))
+    await safe_edit(callback, sub_summary(db, sub), sub_view_kb(sub_id, sub))
     await callback.answer("Годы обновлены")
 
 
@@ -4022,7 +3987,7 @@ async def st_waiting_years(message: Message, state: FSMContext) -> None:
     db.update_subscription(sub_id, year_from=year_from, year_to=year_to)
     await state.clear()
     sub = db.get_subscription(sub_id)
-    await message.answer(sub_summary(sub), parse_mode=ParseMode.HTML, reply_markup=sub_view_kb(sub_id, sub))
+    await message.answer(sub_summary(db, sub), parse_mode=ParseMode.HTML, reply_markup=sub_view_kb(sub_id, sub))
 
 
 @router.callback_query(F.data.startswith("sub:edit_formats:"))
@@ -4078,7 +4043,7 @@ async def cb_sub_rating(callback: CallbackQuery) -> None:
         return
     db.update_subscription(sub_id, min_tmdb_rating=None if code == "none" else float(code))
     sub = db.get_subscription(sub_id)
-    await safe_edit(callback, sub_summary(sub), sub_view_kb(sub_id, sub))
+    await safe_edit(callback, sub_summary(db, sub), sub_view_kb(sub_id, sub))
     await callback.answer("Рейтинг обновлён")
 
 
@@ -4268,7 +4233,7 @@ async def st_waiting_keywords(message: Message, state: FSMContext) -> None:
         db.update_subscription(sub_id, include_keywords=include, exclude_keywords=exclude)
     await state.clear()
     sub = db.get_subscription(sub_id)
-    await message.answer(sub_summary(sub), parse_mode=ParseMode.HTML, reply_markup=sub_view_kb(sub_id, sub))
+    await message.answer(sub_summary(db, sub), parse_mode=ParseMode.HTML, reply_markup=sub_view_kb(sub_id, sub))
 
 
 @router.callback_query(F.data.startswith("sub:rename:"))
@@ -4302,7 +4267,7 @@ async def st_waiting_name(message: Message, state: FSMContext) -> None:
     db.update_subscription(sub_id, name=new_name)
     await state.clear()
     sub = db.get_subscription(sub_id)
-    await message.answer(sub_summary(sub), parse_mode=ParseMode.HTML, reply_markup=sub_view_kb(sub_id, sub))
+    await message.answer(sub_summary(db, sub), parse_mode=ParseMode.HTML, reply_markup=sub_view_kb(sub_id, sub))
 
 
 @router.callback_query(F.data.startswith("wiztype:"))
