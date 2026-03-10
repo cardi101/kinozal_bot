@@ -35,7 +35,7 @@ from parsing_basic import parse_year, parse_years, parse_format, parse_imdb_id
 from text_access import format_dt, user_access_state, format_access_expiry, human_media_type, html_to_plain_text, require_access_message
 from source_categories import normalize_source_category_id, resolve_source_category_name, source_category_is_non_video, source_category_forced_media_type, source_category_bucket_hint, source_category_fallback_country_codes
 from release_versioning import parse_episode_progress, normalize_episode_progress_signature, extract_kinozal_id, resolve_item_kinozal_id, build_source_uid, normalize_audio_tracks_signature, version_release_type_signature, build_variant_signature, build_item_variant_signature, get_variant_components, get_item_variant_components, describe_variant_change, format_variant_summary, build_version_signature
-from country_helpers import ANIME_COUNTRY_CODES, parse_jsonish_list, parse_country_codes, country_name_ru, human_country_names, effective_item_countries, normalize_tmdb_language, has_asian_script, asian_dorama_signal_score, human_content_filter
+from country_helpers import COUNTRY_NAMES_RU, ANIME_COUNTRY_CODES, parse_jsonish_list, parse_country_codes, country_name_ru, human_country_names, effective_item_countries, normalize_tmdb_language, has_asian_script, asian_dorama_signal_score, human_content_filter
 from item_years import item_source_years, min_year_delta, extract_expected_tv_totals, extract_tv_season_hint, item_filter_years, item_display_year
 from media_detection import is_non_video_release, detect_media_type
 from keyword_filters import parse_rating, normalize_keywords_input, build_keyword_haystacks, keyword_matches_item
@@ -55,6 +55,7 @@ from delivery_sender import send_item_to_user
 from admin_helpers import is_admin, extract_kinozal_id_from_text, parse_admin_route_target, format_admin_user_line, format_admin_user_details, parse_command_payload
 from access_helpers import ensure_access_for_message, ensure_access_for_callback
 from dynamic_keyboards import genres_kb, countries_kb, content_filter_kb
+from match_debug_helpers import build_match_explanation, rematch_item_live
 from parsing_audio import parse_audio_variants, format_audio_variants, count_audio_variants, parse_audio_tracks, infer_release_type, format_release_full_title
 from keyboards import main_menu_kb, subscriptions_list_kb, sub_view_kb, sub_type_kb, year_preset_kb, rating_kb, format_kb, preset_kb, wizard_type_kb, wizard_years_kb, wizard_rating_kb, admin_invites_kb, admin_users_kb
 
@@ -2577,75 +2578,6 @@ async def cmd_route(message: Message) -> None:
     )
 
 
-def build_match_explanation(item: Dict[str, Any], live_item: Optional[Dict[str, Any]] = None) -> str:
-    display_item = live_item or item
-    kinozal_id = compact_spaces(str(item.get("kinozal_id") or "")) or resolve_item_kinozal_id(item) or "—"
-    media = str(display_item.get("media_type") or "movie")
-    bucket = item_content_bucket(display_item)
-    category_name = compact_spaces(str(display_item.get("source_category_name") or "")) or "—"
-    category_id = compact_spaces(str(display_item.get("source_category_id") or "")) or "—"
-    countries = effective_item_countries(display_item)
-    country_names = human_country_names(countries, limit=8)
-    candidates = title_search_candidates(display_item.get("source_title") or "", display_item.get("cleaned_title") or "")
-    matched_subs: List[Dict[str, Any]] = []
-    for sub in db.list_enabled_subscriptions():
-        sub_full = db.get_subscription(int(sub["id"]))
-        if not sub_full:
-            continue
-        if match_subscription(db, sub_full, display_item):
-            matched_subs.append(sub_full)
-
-    lines = [
-        f"🧭 <b>Explain match</b> — Kinozal ID <code>{html.escape(kinozal_id)}</code>",
-        f"Заголовок: {html.escape(compact_spaces(str(display_item.get('source_title') or '—')))}",
-        f"TMDB в БД: {html.escape('есть' if item.get('tmdb_id') else 'нет')}",
-    ]
-    if item.get("tmdb_id"):
-        lines.append(
-            f"TMDB в БД title: {html.escape(compact_spaces(str(item.get('tmdb_title') or item.get('tmdb_original_title') or '—')))} "
-            f"(id={int(item.get('tmdb_id') or 0)}, year={parse_year(str(item.get('tmdb_release_date') or '')) or '—'})"
-        )
-    if live_item is not None:
-        lines.append(f"TMDB live: {html.escape('есть' if live_item.get('tmdb_id') else 'нет')}")
-        if live_item.get("tmdb_id"):
-            lines.append(
-                f"TMDB live title: {html.escape(compact_spaces(str(live_item.get('tmdb_title') or live_item.get('tmdb_original_title') or '—')))} "
-                f"(id={int(live_item.get('tmdb_id') or 0)}, year={parse_year(str(live_item.get('tmdb_release_date') or '')) or '—'})"
-            )
-    lines.extend([
-        f"Media: {html.escape(human_media_type(media))}",
-        f"Bucket: {html.escape(bucket)}",
-        f"Категория API: {html.escape(category_name)} ({html.escape(category_id)})",
-        f"Страны: {html.escape(', '.join(country_names or countries or ['—']))}",
-        f"Manual route: bucket={html.escape(compact_spaces(str(display_item.get('manual_bucket') or '')) or '—')} | countries={html.escape(','.join(parse_jsonish_list(display_item.get('manual_country_codes')) or [] ) or '—')}",
-        f"Кандидаты TMDB: {html.escape(', '.join(candidates[:8]) if candidates else 'не извлеклись')}",
-        f"Подходящих подписок сейчас: {len(matched_subs)}",
-    ])
-    for sub in matched_subs[:12]:
-        lines.append(
-            f"• <code>{int(sub['tg_user_id'])}</code> — {html.escape(sub.get('name') or 'без названия')} "
-            f"[{html.escape(sub.get('preset_key') or 'custom')}]"
-        )
-    if len(matched_subs) > 12:
-        lines.append(f"… ещё {len(matched_subs) - 12}")
-    if not display_item.get("tmdb_id") and category_name != "—":
-        lines.append("")
-        lines.append("Фолбэк сейчас работает через source category.")
-    return "\n".join(lines)
-
-
-async def rematch_item_live(item: Dict[str, Any]) -> Tuple[Optional[Dict[str, Any]], Optional[Dict[str, Any]], bool]:
-    before = dict(item)
-    try:
-        enriched = await tmdb.enrich_item(dict(item))
-        db.save_item(enriched)
-        refreshed = db.get_item(int(item["id"])) or db.find_item_by_kinozal_id(str(item.get("kinozal_id") or ""))
-        return before, refreshed, True
-    except Exception:
-        log.exception("Rematch failed for item_id=%s kinozal_id=%s", item.get("id"), item.get("kinozal_id"))
-        return before, None, False
-
-
 @router.message(Command("explainmatch"))
 async def cmd_explainmatch(message: Message, command: CommandObject) -> None:
     if not is_admin(message.from_user.id):
@@ -2672,7 +2604,7 @@ async def cmd_explainmatch(message: Message, command: CommandObject) -> None:
         log.exception("Live explain TMDB recompute failed for kinozal_id=%s", kinozal_id)
         live_item = dict(item)
 
-    await message.answer(build_match_explanation(item, live_item), parse_mode=ParseMode.HTML, disable_web_page_preview=CFG.disable_preview)
+    await message.answer(build_match_explanation(db, item, live_item), parse_mode=ParseMode.HTML, disable_web_page_preview=CFG.disable_preview)
 
 
 @router.message(Command("rematch"))
@@ -2694,7 +2626,7 @@ async def cmd_rematch(message: Message, command: CommandObject) -> None:
         await message.answer(f"Не нашёл релиз в базе по Kinozal ID {kinozal_id}.")
         return
 
-    before, after, ok = await rematch_item_live(item)
+    before, after, ok = await rematch_item_live(db, tmdb, item)
     if not ok or not after:
         await message.answer(f"Не удалось перематчить Kinozal ID {kinozal_id}. Смотри лог app.")
         return
@@ -2738,7 +2670,7 @@ async def cmd_rematch_unmatched(message: Message, command: CommandObject) -> Non
     samples: List[str] = []
 
     for item in items:
-        before, after, ok = await rematch_item_live(item)
+        before, after, ok = await rematch_item_live(db, tmdb, item)
         if not ok or not after:
             errors += 1
             continue
