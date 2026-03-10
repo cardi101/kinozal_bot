@@ -1,4 +1,4 @@
-# Kinozal News Bot Rebuild v2
+# Kinozal Bot
 
 ## Что исправлено
 - BOOTSTRAP_AS_READ по умолчанию выключен
