@@ -63,6 +63,7 @@ from subscription_basic_handlers import register_subscription_basic_handlers
 from subscription_filter_handlers import register_subscription_filter_handlers
 from subscription_input_handlers import register_subscription_input_handlers
 from subscription_wizard_handlers import register_subscription_wizard_handlers
+from subscription_test_handlers import register_subscription_test_handlers
 from parsing_audio import parse_audio_variants, format_audio_variants, count_audio_variants, parse_audio_tracks, infer_release_type, format_release_full_title
 from keyboards import main_menu_kb, subscriptions_list_kb, sub_view_kb, sub_type_kb, year_preset_kb, rating_kb, format_kb, preset_kb, wizard_type_kb, wizard_years_kb, wizard_rating_kb, admin_invites_kb, admin_users_kb
 
@@ -2438,6 +2439,7 @@ register_subscription_basic_handlers(router, db)
 register_subscription_filter_handlers(router, db)
 register_subscription_input_handlers(router, db)
 register_subscription_wizard_handlers(router, db)
+register_subscription_test_handlers(router, db, source, tmdb)
 
 
 @router.message(CommandStart(deep_link=True))
@@ -3001,44 +3003,6 @@ async def cmd_broadcast(message: Message) -> None:
         more = " …" if len(failed_ids) > 20 else ""
         lines.append(f"Не доставлено user_id: <code>{html.escape(preview + more)}</code>")
     await message.answer("\n".join(lines), parse_mode=ParseMode.HTML, disable_web_page_preview=True)
-
-@router.callback_query(F.data.startswith("sub:test:"))
-async def cb_sub_test(callback: CallbackQuery) -> None:
-    if not await ensure_access_for_callback(db, callback):
-        return
-    sub_id = int(callback.data.split(":")[2])
-    if not db.subscription_belongs_to(sub_id, callback.from_user.id):
-        await callback.answer("Это не твоя подписка", show_alert=True)
-        return
-
-    sub = db.get_subscription(sub_id)
-    items = await get_live_test_items_for_subscription(db, source, tmdb, sub_id, limit=5)
-
-    if items:
-        await callback.message.answer(
-            f"Тест для <b>{html.escape(sub['name'])}</b>:\n<i>Показываю самые свежие совпадения с верха ленты.</i>",
-            parse_mode=ParseMode.HTML,
-            disable_web_page_preview=CFG.disable_preview,
-        )
-        for item in items:
-            await send_item_to_user(db, callback.bot, callback.message.chat.id, item, [sub])
-        await callback.answer("Показал свежие")
-        return
-
-    fallback_items = db.get_last_items_for_subscription(sub_id, 5)
-    if fallback_items:
-        await callback.message.answer(
-            f"Тест для <b>{html.escape(sub['name'])}</b>:\n<i>Свежих совпадений сверху ленты сейчас не нашлось, показываю последние совпадения из базы.</i>",
-            parse_mode=ParseMode.HTML,
-            disable_web_page_preview=CFG.disable_preview,
-        )
-        for item in fallback_items:
-            await send_item_to_user(db, callback.bot, callback.message.chat.id, item, [sub])
-        await callback.answer("Показал из базы")
-        return
-
-    await callback.answer("Совпадений среди свежих релизов пока нет", show_alert=True)
-
 
 @router.callback_query(F.data == "noop")
 async def cb_noop(callback: CallbackQuery) -> None:
