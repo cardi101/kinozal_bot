@@ -52,6 +52,8 @@ from delivery_formatting import item_message
 from service_helpers import safe_edit, _exc_brief, send_admins_text
 from source_health import _meta_int, note_source_cycle_success, note_source_cycle_failure
 from delivery_sender import send_item_to_user
+from admin_helpers import is_admin, extract_kinozal_id_from_text, parse_admin_route_target, format_admin_user_line, format_admin_user_details, parse_command_payload
+from access_helpers import ensure_access_for_message, ensure_access_for_callback
 from parsing_audio import parse_audio_variants, format_audio_variants, count_audio_variants, parse_audio_tracks, infer_release_type, format_release_full_title
 from keyboards import main_menu_kb, subscriptions_list_kb, sub_view_kb, sub_type_kb, year_preset_kb, rating_kb, format_kb, preset_kb, wizard_type_kb, wizard_years_kb, wizard_rating_kb, admin_invites_kb, admin_users_kb
 
@@ -2493,114 +2495,7 @@ bot_instance: Optional[Bot] = None
 poller_task: Optional[asyncio.Task] = None
 
 
-def is_admin(user_id: int) -> bool:
-    return user_id in CFG.admin_ids
-
-
-def extract_kinozal_id_from_text(text: str) -> Optional[str]:
-    return extract_kinozal_id(text)
-
-
-def parse_admin_route_target(raw: str) -> Tuple[Optional[str], List[str], str]:
-    token = compact_spaces((raw or "").strip()).lower()
-    mapping = {
-        "anime": ("anime", [], "аниме"),
-        "аниме": ("anime", [], "аниме"),
-        "dorama": ("dorama", [], "дорамы"),
-        "дорама": ("dorama", [], "дорамы"),
-        "дорамы": ("dorama", [], "дорамы"),
-        "world": ("regular", [], "мир"),
-        "мир": ("regular", [], "мир"),
-        "regular": ("regular", [], "обычное"),
-        "обычное": ("regular", [], "обычное"),
-        "turkey": ("regular", ["TR"], "Турция"),
-        "turkish": ("regular", ["TR"], "Турция"),
-        "турция": ("regular", ["TR"], "Турция"),
-        "tr": ("regular", ["TR"], "Турция"),
-    }
-    return mapping.get(token, (None, [], ""))
-
-
 ADMIN_USERS_PAGE_SIZE = 12
-
-
-def format_admin_user_line(user: Dict[str, Any]) -> str:
-    state = user_access_state(user)
-    username = compact_spaces(str(user.get("username") or ""))
-    first_name = compact_spaces(str(user.get("first_name") or ""))
-    label_parts = []
-    if first_name:
-        label_parts.append(first_name)
-    if username:
-        label_parts.append(f"@{username}")
-    label = " / ".join(label_parts) if label_parts else "без имени"
-    total_subs = int(user.get("subscriptions_total") or 0)
-    enabled_subs = int(user.get("subscriptions_enabled") or 0)
-    return (
-        f"• <code>{user['tg_user_id']}</code> — {html.escape(label)}\n"
-        f"  Статус: {html.escape(state)} | до: {html.escape(format_access_expiry(user.get('access_expires_at')))}\n"
-        f"  Подписок: {total_subs} (вкл: {enabled_subs})"
-    )
-
-
-def format_admin_user_details(user: Dict[str, Any]) -> str:
-    state = user_access_state(user)
-    username = compact_spaces(str(user.get("username") or ""))
-    first_name = compact_spaces(str(user.get("first_name") or ""))
-    lines = [
-        f"👤 Пользователь <code>{user['tg_user_id']}</code>",
-        f"Имя: {html.escape(first_name or '—')}",
-        f"Username: {html.escape('@' + username if username else '—')}",
-        f"Статус доступа: {html.escape(state)}",
-        f"Доступ до: {html.escape(format_access_expiry(user.get('access_expires_at')))}",
-        f"Создан: {html.escape(format_dt(user.get('created_at')))}",
-    ]
-    subs = user.get("subscriptions") or []
-    if subs:
-        lines.append("")
-        lines.append("Подписки:")
-        for sub in subs:
-            lines.append(sub_summary(db, db.get_subscription(int(sub["id"])) or sub))
-            lines.append("")
-        if lines[-1] == "":
-            lines.pop()
-    else:
-        lines.append("")
-        lines.append("Подписок нет.")
-    return "\n".join(lines)
-
-
-def parse_command_payload(text: Optional[str]) -> str:
-    raw = text or ""
-    parts = raw.split(maxsplit=1)
-    return parts[1].strip() if len(parts) > 1 else ""
-
-async def ensure_access_for_message(message: Message) -> bool:
-    user_id = message.from_user.id
-    db.ensure_user(
-        user_id,
-        message.from_user.username or "",
-        message.from_user.first_name or "",
-        auto_grant=(CFG.allow_mode == "open" or is_admin(user_id)),
-    )
-    if db.user_has_access(user_id):
-        return True
-    await message.answer(require_access_message())
-    return False
-
-
-async def ensure_access_for_callback(callback: CallbackQuery) -> bool:
-    user_id = callback.from_user.id
-    db.ensure_user(
-        user_id,
-        callback.from_user.username or "",
-        callback.from_user.first_name or "",
-        auto_grant=(CFG.allow_mode == "open" or is_admin(user_id)),
-    )
-    if db.user_has_access(user_id):
-        return True
-    await callback.answer("Нет доступа", show_alert=True)
-    return False
 
 
 @router.message(CommandStart(deep_link=True))
@@ -2638,7 +2533,7 @@ async def cmd_start(message: Message, command: CommandObject) -> None:
 
 @router.message(Command("menu"))
 async def cmd_menu(message: Message) -> None:
-    if not await ensure_access_for_message(message):
+    if not await ensure_access_for_message(db, message):
         return
     await message.answer("Главное меню", reply_markup=main_menu_kb(is_admin(message.from_user.id)))
 
@@ -2662,7 +2557,7 @@ async def cmd_whoami(message: Message) -> None:
 
 @router.message(Command("subs"))
 async def cmd_subs(message: Message) -> None:
-    if not await ensure_access_for_message(message):
+    if not await ensure_access_for_message(db, message):
         return
     subs = db.list_user_subscriptions(message.from_user.id)
     if not subs:
@@ -2674,7 +2569,7 @@ async def cmd_subs(message: Message) -> None:
 
 @router.message(Command("latest"))
 async def cmd_latest(message: Message) -> None:
-    if not await ensure_access_for_message(message):
+    if not await ensure_access_for_message(db, message):
         return
     items = db.get_last_items(5)
     if not items:
@@ -3203,7 +3098,7 @@ async def cmd_user(message: Message) -> None:
     if not user:
         await message.answer("Пользователь не найден.")
         return
-    await message.answer(format_admin_user_details(user), parse_mode=ParseMode.HTML, disable_web_page_preview=CFG.disable_preview)
+    await message.answer(format_admin_user_details(db, user), parse_mode=ParseMode.HTML, disable_web_page_preview=CFG.disable_preview)
 
 
 @router.message(Command("broadcast"))
@@ -3264,7 +3159,7 @@ async def show_main_menu(target: Message | CallbackQuery) -> None:
 
 @router.callback_query(F.data == "menu:root")
 async def cb_menu_root(callback: CallbackQuery) -> None:
-    if not await ensure_access_for_callback(callback):
+    if not await ensure_access_for_callback(db, callback):
         return
     await show_main_menu(callback)
     await callback.answer()
@@ -3272,7 +3167,7 @@ async def cb_menu_root(callback: CallbackQuery) -> None:
 
 @router.callback_query(F.data == "menu:subs")
 async def cb_menu_subs(callback: CallbackQuery) -> None:
-    if not await ensure_access_for_callback(callback):
+    if not await ensure_access_for_callback(db, callback):
         return
     subs = db.list_user_subscriptions(callback.from_user.id)
     if not subs:
@@ -3286,7 +3181,7 @@ async def cb_menu_subs(callback: CallbackQuery) -> None:
 
 @router.callback_query(F.data == "menu:new")
 async def cb_menu_new(callback: CallbackQuery) -> None:
-    if not await ensure_access_for_callback(callback):
+    if not await ensure_access_for_callback(db, callback):
         return
     sub = db.create_subscription(callback.from_user.id)
     text = (
@@ -3299,7 +3194,7 @@ async def cb_menu_new(callback: CallbackQuery) -> None:
 
 @router.callback_query(F.data == "menu:latest")
 async def cb_menu_latest(callback: CallbackQuery) -> None:
-    if not await ensure_access_for_callback(callback):
+    if not await ensure_access_for_callback(db, callback):
         return
     items = db.get_last_items(5)
     if not items:
@@ -3409,7 +3304,7 @@ async def cb_admin_users(callback: CallbackQuery) -> None:
 
 @router.callback_query(F.data.startswith("sub:view:"))
 async def cb_sub_view(callback: CallbackQuery) -> None:
-    if not await ensure_access_for_callback(callback):
+    if not await ensure_access_for_callback(db, callback):
         return
     sub_id = int(callback.data.split(":")[2])
     if not db.subscription_belongs_to(sub_id, callback.from_user.id):
@@ -3422,7 +3317,7 @@ async def cb_sub_view(callback: CallbackQuery) -> None:
 
 @router.callback_query(F.data.startswith("sub:toggle:"))
 async def cb_sub_toggle(callback: CallbackQuery) -> None:
-    if not await ensure_access_for_callback(callback):
+    if not await ensure_access_for_callback(db, callback):
         return
     sub_id = int(callback.data.split(":")[2])
     if not db.subscription_belongs_to(sub_id, callback.from_user.id):
@@ -3437,7 +3332,7 @@ async def cb_sub_toggle(callback: CallbackQuery) -> None:
 
 @router.callback_query(F.data.startswith("sub:delete:"))
 async def cb_sub_delete(callback: CallbackQuery) -> None:
-    if not await ensure_access_for_callback(callback):
+    if not await ensure_access_for_callback(db, callback):
         return
     sub_id = int(callback.data.split(":")[2])
     if not db.subscription_belongs_to(sub_id, callback.from_user.id):
@@ -3491,7 +3386,7 @@ async def get_live_test_items_for_subscription(sub_id: int, limit: int = 5) -> L
 
 @router.callback_query(F.data.startswith("sub:test:"))
 async def cb_sub_test(callback: CallbackQuery) -> None:
-    if not await ensure_access_for_callback(callback):
+    if not await ensure_access_for_callback(db, callback):
         return
     sub_id = int(callback.data.split(":")[2])
     if not db.subscription_belongs_to(sub_id, callback.from_user.id):
@@ -3529,7 +3424,7 @@ async def cb_sub_test(callback: CallbackQuery) -> None:
 
 @router.callback_query(F.data.startswith("sub:edit_presets:"))
 async def cb_sub_edit_presets(callback: CallbackQuery) -> None:
-    if not await ensure_access_for_callback(callback):
+    if not await ensure_access_for_callback(db, callback):
         return
     sub_id = int(callback.data.split(":")[2])
     if not db.subscription_belongs_to(sub_id, callback.from_user.id):
@@ -3541,7 +3436,7 @@ async def cb_sub_edit_presets(callback: CallbackQuery) -> None:
 
 @router.callback_query(F.data.startswith("subpreset:"))
 async def cb_sub_preset_apply(callback: CallbackQuery) -> None:
-    if not await ensure_access_for_callback(callback):
+    if not await ensure_access_for_callback(db, callback):
         return
     _, sub_id_str, flow, preset_key = callback.data.split(":")
     sub_id = int(sub_id_str)
@@ -3575,7 +3470,7 @@ async def cb_sub_preset_apply(callback: CallbackQuery) -> None:
 
 @router.callback_query(F.data.startswith("sub:edit_content_filter:"))
 async def cb_sub_edit_content_filter(callback: CallbackQuery) -> None:
-    if not await ensure_access_for_callback(callback):
+    if not await ensure_access_for_callback(db, callback):
         return
     sub_id = int(callback.data.split(":")[2])
     if not db.subscription_belongs_to(sub_id, callback.from_user.id):
@@ -3587,7 +3482,7 @@ async def cb_sub_edit_content_filter(callback: CallbackQuery) -> None:
 
 @router.callback_query(F.data.startswith("subcontent:"))
 async def cb_sub_content_filter(callback: CallbackQuery) -> None:
-    if not await ensure_access_for_callback(callback):
+    if not await ensure_access_for_callback(db, callback):
         return
     _, sub_id_str, code = callback.data.split(":")
     sub_id = int(sub_id_str)
@@ -3602,7 +3497,7 @@ async def cb_sub_content_filter(callback: CallbackQuery) -> None:
 
 @router.callback_query(F.data.startswith("sub:edit_type:"))
 async def cb_sub_edit_type(callback: CallbackQuery) -> None:
-    if not await ensure_access_for_callback(callback):
+    if not await ensure_access_for_callback(db, callback):
         return
     sub_id = int(callback.data.split(":")[2])
     if not db.subscription_belongs_to(sub_id, callback.from_user.id):
@@ -3614,7 +3509,7 @@ async def cb_sub_edit_type(callback: CallbackQuery) -> None:
 
 @router.callback_query(F.data.startswith("subtype:"))
 async def cb_subtype(callback: CallbackQuery) -> None:
-    if not await ensure_access_for_callback(callback):
+    if not await ensure_access_for_callback(db, callback):
         return
     _, sub_id_str, media_type = callback.data.split(":")
     sub_id = int(sub_id_str)
@@ -3629,7 +3524,7 @@ async def cb_subtype(callback: CallbackQuery) -> None:
 
 @router.callback_query(F.data.startswith("sub:edit_years:"))
 async def cb_sub_edit_years(callback: CallbackQuery) -> None:
-    if not await ensure_access_for_callback(callback):
+    if not await ensure_access_for_callback(db, callback):
         return
     sub_id = int(callback.data.split(":")[2])
     if not db.subscription_belongs_to(sub_id, callback.from_user.id):
@@ -3641,7 +3536,7 @@ async def cb_sub_edit_years(callback: CallbackQuery) -> None:
 
 @router.callback_query(F.data.startswith("subyear:"))
 async def cb_subyear(callback: CallbackQuery) -> None:
-    if not await ensure_access_for_callback(callback):
+    if not await ensure_access_for_callback(db, callback):
         return
     _, sub_id_str, code = callback.data.split(":")
     sub_id = int(sub_id_str)
@@ -3659,7 +3554,7 @@ async def cb_subyear(callback: CallbackQuery) -> None:
 
 @router.callback_query(F.data.startswith("sub:ask_years:"))
 async def cb_sub_ask_years(callback: CallbackQuery, state: FSMContext) -> None:
-    if not await ensure_access_for_callback(callback):
+    if not await ensure_access_for_callback(db, callback):
         return
     sub_id = int(callback.data.split(":")[2])
     if not db.subscription_belongs_to(sub_id, callback.from_user.id):
@@ -3678,7 +3573,7 @@ async def cb_sub_ask_years(callback: CallbackQuery, state: FSMContext) -> None:
 
 @router.message(EditInputState.waiting_years)
 async def st_waiting_years(message: Message, state: FSMContext) -> None:
-    if not await ensure_access_for_message(message):
+    if not await ensure_access_for_message(db, message):
         return
     data = await state.get_data()
     sub_id = int(data["sub_id"])
@@ -3707,7 +3602,7 @@ async def st_waiting_years(message: Message, state: FSMContext) -> None:
 
 @router.callback_query(F.data.startswith("sub:edit_formats:"))
 async def cb_sub_edit_formats(callback: CallbackQuery) -> None:
-    if not await ensure_access_for_callback(callback):
+    if not await ensure_access_for_callback(db, callback):
         return
     sub_id = int(callback.data.split(":")[2])
     if not db.subscription_belongs_to(sub_id, callback.from_user.id):
@@ -3720,7 +3615,7 @@ async def cb_sub_edit_formats(callback: CallbackQuery) -> None:
 
 @router.callback_query(F.data.startswith("subfmt:"))
 async def cb_sub_format_toggle(callback: CallbackQuery) -> None:
-    if not await ensure_access_for_callback(callback):
+    if not await ensure_access_for_callback(db, callback):
         return
     _, sub_id_str, fmt, mode = callback.data.split(":")
     sub_id = int(sub_id_str)
@@ -3737,7 +3632,7 @@ async def cb_sub_format_toggle(callback: CallbackQuery) -> None:
 
 @router.callback_query(F.data.startswith("sub:edit_rating:"))
 async def cb_sub_edit_rating(callback: CallbackQuery) -> None:
-    if not await ensure_access_for_callback(callback):
+    if not await ensure_access_for_callback(db, callback):
         return
     sub_id = int(callback.data.split(":")[2])
     if not db.subscription_belongs_to(sub_id, callback.from_user.id):
@@ -3749,7 +3644,7 @@ async def cb_sub_edit_rating(callback: CallbackQuery) -> None:
 
 @router.callback_query(F.data.startswith("subrating:"))
 async def cb_sub_rating(callback: CallbackQuery) -> None:
-    if not await ensure_access_for_callback(callback):
+    if not await ensure_access_for_callback(db, callback):
         return
     _, sub_id_str, code = callback.data.split(":")
     sub_id = int(sub_id_str)
@@ -3764,7 +3659,7 @@ async def cb_sub_rating(callback: CallbackQuery) -> None:
 
 @router.callback_query(F.data.startswith("sub:edit_genres:"))
 async def cb_sub_edit_genres(callback: CallbackQuery) -> None:
-    if not await ensure_access_for_callback(callback):
+    if not await ensure_access_for_callback(db, callback):
         return
     parts = callback.data.split(":")
     sub_id = int(parts[2])
@@ -3778,7 +3673,7 @@ async def cb_sub_edit_genres(callback: CallbackQuery) -> None:
 
 @router.callback_query(F.data.startswith("subgenre:"))
 async def cb_sub_genre_toggle(callback: CallbackQuery) -> None:
-    if not await ensure_access_for_callback(callback):
+    if not await ensure_access_for_callback(db, callback):
         return
     _, sub_id_str, page_str, genre_id_str = callback.data.split(":")
     sub_id = int(sub_id_str)
@@ -3794,7 +3689,7 @@ async def cb_sub_genre_toggle(callback: CallbackQuery) -> None:
 
 @router.callback_query(F.data.startswith("subgenrespage:"))
 async def cb_sub_genres_page(callback: CallbackQuery) -> None:
-    if not await ensure_access_for_callback(callback):
+    if not await ensure_access_for_callback(db, callback):
         return
     _, sub_id_str, page_str = callback.data.split(":")
     sub_id = int(sub_id_str)
@@ -3808,7 +3703,7 @@ async def cb_sub_genres_page(callback: CallbackQuery) -> None:
 
 @router.callback_query(F.data.startswith("subgenresclear:"))
 async def cb_sub_genres_clear(callback: CallbackQuery) -> None:
-    if not await ensure_access_for_callback(callback):
+    if not await ensure_access_for_callback(db, callback):
         return
     _, sub_id_str, page_str = callback.data.split(":")
     sub_id = int(sub_id_str)
@@ -3823,7 +3718,7 @@ async def cb_sub_genres_clear(callback: CallbackQuery) -> None:
 
 @router.callback_query(F.data.startswith("sub:edit_countries:"))
 async def cb_sub_edit_countries(callback: CallbackQuery) -> None:
-    if not await ensure_access_for_callback(callback):
+    if not await ensure_access_for_callback(db, callback):
         return
     parts = callback.data.split(":")
     sub_id = int(parts[2])
@@ -3837,7 +3732,7 @@ async def cb_sub_edit_countries(callback: CallbackQuery) -> None:
 
 @router.callback_query(F.data.startswith("sub:edit_exclude_countries:"))
 async def cb_sub_edit_exclude_countries(callback: CallbackQuery) -> None:
-    if not await ensure_access_for_callback(callback):
+    if not await ensure_access_for_callback(db, callback):
         return
     parts = callback.data.split(":")
     sub_id = int(parts[2])
@@ -3851,7 +3746,7 @@ async def cb_sub_edit_exclude_countries(callback: CallbackQuery) -> None:
 
 @router.callback_query(F.data.startswith("subcountry:"))
 async def cb_sub_country_toggle(callback: CallbackQuery) -> None:
-    if not await ensure_access_for_callback(callback):
+    if not await ensure_access_for_callback(db, callback):
         return
     _, mode, sub_id_str, page_str, country_code = callback.data.split(":")
     sub_id = int(sub_id_str)
@@ -3872,7 +3767,7 @@ async def cb_sub_country_toggle(callback: CallbackQuery) -> None:
 
 @router.callback_query(F.data.startswith("subcountriespage:"))
 async def cb_sub_countries_page(callback: CallbackQuery) -> None:
-    if not await ensure_access_for_callback(callback):
+    if not await ensure_access_for_callback(db, callback):
         return
     _, mode, sub_id_str, page_str = callback.data.split(":")
     sub_id = int(sub_id_str)
@@ -3887,7 +3782,7 @@ async def cb_sub_countries_page(callback: CallbackQuery) -> None:
 
 @router.callback_query(F.data.startswith("subcountriesclear:"))
 async def cb_sub_countries_clear(callback: CallbackQuery) -> None:
-    if not await ensure_access_for_callback(callback):
+    if not await ensure_access_for_callback(db, callback):
         return
     _, mode, sub_id_str, page_str = callback.data.split(":")
     sub_id = int(sub_id_str)
@@ -3910,7 +3805,7 @@ async def cb_sub_countries_clear(callback: CallbackQuery) -> None:
 
 @router.callback_query(F.data.startswith("sub:edit_keywords:"))
 async def cb_sub_edit_keywords(callback: CallbackQuery, state: FSMContext) -> None:
-    if not await ensure_access_for_callback(callback):
+    if not await ensure_access_for_callback(db, callback):
         return
     sub_id = int(callback.data.split(":")[2])
     if not db.subscription_belongs_to(sub_id, callback.from_user.id):
@@ -3932,7 +3827,7 @@ async def cb_sub_edit_keywords(callback: CallbackQuery, state: FSMContext) -> No
 
 @router.message(EditInputState.waiting_keywords)
 async def st_waiting_keywords(message: Message, state: FSMContext) -> None:
-    if not await ensure_access_for_message(message):
+    if not await ensure_access_for_message(db, message):
         return
     data = await state.get_data()
     sub_id = int(data["sub_id"])
@@ -3953,7 +3848,7 @@ async def st_waiting_keywords(message: Message, state: FSMContext) -> None:
 
 @router.callback_query(F.data.startswith("sub:rename:"))
 async def cb_sub_rename(callback: CallbackQuery, state: FSMContext) -> None:
-    if not await ensure_access_for_callback(callback):
+    if not await ensure_access_for_callback(db, callback):
         return
     sub_id = int(callback.data.split(":")[2])
     if not db.subscription_belongs_to(sub_id, callback.from_user.id):
@@ -3967,7 +3862,7 @@ async def cb_sub_rename(callback: CallbackQuery, state: FSMContext) -> None:
 
 @router.message(EditInputState.waiting_name)
 async def st_waiting_name(message: Message, state: FSMContext) -> None:
-    if not await ensure_access_for_message(message):
+    if not await ensure_access_for_message(db, message):
         return
     data = await state.get_data()
     sub_id = int(data["sub_id"])
@@ -3987,7 +3882,7 @@ async def st_waiting_name(message: Message, state: FSMContext) -> None:
 
 @router.callback_query(F.data.startswith("wiztype:"))
 async def cb_wiz_type(callback: CallbackQuery) -> None:
-    if not await ensure_access_for_callback(callback):
+    if not await ensure_access_for_callback(db, callback):
         return
     _, sub_id_str, media_type = callback.data.split(":")
     sub_id = int(sub_id_str)
@@ -4006,7 +3901,7 @@ async def cb_wiz_type(callback: CallbackQuery) -> None:
 
 @router.callback_query(F.data.startswith("wizfmtdone:"))
 async def cb_wiz_fmt_done(callback: CallbackQuery) -> None:
-    if not await ensure_access_for_callback(callback):
+    if not await ensure_access_for_callback(db, callback):
         return
     sub_id = int(callback.data.split(":")[1])
     if not db.subscription_belongs_to(sub_id, callback.from_user.id):
@@ -4018,7 +3913,7 @@ async def cb_wiz_fmt_done(callback: CallbackQuery) -> None:
 
 @router.callback_query(F.data.startswith("wizyear:"))
 async def cb_wiz_year(callback: CallbackQuery) -> None:
-    if not await ensure_access_for_callback(callback):
+    if not await ensure_access_for_callback(db, callback):
         return
     _, sub_id_str, code = callback.data.split(":")
     sub_id = int(sub_id_str)
@@ -4035,7 +3930,7 @@ async def cb_wiz_year(callback: CallbackQuery) -> None:
 
 @router.callback_query(F.data.startswith("wizrating:"))
 async def cb_wiz_rating(callback: CallbackQuery) -> None:
-    if not await ensure_access_for_callback(callback):
+    if not await ensure_access_for_callback(db, callback):
         return
     _, sub_id_str, code = callback.data.split(":")
     sub_id = int(sub_id_str)
