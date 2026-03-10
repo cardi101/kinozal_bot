@@ -44,6 +44,7 @@ from match_text import similarity, is_generic_cyrillic_title, normalize_match_te
 from tmdb_aliases import ANIME_TITLE_MARKER_RE, expand_tmdb_candidate_variants, is_long_latin_tmdb_query, is_short_or_common_tmdb_query, is_short_acronym_tmdb_query, manual_tmdb_override_for_item, manual_alias_candidates_from_text, anime_alias_candidates_from_text, title_search_candidates
 from content_buckets import anime_fallback_signal_score, item_content_bucket
 from tmdb_match_validation import is_anime_franchise_parent_fallback, is_tv_continuation_parent_match, is_tv_revival_reset_match, tmdb_match_looks_valid
+from subscription_presets import PRESET_ROLLOUT_VERSION, subscription_presets, apply_subscription_preset, detect_subscription_preset_key
 from parsing_audio import parse_audio_variants, format_audio_variants, count_audio_variants, parse_audio_tracks, infer_release_type, format_release_full_title
 from keyboards import main_menu_kb, subscriptions_list_kb, sub_view_kb, sub_type_kb, year_preset_kb, rating_kb, format_kb, preset_kb, wizard_type_kb, wizard_years_kb, wizard_rating_kb, admin_invites_kb, admin_users_kb
 
@@ -80,114 +81,6 @@ def item_duplicate_quality_score(item: Dict[str, Any]) -> int:
     if int(item.get("tmdb_vote_count") or 0) > 0:
         score += 2
     return score
-
-
-def subscription_presets() -> Dict[str, Dict[str, Any]]:
-    current_year = datetime.now().year
-    year_from = current_year - 1
-    base_exclude_keywords = "hdr,lossless,mp3,flac,fb2,epub,pdf,mobi"
-    return {
-        "world": {
-            "name": "🌍 Новинки — мир",
-            "fields": {
-                "media_type": "any",
-                "year_from": year_from,
-                "year_to": current_year,
-                "allow_720": 0,
-                "allow_1080": 1,
-                "allow_2160": 1,
-                "min_tmdb_rating": None,
-                "include_keywords": "",
-                "exclude_keywords": base_exclude_keywords + ",ру,укр,украин",
-                "content_filter": "exclude_anime_dorama",
-                "country_codes": "",
-                "exclude_country_codes": "TR,RU,UA,JP,KR,CN,TW,TH,HK,ID,MY,SG,PH,VN,LA,KH,MM,BD,PK,LK,NP,MN,KZ,UZ,KG,TJ,TM,AF,IR,IQ,SA,AE,QA,KW,OM,BH,YE,JO,LB,SY,IL,PS,BT,BN,MV",
-            },
-            "genre_ids": [],
-        },
-        "turkey": {
-            "name": "🇹🇷 Новинки — Турция",
-            "fields": {
-                "media_type": "any",
-                "year_from": year_from,
-                "year_to": current_year,
-                "allow_720": 1,
-                "allow_1080": 1,
-                "allow_2160": 1,
-                "min_tmdb_rating": None,
-                "include_keywords": "",
-                "exclude_keywords": base_exclude_keywords,
-                "content_filter": "any",
-                "country_codes": "TR",
-                "exclude_country_codes": "",
-            },
-            "genre_ids": [],
-        },
-        "dorama": {
-            "name": "🌸 Новинки — дорамы",
-            "fields": {
-                "media_type": "any",
-                "year_from": year_from,
-                "year_to": current_year,
-                "allow_720": 1,
-                "allow_1080": 1,
-                "allow_2160": 1,
-                "min_tmdb_rating": None,
-                "include_keywords": "",
-                "exclude_keywords": base_exclude_keywords,
-                "content_filter": "only_dorama",
-                "country_codes": "",
-                "exclude_country_codes": "",
-            },
-            "genre_ids": [],
-        },
-        "anime": {
-            "name": "🍥 Новинки — аниме",
-            "fields": {
-                "media_type": "any",
-                "year_from": year_from,
-                "year_to": current_year,
-                "allow_720": 1,
-                "allow_1080": 1,
-                "allow_2160": 1,
-                "min_tmdb_rating": None,
-                "include_keywords": "",
-                "exclude_keywords": base_exclude_keywords,
-                "content_filter": "only_anime",
-                "country_codes": "",
-                "exclude_country_codes": "",
-            },
-            "genre_ids": [],
-        },
-    }
-
-
-def apply_subscription_preset(sub_id: int, preset_key: str) -> Optional[Dict[str, Any]]:
-    spec = subscription_presets().get(preset_key)
-    if not spec:
-        return None
-    fields = dict(spec["fields"])
-    fields["name"] = spec["name"]
-    fields["preset_key"] = preset_key
-    db.update_subscription(sub_id, **fields)
-    db.set_subscription_genres(sub_id, spec.get("genre_ids", []))
-    return db.get_subscription(sub_id)
-
-
-PRESET_ROLLOUT_VERSION = "categories_v1"
-
-
-def detect_subscription_preset_key(sub: Dict[str, Any]) -> str:
-    preset_key = compact_spaces(str(sub.get("preset_key") or "")).lower()
-    if preset_key in subscription_presets():
-        return preset_key
-    name_norm = compact_spaces(str(sub.get("name") or "")).casefold()
-    if not name_norm:
-        return ""
-    for key, spec in subscription_presets().items():
-        if compact_spaces(spec.get("name") or "").casefold() == name_norm:
-            return key
-    return ""
 
 
 class DummyCursor:
@@ -4081,7 +3974,7 @@ async def cb_sub_preset_apply(callback: CallbackQuery) -> None:
         await callback.answer("Оставил текущую настройку")
         return
 
-    sub = apply_subscription_preset(sub_id, preset_key)
+    sub = apply_subscription_preset(db, sub_id, preset_key)
     if not sub:
         await callback.answer("Пресет не найден", show_alert=True)
         return
