@@ -54,6 +54,7 @@ from source_health import _meta_int, note_source_cycle_success, note_source_cycl
 from delivery_sender import send_item_to_user
 from admin_helpers import is_admin, extract_kinozal_id_from_text, parse_admin_route_target, format_admin_user_line, format_admin_user_details, parse_command_payload
 from access_helpers import ensure_access_for_message, ensure_access_for_callback
+from dynamic_keyboards import genres_kb, countries_kb, content_filter_kb
 from parsing_audio import parse_audio_variants, format_audio_variants, count_audio_variants, parse_audio_tracks, infer_release_type, format_release_full_title
 from keyboards import main_menu_kb, subscriptions_list_kb, sub_view_kb, sub_type_kb, year_preset_kb, rating_kb, format_kb, preset_kb, wizard_type_kb, wizard_years_kb, wizard_rating_kb, admin_invites_kb, admin_users_kb
 
@@ -2417,79 +2418,6 @@ class KinozalSource:
 source = KinozalSource(CFG.torapi_base)
 
 
-def genres_kb(sub_id: int, page: int = 0) -> InlineKeyboardMarkup:
-    all_genres = list(db.get_all_genres_merged().items())
-    selected = set(db.get_subscription_genres(sub_id))
-    per_page = 8
-    pages = max(1, (len(all_genres) + per_page - 1) // per_page)
-    page = max(0, min(page, pages - 1))
-    chunk = all_genres[page * per_page : (page + 1) * per_page]
-
-    kb = InlineKeyboardBuilder()
-    for genre_id, name in chunk:
-        mark = "✅" if genre_id in selected else "⬜️"
-        kb.button(text=f"{mark} {name}", callback_data=f"subgenre:{sub_id}:{page}:{genre_id}")
-    if pages > 1:
-        kb.button(text="⬅️", callback_data=f"subgenrespage:{sub_id}:{page-1}")
-        kb.button(text=f"{page+1}/{pages}", callback_data="noop")
-        kb.button(text="➡️", callback_data=f"subgenrespage:{sub_id}:{page+1}")
-    kb.button(text="Очистить жанры", callback_data=f"subgenresclear:{sub_id}:{page}")
-    kb.button(text="Готово", callback_data=f"sub:view:{sub_id}")
-    kb.adjust(1)
-    return kb.as_markup()
-
-
-def countries_kb(sub_id: int, page: int = 0, mode: str = "include") -> InlineKeyboardMarkup:
-    all_codes = db.get_known_country_codes()
-    selected = set(
-        db.get_subscription_country_codes(sub_id)
-        if mode == "include"
-        else db.get_subscription_exclude_country_codes(sub_id)
-    )
-    for code in selected:
-        if code not in all_codes:
-            all_codes.append(code)
-    all_codes = sorted(all_codes, key=lambda code: country_name_ru(code).lower())
-
-    per_page = 8
-    pages = max(1, (len(all_codes) + per_page - 1) // per_page)
-    page = max(0, min(page, pages - 1))
-    chunk = all_codes[page * per_page : (page + 1) * per_page]
-
-    kb = InlineKeyboardBuilder()
-    for code in chunk:
-        mark = "✅" if code in selected else "⬜️"
-        kb.button(text=f"{mark} {country_name_ru(code)}", callback_data=f"subcountry:{mode}:{sub_id}:{page}:{code}")
-    if pages > 1:
-        kb.button(text="⬅️", callback_data=f"subcountriespage:{mode}:{sub_id}:{page-1}")
-        kb.button(text=f"{page+1}/{pages}", callback_data="noop")
-        kb.button(text="➡️", callback_data=f"subcountriespage:{mode}:{sub_id}:{page+1}")
-    clear_text = "Очистить страны" if mode == "include" else "Очистить исключения"
-    kb.button(text=clear_text, callback_data=f"subcountriesclear:{mode}:{sub_id}:{page}")
-    kb.button(text="Готово", callback_data=f"sub:view:{sub_id}")
-    kb.adjust(1)
-    return kb.as_markup()
-
-
-def content_filter_kb(sub_id: int) -> InlineKeyboardMarkup:
-    selected = str((db.get_subscription(sub_id) or {}).get("content_filter") or "any")
-    options = [
-        ("Любое", "any"),
-        ("Только аниме", "only_anime"),
-        ("Только дорамы", "only_dorama"),
-        ("Без аниме", "exclude_anime"),
-        ("Без дорам", "exclude_dorama"),
-        ("Без аниме и дорам", "exclude_anime_dorama"),
-    ]
-    kb = InlineKeyboardBuilder()
-    for text, code in options:
-        mark = "✅" if code == selected else "⬜️"
-        kb.button(text=f"{mark} {text}", callback_data=f"subcontent:{sub_id}:{code}")
-    kb.button(text="◀️ Назад", callback_data=f"sub:view:{sub_id}")
-    kb.adjust(1)
-    return kb.as_markup()
-
-
 router = Router()
 bot_instance: Optional[Bot] = None
 poller_task: Optional[asyncio.Task] = None
@@ -3476,7 +3404,7 @@ async def cb_sub_edit_content_filter(callback: CallbackQuery) -> None:
     if not db.subscription_belongs_to(sub_id, callback.from_user.id):
         await callback.answer("Это не твоя подписка", show_alert=True)
         return
-    await safe_edit(callback, "Выбери подтип контента:", content_filter_kb(sub_id))
+    await safe_edit(callback, "Выбери подтип контента:", content_filter_kb(db, sub_id))
     await callback.answer()
 
 
@@ -3667,7 +3595,7 @@ async def cb_sub_edit_genres(callback: CallbackQuery) -> None:
     if not db.subscription_belongs_to(sub_id, callback.from_user.id):
         await callback.answer("Это не твоя подписка", show_alert=True)
         return
-    await safe_edit(callback, "Выбери жанры:", genres_kb(sub_id, page))
+    await safe_edit(callback, "Выбери жанры:", genres_kb(db, sub_id, page))
     await callback.answer()
 
 
@@ -3683,7 +3611,7 @@ async def cb_sub_genre_toggle(callback: CallbackQuery) -> None:
         await callback.answer("Это не твоя подписка", show_alert=True)
         return
     db.toggle_subscription_genre(sub_id, genre_id)
-    await safe_edit(callback, "Выбери жанры:", genres_kb(sub_id, page))
+    await safe_edit(callback, "Выбери жанры:", genres_kb(db, sub_id, page))
     await callback.answer()
 
 
@@ -3697,7 +3625,7 @@ async def cb_sub_genres_page(callback: CallbackQuery) -> None:
     if not db.subscription_belongs_to(sub_id, callback.from_user.id):
         await callback.answer("Это не твоя подписка", show_alert=True)
         return
-    await safe_edit(callback, "Выбери жанры:", genres_kb(sub_id, page))
+    await safe_edit(callback, "Выбери жанры:", genres_kb(db, sub_id, page))
     await callback.answer()
 
 
@@ -3712,7 +3640,7 @@ async def cb_sub_genres_clear(callback: CallbackQuery) -> None:
         await callback.answer("Это не твоя подписка", show_alert=True)
         return
     db.set_subscription_genres(sub_id, [])
-    await safe_edit(callback, "Выбери жанры:", genres_kb(sub_id, page))
+    await safe_edit(callback, "Выбери жанры:", genres_kb(db, sub_id, page))
     await callback.answer("Жанры очищены")
 
 
@@ -3726,7 +3654,7 @@ async def cb_sub_edit_countries(callback: CallbackQuery) -> None:
     if not db.subscription_belongs_to(sub_id, callback.from_user.id):
         await callback.answer("Это не твоя подписка", show_alert=True)
         return
-    await safe_edit(callback, "Выбери страны, которые нужно включать:", countries_kb(sub_id, page, "include"))
+    await safe_edit(callback, "Выбери страны, которые нужно включать:", countries_kb(db, sub_id, page, "include"))
     await callback.answer()
 
 
@@ -3740,7 +3668,7 @@ async def cb_sub_edit_exclude_countries(callback: CallbackQuery) -> None:
     if not db.subscription_belongs_to(sub_id, callback.from_user.id):
         await callback.answer("Это не твоя подписка", show_alert=True)
         return
-    await safe_edit(callback, "Выбери страны, которые нужно исключать:", countries_kb(sub_id, page, "exclude"))
+    await safe_edit(callback, "Выбери страны, которые нужно исключать:", countries_kb(db, sub_id, page, "exclude"))
     await callback.answer()
 
 
@@ -3761,7 +3689,7 @@ async def cb_sub_country_toggle(callback: CallbackQuery) -> None:
         db.toggle_subscription_country_code(sub_id, country_code)
         title = "Выбери страны, которые нужно включать:"
         mode = "include"
-    await safe_edit(callback, title, countries_kb(sub_id, page, mode))
+    await safe_edit(callback, title, countries_kb(db, sub_id, page, mode))
     await callback.answer()
 
 
@@ -3776,7 +3704,7 @@ async def cb_sub_countries_page(callback: CallbackQuery) -> None:
         await callback.answer("Это не твоя подписка", show_alert=True)
         return
     title = "Выбери страны, которые нужно исключать:" if mode == "exclude" else "Выбери страны, которые нужно включать:"
-    await safe_edit(callback, title, countries_kb(sub_id, page, mode))
+    await safe_edit(callback, title, countries_kb(db, sub_id, page, mode))
     await callback.answer()
 
 
@@ -3799,7 +3727,7 @@ async def cb_sub_countries_clear(callback: CallbackQuery) -> None:
         title = "Выбери страны, которые нужно включать:"
         done = "Страны очищены"
         mode = "include"
-    await safe_edit(callback, title, countries_kb(sub_id, page, mode))
+    await safe_edit(callback, title, countries_kb(db, sub_id, page, mode))
     await callback.answer(done)
 
 
@@ -3938,7 +3866,7 @@ async def cb_wiz_rating(callback: CallbackQuery) -> None:
         await callback.answer("Подписка не найдена", show_alert=True)
         return
     db.update_subscription(sub_id, min_tmdb_rating=None if code == "none" else float(code))
-    await safe_edit(callback, "Шаг 5/5: выбери жанры или сразу жми «Готово».", genres_kb(sub_id, 0))
+    await safe_edit(callback, "Шаг 5/5: выбери жанры или сразу жми «Готово».", genres_kb(db, sub_id, 0))
     await callback.answer()
 
 
