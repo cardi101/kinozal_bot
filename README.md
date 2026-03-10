@@ -29,3 +29,8 @@ docker compose logs -f app
 - Для `TorAPI` и `Kinozal` используется локальный воспроизводимый patch: [ops/torapi/README.md](./ops/torapi/README.md)
 - Compose override для patched `TorAPI`: [docker-compose.torapi-fixed.yml](./docker-compose.torapi-fixed.yml)
 
+## Документация
+
+- [Архитектура проекта](./ARCHITECTURE.md)
+- [Снимок состояния handoff](./HANDOFF_STATUS.txt)
+
