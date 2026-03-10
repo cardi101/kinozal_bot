@@ -26,7 +26,6 @@ from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMar
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from psycopg import connect
 from psycopg.rows import dict_row
-import redis.asyncio as redis
 from urllib.parse import urlencode
 from config import CFG, ACCESS_EXPIRY_UNSET
 from states import EditInputState
@@ -69,6 +68,7 @@ from admin_match_handlers import register_admin_match_handlers
 from admin_access_handlers import register_admin_access_handlers
 from runtime_poller import process_new_items, poller
 from runtime_app import AppRuntime
+from redis_cache import RedisCache
 from parsing_audio import parse_audio_variants, format_audio_variants, count_audio_variants, parse_audio_tracks, infer_release_type, format_release_full_title
 from keyboards import main_menu_kb, subscriptions_list_kb, sub_view_kb, sub_type_kb, year_preset_kb, rating_kb, format_kb, preset_kb, wizard_type_kb, wizard_years_kb, wizard_rating_kb, admin_invites_kb, admin_users_kb
 
@@ -1749,36 +1749,6 @@ class DB:
 
 
 db = DB(CFG.database_url)
-
-
-class RedisCache:
-    def __init__(self, url: str):
-        self.url = url
-        self.client = redis.from_url(url, decode_responses=True) if url else None
-
-    async def get_json(self, key: str) -> Optional[Dict[str, Any]]:
-        if not self.client:
-            return None
-        try:
-            raw = await self.client.get(key)
-            if not raw:
-                return None
-            return json.loads(raw)
-        except Exception:
-            log.warning("Redis get failed for key=%s", key, exc_info=True)
-            return None
-
-    async def set_json(self, key: str, value: Dict[str, Any], ex: int) -> None:
-        if not self.client:
-            return
-        try:
-            await self.client.set(key, json.dumps(value, ensure_ascii=False), ex=ex)
-        except Exception:
-            log.warning("Redis set failed for key=%s", key, exc_info=True)
-
-    async def close(self) -> None:
-        if self.client:
-            await self.client.aclose()
 
 
 cache = RedisCache(CFG.redis_url)
