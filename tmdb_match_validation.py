@@ -247,12 +247,59 @@ def tmdb_match_looks_valid(item: Dict[str, Any], query: str, details: Dict[str, 
                 if alias_tokens and query_tokens < alias_tokens:
                     expanded_parenthetical_alias = True
                     break
+
         if requested_media_type in ("movie", "tv") and details_media != requested_media_type:
             return False
-        if best_main_overlap < 0.34 and best_main_similarity < 0.58:
+
+        alias_exact_to_details = any(
+            query_norm == normalize_match_text(value or "")
+            for value in detail_variants
+            if compact_spaces(value or "")
+        )
+
+        alias_source_years = item_source_years(item)
+        alias_details_year = parse_year(str(details.get("tmdb_release_date") or ""))
+        alias_year_ok = (
+            not alias_source_years
+            or alias_details_year is None
+            or min(abs(alias_details_year - year) for year in alias_source_years) <= 1
+        )
+
+        alias_expected_seasons, alias_expected_episodes = extract_expected_tv_totals(item)
+
+        try:
+            alias_tmdb_seasons = int(details.get("tmdb_number_of_seasons")) if details.get("tmdb_number_of_seasons") is not None else None
+        except Exception:
+            alias_tmdb_seasons = None
+
+        try:
+            alias_tmdb_episodes = int(details.get("tmdb_number_of_episodes")) if details.get("tmdb_number_of_episodes") is not None else None
+        except Exception:
+            alias_tmdb_episodes = None
+
+        alias_tv_semantic_ok = (
+            source_is_tv
+            and details_media == "tv"
+            and alias_exact_to_details
+            and alias_year_ok
+            and (
+                alias_expected_seasons is None
+                or alias_tmdb_seasons is None
+                or alias_expected_seasons == alias_tmdb_seasons
+            )
+            and (
+                alias_expected_episodes is None
+                or alias_tmdb_episodes is None
+                or abs(alias_tmdb_episodes - alias_expected_episodes) <= max(2, int(alias_expected_episodes * 0.20))
+            )
+        )
+
+        if not alias_tv_semantic_ok and best_main_overlap < 0.34 and best_main_similarity < 0.58:
             return False
+
         if any(marker in source_category_name for marker in ("документ", "спорт", "передачи", "тв-шоу")) and best_main_overlap < 0.60:
             return False
+
         if expanded_parenthetical_alias and is_generic_cyrillic_title(query or "") and len(text_tokens(query or "")) <= 1:
             return False
 
