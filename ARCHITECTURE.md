@@ -323,3 +323,82 @@ Patch добавляет fallback-логику для поиска строк р
 docker compose exec -T app python - <<'PY'
 # code
 PY
+
+Current deployment architecture
+Runtime services
+
+Проект использует следующие сервисы:
+
+app — основной Telegram-бот
+
+postgres — PostgreSQL 16 внутри docker compose
+
+torapi — внешний HTTP API-источник, доступный приложению через host.docker.internal:8443
+
+kinozal-redis — Redis для кеша / вспомогательных операций
+
+Topology
+Telegram -> app
+app -> postgres:5432
+app -> host.docker.internal:8443 (torapi)
+app -> redis://kinozal-redis:6379/0
+PostgreSQL
+
+PostgreSQL больше не используется как отдельный вручную запущенный контейнер с пробросом порта на хост.
+
+Актуальная схема:
+
+сервис postgres объявлен в docker-compose.yml
+
+app подключается к БД по внутреннему DNS-имени сервиса: postgres
+
+внешний порт PostgreSQL на хост не публикуется
+
+данные БД хранятся в docker volume, подключённом к сервису postgres
+
+DATABASE_URL
+
+Актуальный формат строки подключения:
+
+DATABASE_URL=postgresql://postgres:change_this_password_please_2026@postgres:5432/kinozal_news
+Security notes
+
+PostgreSQL не должен быть доступен снаружи через 0.0.0.0:5432
+
+доступ к БД должен идти только из внутренних контейнеров compose-сети
+
+.env содержит секреты и не должен попадать в git
+
+.env.example используется только как шаблон без реальных значений
+
+Recovery notes
+
+Для диагностики:
+
+docker compose ps
+docker compose logs --tail=100 app
+docker compose logs --tail=100 postgres
+docker compose exec postgres psql -U postgres -d kinozal_news
+
+Для дампа:
+
+docker compose exec -T postgres pg_dumpall -U postgres > backup.sql
+Migration summary
+
+Старая схема:
+
+приложение подключалось к базе через host.docker.internal:5432
+
+PostgreSQL жил вне compose как отдельный контейнер
+
+порт БД был опубликован на хост
+
+Новая схема:
+
+PostgreSQL встроен в docker compose
+
+приложение использует postgres:5432
+
+внешний доступ к БД отключён
+
+эксплуатация и запуск стали единообразными

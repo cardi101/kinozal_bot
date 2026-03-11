@@ -34,3 +34,5 @@ db.py.bak.*
 .env.bak.*
 docker-compose.yml.bak.*
 *.sql
+README.md.bak.*
+ARCHITECTURE.md.bak.*
