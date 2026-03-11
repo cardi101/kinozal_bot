@@ -6,7 +6,7 @@ import threading
 import time
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
-from psycopg import connect
+from psycopg import connect, OperationalError, InterfaceError
 from psycopg.rows import dict_row
 
 from config import CFG, ACCESS_EXPIRY_UNSET
@@ -57,20 +57,118 @@ class DummyCursor:
 
 
 class PGCompatConnection:
-    def __init__(self, dsn: str):
-        self.raw = connect(dsn, autocommit=True, row_factory=dict_row)
-
+    def __init__(self, dsn):
+        self.dsn = dsn
+        self._lock = threading.RLock()
+        self.raw = connect(dsn, row_factory=dict_row, autocommit=True)
     @staticmethod
     def _sql(sql: str) -> str:
         return sql.replace("?", "%s")
 
-    def execute(self, sql: str, params: Optional[Sequence[Any]] = None):
-        cur = self.raw.cursor()
-        cur.execute(self._sql(sql), params or ())
-        if cur.description is None:
-            cur.close()
-            return DummyCursor()
-        return cur
+    def _connect_raw(self) -> None:
+        self.raw = connect(self.dsn, row_factory=dict_row, autocommit=True)
+
+    def _close_raw_quietly(self) -> None:
+        raw = getattr(self, "raw", None)
+        self.raw = None
+        if raw is None:
+            return
+        try:
+            raw.close()
+        except Exception:
+            pass
+
+    def _ensure_connection(self) -> None:
+        raw = getattr(self, "raw", None)
+        is_bad = raw is None
+        if not is_bad:
+            try:
+                is_bad = bool(raw.closed) or bool(getattr(raw, "broken", False))
+            except Exception:
+                is_bad = True
+        if not is_bad:
+            return
+
+        with self._lock:
+            raw = getattr(self, "raw", None)
+            is_bad = raw is None
+            if not is_bad:
+                try:
+                    is_bad = bool(raw.closed) or bool(getattr(raw, "broken", False))
+                except Exception:
+                    is_bad = True
+            if is_bad:
+                self._close_raw_quietly()
+                self._connect_raw()
+
+    def reconnect(self) -> None:
+        with self._lock:
+            self._close_raw_quietly()
+            self._connect_raw()
+
+    def _connect_raw(self) -> None:
+        self.raw = connect(self.dsn, row_factory=dict_row, autocommit=True)
+
+    def _close_raw_quietly(self) -> None:
+        raw = getattr(self, "raw", None)
+        self.raw = None
+        if raw is None:
+            return
+        try:
+            raw.close()
+        except Exception:
+            pass
+
+    def _normalize_sql(self, sql: str) -> str:
+        return sql.replace("?", "%s")
+
+    def _ensure_connection(self) -> None:
+        raw = getattr(self, "raw", None)
+        bad = raw is None
+        if not bad:
+            try:
+                bad = bool(raw.closed) or bool(getattr(raw, "broken", False))
+            except Exception:
+                bad = True
+        if not bad:
+            return
+
+        with self._lock:
+            raw = getattr(self, "raw", None)
+            bad = raw is None
+            if not bad:
+                try:
+                    bad = bool(raw.closed) or bool(getattr(raw, "broken", False))
+                except Exception:
+                    bad = True
+            if bad:
+                self._close_raw_quietly()
+                self._connect_raw()
+
+    def reconnect(self) -> None:
+        with self._lock:
+            self._close_raw_quietly()
+            self._connect_raw()
+
+    def execute(self, query, params=None):
+        last_error = None
+        sql = self._normalize_sql(query)
+        bind = params or ()
+
+        for _ in range(2):
+            try:
+                self._ensure_connection()
+                cur = self.raw.cursor()
+                cur.execute(sql, bind)
+                return cur
+            except (OperationalError, InterfaceError) as exc:
+                last_error = exc
+                self.reconnect()
+                time.sleep(0.2)
+
+        if last_error is not None:
+            raise last_error
+        raise RuntimeError("DB execute failed without explicit exception")
 
     def executemany(self, sql: str, seq: Sequence[Sequence[Any]]):
         cur = self.raw.cursor()
@@ -1266,7 +1364,7 @@ class DB:
         sub = self.get_subscription(sub_id)
         if not sub:
             return []
-        matched = [item for item in items if item and match_subscription(db, sub, item)]
+        matched = [item for item in items if item and match_subscription(self, sub, item)]
         matched.sort(key=lambda item: (int(item.get("source_published_at") or 0), int(item.get("id") or 0)), reverse=True)
         return matched[:limit]
 
