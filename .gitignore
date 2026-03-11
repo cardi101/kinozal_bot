@@ -30,3 +30,6 @@ logs/
 *.pyc
 *.pyo
 *.tar.gz
+db.py.bak.*
+.env.bak.*
+docker-compose.yml.bak.*
