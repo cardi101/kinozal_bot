@@ -34,3 +34,78 @@ docker compose logs -f app
 - [Архитектура проекта](./ARCHITECTURE.md)
 - [Снимок состояния handoff](./HANDOFF_STATUS.txt)
 
+
+## Текущая схема запуска
+
+Проект запускается через `docker compose` и состоит из трёх основных сервисов:
+
+- `app` — Telegram-бот
+- `postgres` — PostgreSQL 16
+- `torapi` — HTTP API-источник для RSS / Kinozal
+
+Redis используется отдельно как `kinozal-redis`.
+
+## Сетевая схема
+
+Теперь PostgreSQL работает **внутри compose-стека** и не публикуется наружу на хост.
+
+Связи между сервисами:
+
+- `app` -> `postgres:5432`
+- `app` -> `host.docker.internal:8443` для `torapi`
+- `app` -> `redis://kinozal-redis:6379/0`
+
+## Переменные окружения
+
+Основная строка подключения к БД:
+
+```env
+DATABASE_URL=postgresql://postgres:change_this_password_please_2026@postgres:5432/kinozal_news
+
+Пример полного набора переменных — в .env.example.
+
+Быстрый запуск
+docker compose up -d --build
+docker compose ps
+docker compose logs -f app
+Проверка PostgreSQL
+
+Проверить доступ к базе можно так:
+
+docker compose exec postgres psql -U postgres -d kinozal_news
+
+Проверить состояние сервисов:
+
+docker compose ps
+docker compose logs --tail=100 app
+docker compose logs --tail=100 postgres
+Важно
+
+PostgreSQL не должен быть опубликован наружу через ports
+
+app должен использовать внутренний адрес postgres:5432, а не host.docker.internal:5432
+
+.env не коммитится в репозиторий
+
+для новых развёртываний использовать .env.example как шаблон
+
+Резервное копирование
+
+Создать дамп всех баз:
+
+docker compose exec -T postgres pg_dumpall -U postgres > backup.sql
+
+Восстановление:
+
+cat backup.sql | docker compose exec -T postgres psql -U postgres -d postgres
+Причина изменения схемы
+
+Ранее приложение подключалось к PostgreSQL через host.docker.internal, а сама база жила вне compose-сервиса. После миграции PostgreSQL переведён внутрь compose-стека, чтобы:
+
+убрать внешний доступ к БД
+
+упростить сопровождение
+
+сделать запуск предсказуемым
+
+сократить зависимость от ручных контейнеров и нестабильных сетевых маршрутов
