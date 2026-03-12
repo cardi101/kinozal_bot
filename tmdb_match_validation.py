@@ -277,12 +277,8 @@ def tmdb_match_looks_valid(item: Dict[str, Any], query: str, details: Dict[str, 
         except Exception:
             alias_tmdb_episodes = None
 
-        alias_tv_semantic_ok = (
-            source_is_tv
-            and details_media == "tv"
-            and alias_exact_to_details
-            and alias_year_ok
-            and (
+        alias_tv_exact_totals_ok = (
+            (
                 alias_expected_seasons is None
                 or alias_tmdb_seasons is None
                 or alias_expected_seasons == alias_tmdb_seasons
@@ -292,6 +288,27 @@ def tmdb_match_looks_valid(item: Dict[str, Any], query: str, details: Dict[str, 
                 or alias_tmdb_episodes is None
                 or abs(alias_tmdb_episodes - alias_expected_episodes) <= max(2, int(alias_expected_episodes * 0.20))
             )
+        )
+
+        alias_tv_parent_totals_ok = (
+            (
+                alias_expected_seasons is None
+                or alias_tmdb_seasons is None
+                or alias_tmdb_seasons >= alias_expected_seasons
+            )
+            and (
+                alias_expected_episodes is None
+                or alias_tmdb_episodes is None
+                or alias_tmdb_episodes >= alias_expected_episodes
+            )
+        )
+
+        alias_tv_semantic_ok = (
+            source_is_tv
+            and details_media == "tv"
+            and alias_exact_to_details
+            and alias_year_ok
+            and (alias_tv_exact_totals_ok or alias_tv_parent_totals_ok)
         )
 
         if not alias_tv_semantic_ok and best_main_overlap < 0.34 and best_main_similarity < 0.58:
