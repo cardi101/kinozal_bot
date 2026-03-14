@@ -203,7 +203,7 @@ def tmdb_match_looks_valid(item: Dict[str, Any], query: str, details: Dict[str, 
             )
         except Exception:
             pass
-        return reject("tmdb_match_looks_valid:L206")
+        return False
     if source_is_tv and details_media == "movie":
         return reject("tmdb_match_looks_valid:L208")
 
