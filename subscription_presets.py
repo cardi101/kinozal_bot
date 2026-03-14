@@ -23,7 +23,7 @@ def subscription_presets() -> Dict[str, Dict[str, Any]]:
                 "exclude_keywords": base_exclude_keywords + ",ру,укр,украин",
                 "content_filter": "exclude_anime_dorama",
                 "country_codes": "",
-                "exclude_country_codes": "TR,RU,UA,JP,KR,CN,TW,TH,HK,ID,MY,SG,PH,VN,LA,KH,MM,BD,PK,LK,NP,MN,KZ,UZ,KG,TJ,TM,AF,IR,IQ,SA,AE,QA,KW,OM,BH,YE,JO,LB,SY,IL,PS,BT,BN,MV",
+                "exclude_country_codes": "TR,RU,UA,JP,KR,CN,TW,TH,HK,ID,MY,SG,PH",
             },
             "genre_ids": [],
         },
