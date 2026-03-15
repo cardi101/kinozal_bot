@@ -454,9 +454,33 @@ def tmdb_match_looks_valid(item: Dict[str, Any], query: str, details: Dict[str, 
                 return reject("tmdb_match_looks_valid:L454")
 
         if expected_seasons and tmdb_seasons_int:
-            if expected_seasons >= 2 and tmdb_seasons_int + 1 < expected_seasons and not tv_revival_reset_match:
+            long_running_parent_anime_ok = (
+                source_is_tv
+                and details_media == "tv"
+                and item_content_bucket(item) == "anime"
+                and has_exact_normalized
+                and tmdb_seasons_int == 1
+                and tmdb_episodes_int is not None
+                and expected_episodes is not None
+                and tmdb_episodes_int >= max(expected_episodes * 3, 60)
+            )
+
+            if (
+                expected_seasons >= 2
+                and tmdb_seasons_int + 1 < expected_seasons
+                and not tv_revival_reset_match
+                and not long_running_parent_anime_ok
+            ):
                 return reject("tmdb_match_looks_valid:L458")
-            if short_or_common_query and expected_seasons >= 3 and tmdb_seasons_int + 2 < expected_seasons and not has_exact_normalized and not tv_revival_reset_match:
+
+            if (
+                short_or_common_query
+                and expected_seasons >= 3
+                and tmdb_seasons_int + 2 < expected_seasons
+                and not has_exact_normalized
+                and not tv_revival_reset_match
+                and not long_running_parent_anime_ok
+            ):
                 return reject("tmdb_match_looks_valid:L460")
 
         single_season_context = (expected_seasons in (None, 1)) and (tmdb_seasons_int in (None, 1))
