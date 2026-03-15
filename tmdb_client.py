@@ -485,8 +485,7 @@ class TMDBClient:
                 details = await self.find_by_imdb(imdb_id)
 
             if (
-                not details
-                and self.cfg.anime_resolver_enabled
+                self.cfg.anime_resolver_enabled
                 and resolver_result
                 and resolver_result.get("resolver_confidence") == "high"
             ):
@@ -498,6 +497,15 @@ class TMDBClient:
                     ).strip().lower() or "tv"
 
                     item_media_type = str(item.get("media_type") or "").strip().lower()
+
+                    current_tmdb_id = None
+                    try:
+                        current_tmdb_id = int(item.get("tmdb_id")) if item.get("tmdb_id") is not None else None
+                    except Exception:
+                        current_tmdb_id = None
+
+                    resolver_tmdb_id = int(resolver_result["tmdb_id"])
+
                     if item_media_type in {"tv", "movie"} and resolver_media_type != item_media_type:
                         self.log.info(
                             "Anime resolver skipped due media mismatch title=%s item_media=%s resolver_media=%s",
@@ -505,10 +513,10 @@ class TMDBClient:
                             item_media_type,
                             resolver_media_type,
                         )
-                    else:
+                    elif not details or current_tmdb_id != resolver_tmdb_id:
                         resolved_details = await self.get_details(
                             resolver_media_type,
-                            int(resolver_result["tmdb_id"]),
+                            resolver_tmdb_id,
                         )
                         if resolved_details:
                             matched_title = resolver_result.get("resolver_matched_title") or ""
