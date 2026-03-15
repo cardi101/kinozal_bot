@@ -13,12 +13,30 @@ from title_prep import clean_release_title, looks_like_structured_numeric_title,
 from tmdb_aliases import is_long_latin_tmdb_query, is_short_or_common_tmdb_query, is_short_acronym_tmdb_query, manual_tmdb_override_for_item, title_search_candidates
 from tmdb_match_validation import tmdb_match_looks_valid
 from anime_mapping_store import AnimeMappingStore
+from anime_title_lexicon import AnimeTitleLexicon
 from anime_resolver import resolve_anime_tmdb, should_use_anime_resolver
 from utils import utc_ts, compact_spaces
 
 
 class TMDBClient:
     def __init__(self, cfg: Any, db: Any, cache: Any, token: str, language: str, log: logging.Logger):
+        self.anime_title_lexicon = None
+        if cfg.anime_resolver_enabled or cfg.anime_resolver_log_only:
+            try:
+                self.anime_title_lexicon = AnimeTitleLexicon(cfg.anime_mappings_dir)
+                self.anime_title_lexicon.load()
+                logging.getLogger(__name__).info(
+                    "Anime lexicon loaded dir=%s entries=%s",
+                    cfg.anime_mappings_dir,
+                    len(getattr(self.anime_title_lexicon, "entries", []) or []),
+                )
+            except Exception:
+                logging.getLogger(__name__).exception(
+                    "Failed to initialize anime title lexicon dir=%s",
+                    cfg.anime_mappings_dir,
+                )
+                self.anime_title_lexicon = None
+
         self.anime_mapping_store = None
         if cfg.anime_resolver_enabled or cfg.anime_resolver_log_only:
             try:
@@ -414,6 +432,51 @@ class TMDBClient:
 
     async def enrich_item(self, item: Dict[str, Any]) -> Dict[str, Any]:
         resolver_result = None
+        if self.anime_title_lexicon and should_use_anime_resolver(item):
+            try:
+                lexicon_candidates = []
+
+                def _push_lex(value):
+                    value = " ".join(str(value or "").split()).strip()
+                    if value and value not in lexicon_candidates:
+                        lexicon_candidates.append(value)
+
+                _push_lex(item.get("cleaned_title"))
+                _push_lex(item.get("source_title"))
+
+                for raw in [item.get("cleaned_title"), item.get("source_title")]:
+                    raw = str(raw or "")
+                    if "/" in raw:
+                        for part in raw.split("/"):
+                            _push_lex(part)
+
+                lexicon_year = None
+                raw_year = str(item.get("source_year") or "").strip()
+                if raw_year[:4].isdigit():
+                    lexicon_year = int(raw_year[:4])
+
+                lexicon_best = self.anime_title_lexicon.find_best(lexicon_candidates, year=lexicon_year)
+                if lexicon_best:
+                    logging.getLogger(__name__).info(
+                        "Anime lexicon best canonical=%s media=%s year=%s source=%s aliases=%s",
+                        lexicon_best.canonical_title,
+                        lexicon_best.media_type,
+                        lexicon_best.year,
+                        lexicon_best.source,
+                        ", ".join(lexicon_best.titles[:6]),
+                    )
+                else:
+                    logging.getLogger(__name__).info(
+                        "Anime lexicon miss title=%s cleaned=%s",
+                        item.get("source_title") or "",
+                        item.get("cleaned_title") or "",
+                    )
+            except Exception:
+                logging.getLogger(__name__).exception(
+                    "Anime lexicon log-only probe failed title=%s",
+                    item.get("source_title") or "",
+                )
+
         if self.anime_mapping_store and should_use_anime_resolver(item):
             try:
                 resolver_result = resolve_anime_tmdb(item, self.anime_mapping_store)
