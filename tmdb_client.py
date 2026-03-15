@@ -433,6 +433,9 @@ class TMDBClient:
     async def enrich_item(self, item: Dict[str, Any]) -> Dict[str, Any]:
         resolver_result = None
         lexicon_best = None
+        tmdb_match_path = None
+        lexicon_candidates_used = False
+        item["tmdb_match_path"] = None
         if self.anime_title_lexicon and should_use_anime_resolver(item):
             try:
                 lexicon_candidates = []
@@ -529,6 +532,8 @@ class TMDBClient:
                         override_details["search_match_title"] = override_key
                         override_details["search_match_original_title"] = override_key
                         details = override_details
+                        tmdb_match_path = "manual_override"
+                        item["tmdb_match_path"] = tmdb_match_path
                         self.log.info(
                             "TMDB manual override matched %s -> %s [%s:%s]",
                             item.get("source_title"),
@@ -547,6 +552,9 @@ class TMDBClient:
                     )
             if imdb_id and not details:
                 details = await self.find_by_imdb(imdb_id)
+                if details:
+                    tmdb_match_path = "imdb_lookup"
+                    item["tmdb_match_path"] = tmdb_match_path
 
             if (
                 self.cfg.anime_resolver_enabled
@@ -587,6 +595,8 @@ class TMDBClient:
                             resolved_details["search_match_title"] = matched_title or None
                             resolved_details["search_match_original_title"] = matched_title or None
                             details = resolved_details
+                            tmdb_match_path = "anime_resolver_direct"
+                            item["tmdb_match_path"] = tmdb_match_path
                             self.log.info(
                                 "Anime resolver adopted %s -> tmdb_id=%s [%s] source=%s confidence=%s",
                                 item.get("source_title"),
@@ -636,6 +646,7 @@ class TMDBClient:
                                 if candidate and candidate not in ordered_candidates:
                                     ordered_candidates.append(candidate)
                             candidates = ordered_candidates
+                            lexicon_candidates_used = True
                             self.log.info(
                                 "Anime lexicon expanded candidates title=%s canonical=%s added=%s",
                                 item.get("source_title"),
