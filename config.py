@@ -32,6 +32,11 @@ class Config:
     startup_db_retry_delay: int = int(os.getenv("STARTUP_DB_RETRY_DELAY", "2"))
     tmdb_cache_ttl: int = int(os.getenv("TMDB_CACHE_TTL", str(7 * 86400)))
     tmdb_negative_cache_ttl: int = int(os.getenv("TMDB_NEGATIVE_CACHE_TTL", str(6 * 3600)))
+
+    anime_resolver_enabled: bool = os.getenv("ANIME_RESOLVER_ENABLED", "0").strip().lower() in {"1", "true", "yes", "on"}
+    anime_resolver_log_only: bool = os.getenv("ANIME_RESOLVER_LOG_ONLY", "1").strip().lower() not in {"0", "false", "no", "off"}
+    anime_mappings_dir: str = os.getenv("ANIME_MAPPINGS_DIR", "data/anime-mappings").strip()
+
     source_error_alert_threshold: int = int(os.getenv("SOURCE_ERROR_ALERT_THRESHOLD", "3"))
     source_error_alert_repeat_minutes: int = int(os.getenv("SOURCE_ERROR_ALERT_REPEAT_MINUTES", "180"))
 
