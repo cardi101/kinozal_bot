@@ -12,11 +12,30 @@ from parsing_basic import parse_year
 from title_prep import clean_release_title, looks_like_structured_numeric_title, normalize_structured_numeric_title, should_skip_tmdb_lookup, is_bad_tmdb_candidate
 from tmdb_aliases import is_long_latin_tmdb_query, is_short_or_common_tmdb_query, is_short_acronym_tmdb_query, manual_tmdb_override_for_item, title_search_candidates
 from tmdb_match_validation import tmdb_match_looks_valid
+from anime_mapping_store import AnimeMappingStore
+from anime_resolver import resolve_anime_tmdb, should_use_anime_resolver
 from utils import utc_ts, compact_spaces
 
 
 class TMDBClient:
     def __init__(self, cfg: Any, db: Any, cache: Any, token: str, language: str, log: logging.Logger):
+        self.anime_mapping_store = None
+        if CFG.anime_resolver_enabled or CFG.anime_resolver_log_only:
+            try:
+                self.anime_mapping_store = AnimeMappingStore(CFG.anime_mappings_dir)
+                self.anime_mapping_store.load()
+                logging.getLogger(__name__).info(
+                    "Anime resolver mapping store loaded dir=%s entries=%s",
+                    CFG.anime_mappings_dir,
+                    len(getattr(self.anime_mapping_store, 'entries', []) or []),
+                )
+            except Exception:
+                logging.getLogger(__name__).exception(
+                    "Failed to initialize anime resolver mapping store dir=%s",
+                    CFG.anime_mappings_dir,
+                )
+                self.anime_mapping_store = None
+
         self.cfg = cfg
         self.db = db
         self.cache = cache
@@ -394,6 +413,30 @@ class TMDBClient:
         return result
 
     async def enrich_item(self, item: Dict[str, Any]) -> Dict[str, Any]:
+        if self.anime_mapping_store and should_use_anime_resolver(item):
+            try:
+                resolver_result = resolve_anime_tmdb(item, self.anime_mapping_store)
+                if resolver_result:
+                    logging.getLogger(__name__).info(
+                        "Anime resolver hit source=%s tmdb_id=%s media=%s title=%s confidence=%s",
+                        resolver_result.get("resolver_source"),
+                        resolver_result.get("tmdb_id"),
+                        resolver_result.get("media_type"),
+                        resolver_result.get("resolver_matched_title"),
+                        resolver_result.get("resolver_confidence"),
+                    )
+                else:
+                    logging.getLogger(__name__).info(
+                        "Anime resolver miss title=%s cleaned=%s",
+                        item.get("source_title") or "",
+                        item.get("cleaned_title") or "",
+                    )
+            except Exception:
+                logging.getLogger(__name__).exception(
+                    "Anime resolver log-only probe failed title=%s",
+                    item.get("source_title") or "",
+                )
+
         if not self.token:
             return item
 
