@@ -1,0 +1,31 @@
+[
+  {
+    "source": "manual",
+    "media_type": "tv",
+    "tmdb_id": 218396,
+    "year": 2020,
+    "titles": [
+      "Jujutsu Kaisen",
+      "Магическая битва",
+      "呪術廻戦"
+    ],
+    "aliases": [
+      "Магическая битва / Jujutsu Kaisen"
+    ]
+  },
+  {
+    "source": "manual",
+    "media_type": "tv",
+    "tmdb_id": 197219,
+    "year": 2022,
+    "titles": [
+      "Shen Yin Wangzuo",
+      "Throne of Seal",
+      "Трон, отмеченный богом",
+      "神印王座"
+    ],
+    "aliases": [
+      "Трон отмеченный богом / Shen Yin Wangzuo"
+    ]
+  }
+]
