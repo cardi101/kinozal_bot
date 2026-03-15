@@ -413,6 +413,7 @@ class TMDBClient:
         return result
 
     async def enrich_item(self, item: Dict[str, Any]) -> Dict[str, Any]:
+        resolver_result = None
         if self.anime_mapping_store and should_use_anime_resolver(item):
             try:
                 resolver_result = resolve_anime_tmdb(item, self.anime_mapping_store)
@@ -436,6 +437,7 @@ class TMDBClient:
                     "Anime resolver log-only probe failed title=%s",
                     item.get("source_title") or "",
                 )
+                resolver_result = None
 
         if not self.token:
             return item
@@ -481,6 +483,53 @@ class TMDBClient:
                     )
             if imdb_id and not details:
                 details = await self.find_by_imdb(imdb_id)
+
+            if (
+                not details
+                and self.cfg.anime_resolver_enabled
+                and resolver_result
+                and resolver_result.get("resolver_confidence") == "high"
+            ):
+                try:
+                    resolver_media_type = str(
+                        resolver_result.get("media_type")
+                        or item.get("media_type")
+                        or "tv"
+                    ).strip().lower() or "tv"
+
+                    item_media_type = str(item.get("media_type") or "").strip().lower()
+                    if item_media_type in {"tv", "movie"} and resolver_media_type != item_media_type:
+                        self.log.info(
+                            "Anime resolver skipped due media mismatch title=%s item_media=%s resolver_media=%s",
+                            item.get("source_title"),
+                            item_media_type,
+                            resolver_media_type,
+                        )
+                    else:
+                        resolved_details = await self.get_details(
+                            resolver_media_type,
+                            int(resolver_result["tmdb_id"]),
+                        )
+                        if resolved_details:
+                            matched_title = resolver_result.get("resolver_matched_title") or ""
+                            resolved_details["search_match_title"] = matched_title or None
+                            resolved_details["search_match_original_title"] = matched_title or None
+                            details = resolved_details
+                            self.log.info(
+                                "Anime resolver adopted %s -> tmdb_id=%s [%s] source=%s confidence=%s",
+                                item.get("source_title"),
+                                resolver_result.get("tmdb_id"),
+                                resolver_media_type,
+                                resolver_result.get("resolver_source"),
+                                resolver_result.get("resolver_confidence"),
+                            )
+                except Exception:
+                    self.log.warning(
+                        "Anime resolver direct lookup failed for %s -> tmdb_id=%s",
+                        item.get("source_title"),
+                        resolver_result.get("tmdb_id") if resolver_result else None,
+                        exc_info=True,
+                    )
 
             if not details:
                 media_type = item.get("media_type") or "movie"
