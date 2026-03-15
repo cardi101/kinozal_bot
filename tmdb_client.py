@@ -432,6 +432,7 @@ class TMDBClient:
 
     async def enrich_item(self, item: Dict[str, Any]) -> Dict[str, Any]:
         resolver_result = None
+        lexicon_best = None
         if self.anime_title_lexicon and should_use_anime_resolver(item):
             try:
                 lexicon_candidates = []
@@ -609,6 +610,38 @@ class TMDBClient:
                     item.get("source_title") or "",
                     item.get("cleaned_title") or "",
                 )
+
+                if lexicon_best:
+                    item_media_type = str(item.get("media_type") or "").strip().lower()
+                    if item_media_type not in {"tv", "movie"} or lexicon_best.media_type == item_media_type:
+                        lexicon_extra: List[str] = []
+
+                        def _push_lex_candidate(value: Any) -> None:
+                            value = compact_spaces(str(value or ""))
+                            if not value:
+                                return
+                            if len(normalize_match_text(value)) < 3:
+                                return
+                            if value not in lexicon_extra:
+                                lexicon_extra.append(value)
+
+                        _push_lex_candidate(lexicon_best.canonical_title)
+                        for alias in lexicon_best.titles[:8]:
+                            _push_lex_candidate(alias)
+
+                        if lexicon_extra:
+                            ordered_candidates: List[str] = []
+                            for candidate in lexicon_extra[:6] + candidates:
+                                candidate = compact_spaces(str(candidate or ""))
+                                if candidate and candidate not in ordered_candidates:
+                                    ordered_candidates.append(candidate)
+                            candidates = ordered_candidates
+                            self.log.info(
+                                "Anime lexicon expanded candidates title=%s canonical=%s added=%s",
+                                item.get("source_title"),
+                                lexicon_best.canonical_title,
+                                " | ".join(lexicon_extra[:6]),
+                            )
 
                 search_plan: List[Tuple[str, str, Optional[int]]] = []
                 strict_tv_only = bool(item.get("source_episode_progress")) or media_type == "tv"
