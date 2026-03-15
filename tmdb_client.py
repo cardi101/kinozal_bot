@@ -20,19 +20,19 @@ from utils import utc_ts, compact_spaces
 class TMDBClient:
     def __init__(self, cfg: Any, db: Any, cache: Any, token: str, language: str, log: logging.Logger):
         self.anime_mapping_store = None
-        if CFG.anime_resolver_enabled or CFG.anime_resolver_log_only:
+        if cfg.anime_resolver_enabled or cfg.anime_resolver_log_only:
             try:
-                self.anime_mapping_store = AnimeMappingStore(CFG.anime_mappings_dir)
+                self.anime_mapping_store = AnimeMappingStore(cfg.anime_mappings_dir)
                 self.anime_mapping_store.load()
                 logging.getLogger(__name__).info(
                     "Anime resolver mapping store loaded dir=%s entries=%s",
-                    CFG.anime_mappings_dir,
+                    cfg.anime_mappings_dir,
                     len(getattr(self.anime_mapping_store, 'entries', []) or []),
                 )
             except Exception:
                 logging.getLogger(__name__).exception(
                     "Failed to initialize anime resolver mapping store dir=%s",
-                    CFG.anime_mappings_dir,
+                    cfg.anime_mappings_dir,
                 )
                 self.anime_mapping_store = None
 
