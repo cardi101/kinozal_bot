@@ -45,7 +45,7 @@ services:
       ADMIN_IDS: "${ADMIN_IDS}"
       ALLOW_MODE: "${ALLOW_MODE}"
       TMDB_TOKEN: "${TMDB_TOKEN}"
-      TORAPI_BASE: "http://host.docker.internal:8443"
+      TORAPI_BASE: "http://torapi:8443"
       POLL_SECONDS: "${POLL_SECONDS}"
       REQUEST_TIMEOUT: "${REQUEST_TIMEOUT}"
       DATABASE_URL: "${DATABASE_URL}"
