@@ -65,7 +65,7 @@ def build_keyword_haystacks(item: Dict[str, Any]) -> Tuple[str, str]:
     audio = " ".join(parse_jsonish_list(item.get("source_audio_tracks")))
     countries = " ".join(effective_item_countries(item))
     countries_human = " ".join(human_country_names(effective_item_countries(item)))
-    source_category_id = compact_spaces(item.get("source_category_id") or "")
+    source_category_id = compact_spaces(str(item.get("source_category_id") or ""))
     source_category_name = compact_spaces(item.get("source_category_name") or "")
     text_haystack = "\n".join(x for x in [title, desc, tmdb_title, original, overview, countries_human, source_category_name] if x).lower()
     tech_haystack = "\n".join(

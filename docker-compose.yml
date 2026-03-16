@@ -1,19 +1,4 @@
 services:
-  torapi:
-    image: lifailon/torapi:latest
-    container_name: torapi
-    restart: unless-stopped
-    ports:
-      - "8443:8443"
-    environment:
-      PORT: "8443"
-      PROXY_ADDRESS: ""
-      PROXY_PORT: ""
-      USERNAME: ""
-      PASSWORD: ""
-    networks:
-      - kinozal_net
-
   postgres:
     image: postgres:16
     restart: unless-stopped
@@ -45,7 +30,9 @@ services:
       ADMIN_IDS: "${ADMIN_IDS}"
       ALLOW_MODE: "${ALLOW_MODE}"
       TMDB_TOKEN: "${TMDB_TOKEN}"
-      TORAPI_BASE: "http://torapi:8443"
+      MAGNET_BASE_URL: "${MAGNET_BASE_URL}"
+      KINOZAL_USERNAME: "${KINOZAL_USERNAME}"
+      KINOZAL_PASSWORD: "${KINOZAL_PASSWORD}"
       POLL_SECONDS: "${POLL_SECONDS}"
       REQUEST_TIMEOUT: "${REQUEST_TIMEOUT}"
       DATABASE_URL: "${DATABASE_URL}"
@@ -67,7 +54,32 @@ services:
     networks:
       - kinozal_net
 
+  magnet-web:
+    build: .
+    command: ["python", "magnet_redirect_server.py"]
+    restart: unless-stopped
+    ports:
+      - "${MAGNET_WEB_PORT:-8081}:8081"
+    environment:
+      MAGNET_REDIRECT_PORT: "8081"
+
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    depends_on:
+      - magnet-web
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+
 volumes:
+  caddy_data:
+  caddy_config:
+
   postgres_data:
     external: true
     name: "kinozal-postgres-clean-data-20260311-104819"

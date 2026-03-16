@@ -1,0 +1,4 @@
+magnet.kinozalmagneetbot.shop {
+    encode zstd gzip
+    reverse_proxy magnet-web:8081
+}

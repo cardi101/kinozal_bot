@@ -19,6 +19,31 @@ def _normalize_title(text: str) -> str:
     return text
 
 
+def _extract_season_hint_from_text(text: str) -> Optional[int]:
+    raw = _compact(text)
+    if not raw:
+        return None
+
+    patterns = [
+        r"\b(\d{1,2})\s*сезон\b",
+        r"\bseason\s*(\d{1,2})\b",
+        r"\b(\d{1,2})(?:st|nd|rd|th)\s+season\b",
+        r"\bs(\d{1,2})\b",
+    ]
+
+    low = raw.casefold()
+    for pattern in patterns:
+        m = re.search(pattern, low, flags=re.I)
+        if m:
+            try:
+                value = int(m.group(1))
+                if value >= 1:
+                    return value
+            except Exception:
+                pass
+    return None
+
+
 @dataclass
 class AnimeLexiconEntry:
     canonical_title: str
@@ -27,6 +52,7 @@ class AnimeLexiconEntry:
     year: Optional[int] = None
     source: str = "manami"
     raw: Optional[Dict[str, Any]] = None
+    season_hint: Optional[int] = None
 
 
 class AnimeTitleLexicon:
@@ -79,6 +105,13 @@ class AnimeTitleLexicon:
             return "movie"
         return "tv"
 
+    def _extract_entry_season_hint(self, titles: List[str]) -> Optional[int]:
+        for title in titles:
+            season = _extract_season_hint_from_text(title)
+            if season is not None:
+                return season
+        return None
+
     def load(self, force: bool = False) -> None:
         if self.loaded and not force:
             return
@@ -104,6 +137,7 @@ class AnimeTitleLexicon:
                 year=self._extract_year(record),
                 source="manami",
                 raw=record,
+                season_hint=self._extract_entry_season_hint(titles),
             )
             self.entries.append(entry)
 
@@ -126,10 +160,14 @@ class AnimeTitleLexicon:
             self.load()
 
         normalized_queries: List[str] = []
+        query_season_hint: Optional[int] = None
+
         for title in title_candidates:
             norm = _normalize_title(title)
             if norm and norm not in normalized_queries:
                 normalized_queries.append(norm)
+            if query_season_hint is None:
+                query_season_hint = _extract_season_hint_from_text(title)
 
         best: Optional[AnimeLexiconEntry] = None
         best_score = -1
@@ -138,7 +176,7 @@ class AnimeTitleLexicon:
 
         for norm in normalized_queries:
             for entry in self.by_title.get(norm, []):
-                key = (entry.canonical_title, entry.year, entry.media_type)
+                key = (entry.canonical_title, entry.year, entry.media_type, entry.season_hint)
                 if key in seen:
                     continue
                 seen.add(key)
@@ -162,6 +200,14 @@ class AnimeTitleLexicon:
 
             if entry.media_type == "tv":
                 score += 3
+
+            if query_season_hint is not None:
+                if entry.season_hint is None:
+                    score += 5
+                elif entry.season_hint == query_season_hint:
+                    score += 60
+                else:
+                    score -= 80
 
             if score > best_score:
                 best = entry
