@@ -36,3 +36,8 @@ docker-compose.yml.bak.*
 *.sql
 README.md.bak.*
 ARCHITECTURE.md.bak.*
+.env
+*.pem
+*.key
+*.crt
+/tmp/

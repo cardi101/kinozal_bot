@@ -11,7 +11,7 @@ from psycopg.rows import dict_row
 
 from config import CFG, ACCESS_EXPIRY_UNSET
 from country_helpers import COUNTRY_NAMES_RU, parse_country_codes, country_name_ru
-from release_versioning import extract_kinozal_id, resolve_item_kinozal_id, build_item_variant_signature, format_variant_summary
+from release_versioning import extract_kinozal_id, resolve_item_kinozal_id, build_item_variant_signature, format_variant_summary, build_version_signature, get_item_variant_components
 from subscription_matching import match_subscription
 from subscription_presets import subscription_presets, detect_subscription_preset_key
 from utils import utc_ts, compact_spaces
@@ -1100,7 +1100,27 @@ class DB:
                     pass
             return None
 
+
     def save_item(self, item: Dict[str, Any]) -> Tuple[int, bool, bool]:
+        # Fallback for source adapters that provide raw items without precomputed version fields.
+        if not item.get("variant_signature"):
+            try:
+                item["variant_signature"] = build_item_variant_signature(item)
+            except Exception:
+                item["variant_signature"] = ""
+
+        if not item.get("variant_components"):
+            try:
+                item["variant_components"] = get_item_variant_components(item)
+            except Exception:
+                item["variant_components"] = {}
+
+        if not item.get("version_signature"):
+            try:
+                item["version_signature"] = build_version_signature(item)
+            except Exception:
+                item["version_signature"] = ""
+
         data = {
             "source_uid": item["source_uid"],
             "version_signature": item["version_signature"],

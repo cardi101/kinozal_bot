@@ -21,7 +21,6 @@
 - Telegram polling работает
 - пользовательские и админские обработчики работают
 - TMDB enrichment и загрузка постеров работают
-- для `TorAPI` / `Kinozal` используется локальный ops-patch
 
 ---
 
@@ -32,7 +31,6 @@
 Проект запускается через Docker Compose и использует следующие основные части:
 
 - `app` — основной контейнер Telegram-бота
-- `torapi` — контейнер-источник для получения ленты релизов
 - `kinozal-postgres-refactor` — PostgreSQL для рефакторенной версии
 - `kinozal-redis` — Redis для кеша / служебных задач
 
@@ -44,7 +42,6 @@
   - `postgresql://postgres:postgres@host.docker.internal:5432/kinozal_news`
 - Redis:
   - `redis://host.docker.internal:6379/0`
-- TorAPI:
   - `http://host.docker.internal:8443`
 
 ---
@@ -102,8 +99,6 @@
 - работу с source feed
 - нормализацию входных элементов
 - подготовку релизов к дальнейшей обработке
-
-На текущем этапе source ingestion зависит от `TorAPI`.
 
 ---
 
@@ -234,20 +229,13 @@
 
 ---
 
-## TorAPI и Kinozal
-
-## Роль `TorAPI`
-`TorAPI` используется как отдельный источник данных для ленты релизов Kinozal.
-
 ### Проблема
 После переноса и рестартов было обнаружено:
-- `TorAPI` успешно получает HTML `browse.php`
 - HTML страницы `Kinozal` приходит корректно
 - но стандартный endpoint `/api/get/rss/kinozal` возвращает:
   - `{"Result":"Server is not available"}`
 
 ### Причина
-Проблема локализована в парсере `Kinozal` внутри `TorAPI`:
 - HTML приходит
 - но стандартный селектор оказался слишком жёстким
 - из-за этого массив `torrents` оставался пустым
@@ -255,19 +243,12 @@
 ### Решение
 Для проекта добавлен локальный воспроизводимый ops-fix:
 
-- `ops/torapi/torapi-kinozal-fix.patch`
-- `ops/torapi/build-local-torapi-fixed.sh`
-- `ops/torapi/README.md`
-- `docker-compose.torapi-fixed.yml`
-
 ### Что делает patch
 Patch добавляет fallback-логику для поиска строк релизов по ссылкам `details.php?id=...`, если основной селектор Kinozal не срабатывает.
 
 ### Как использовать
 1. собрать локальный patched image:
-   - `./ops/torapi/build-local-torapi-fixed.sh`
 2. поднять compose с override:
-   - `docker compose -f docker-compose.yml -f docker-compose.torapi-fixed.yml up -d --build`
 
 ---
 
@@ -333,14 +314,11 @@ app — основной Telegram-бот
 
 postgres — PostgreSQL 16 внутри docker compose
 
-torapi — внешний HTTP API-источник, доступный приложению через host.docker.internal:8443
-
 kinozal-redis — Redis для кеша / вспомогательных операций
 
 Topology
 Telegram -> app
 app -> postgres:5432
-app -> host.docker.internal:8443 (torapi)
 app -> redis://kinozal-redis:6379/0
 PostgreSQL
 

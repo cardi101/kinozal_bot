@@ -96,7 +96,7 @@ cache = RedisCache(CFG.redis_url)
 tmdb = TMDBClient(CFG, db, cache, CFG.tmdb_token, CFG.language, log)
 
 
-source = KinozalSource(CFG.torapi_base)
+source = KinozalSource()
 
 
 router = Router()
@@ -116,13 +116,13 @@ runtime = AppRuntime(
 )
 
 
-register_menu_handlers(router, db, ADMIN_USERS_PAGE_SIZE)
+register_menu_handlers(router, db, source, tmdb, ADMIN_USERS_PAGE_SIZE)
 register_subscription_basic_handlers(router, db)
 register_subscription_filter_handlers(router, db)
 register_subscription_input_handlers(router, db)
 register_subscription_wizard_handlers(router, db)
 register_subscription_test_handlers(router, db, source, tmdb)
-register_user_handlers(router, db)
+register_user_handlers(router, db, source, tmdb)
 register_admin_match_handlers(router, db, tmdb)
 register_admin_access_handlers(router, db, ADMIN_USERS_PAGE_SIZE)
 

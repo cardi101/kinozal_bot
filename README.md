@@ -26,14 +26,10 @@ docker compose logs -f app
 
 ## Ops notes
 
-- Для `TorAPI` и `Kinozal` используется локальный воспроизводимый patch: [ops/torapi/README.md](./ops/torapi/README.md)
-- Compose override для patched `TorAPI`: [docker-compose.torapi-fixed.yml](./docker-compose.torapi-fixed.yml)
-
 ## Документация
 
 - [Архитектура проекта](./ARCHITECTURE.md)
 - [Снимок состояния handoff](./HANDOFF_STATUS.txt)
-
 
 ## Текущая схема запуска
 
@@ -41,7 +37,6 @@ docker compose logs -f app
 
 - `app` — Telegram-бот
 - `postgres` — PostgreSQL 16
-- `torapi` — HTTP API-источник для RSS / Kinozal
 
 Redis используется отдельно как `kinozal-redis`.
 
@@ -52,7 +47,6 @@ Redis используется отдельно как `kinozal-redis`.
 Связи между сервисами:
 
 - `app` -> `postgres:5432`
-- `app` -> `host.docker.internal:8443` для `torapi`
 - `app` -> `redis://kinozal-redis:6379/0`
 
 ## Переменные окружения

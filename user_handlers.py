@@ -11,10 +11,11 @@ from admin_helpers import is_admin
 from config import CFG
 from delivery_sender import send_item_to_user
 from keyboards import main_menu_kb
+from latest_live_helpers import get_live_latest_items
 from text_access import format_access_expiry, require_access_message, user_access_state
 
 
-def register_user_handlers(router: Router, db: Any) -> None:
+def register_user_handlers(router: Router, db: Any, source: Any, tmdb: Any) -> None:
     @router.message(CommandStart(deep_link=True))
     @router.message(CommandStart())
     async def cmd_start(message: Message, command: CommandObject) -> None:
@@ -67,7 +68,7 @@ def register_user_handlers(router: Router, db: Any) -> None:
     async def cmd_latest(message: Message) -> None:
         if not await ensure_access_for_message(db, message):
             return
-        items = db.get_last_items(5)
+        items = await get_live_latest_items(source, tmdb, limit=5)
         if not items:
             await message.answer("Пока ещё нет сохранённых релизов.")
             return

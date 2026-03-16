@@ -11,12 +11,13 @@ from admin_helpers import is_admin, format_admin_user_line
 from delivery_sender import send_item_to_user
 from keyboards import main_menu_kb, subscriptions_list_kb, preset_kb, admin_invites_kb, admin_users_kb
 from menu_views import show_main_menu
+from latest_live_helpers import get_live_latest_items
 from service_helpers import safe_edit
 from subscription_text import sub_summary
 from text_access import format_dt, user_access_state, format_access_expiry
 
 
-def register_menu_handlers(router: Router, db: Any, admin_users_page_size: int = 12) -> None:
+def register_menu_handlers(router: Router, db: Any, source: Any, tmdb: Any, admin_users_page_size: int = 12) -> None:
     @router.message(Command("menu"))
     async def cmd_menu(message: Message) -> None:
         if not await ensure_access_for_message(db, message):
@@ -59,7 +60,7 @@ def register_menu_handlers(router: Router, db: Any, admin_users_page_size: int =
     async def cb_menu_latest(callback: CallbackQuery) -> None:
         if not await ensure_access_for_callback(db, callback):
             return
-        items = db.get_last_items(5)
+        items = await get_live_latest_items(source, tmdb, limit=5)
         if not items:
             await callback.answer("Пока пусто", show_alert=True)
             return
