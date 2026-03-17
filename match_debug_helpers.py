@@ -15,6 +15,42 @@ from utils import compact_spaces
 log = logging.getLogger(__name__)
 
 
+def _strip_existing_match_fields(item: Dict[str, Any]) -> Dict[str, Any]:
+    cleaned = dict(item)
+    for key in [
+        "tmdb_id",
+        "tmdb_title",
+        "tmdb_original_title",
+        "tmdb_overview",
+        "tmdb_poster_url",
+        "tmdb_backdrop_url",
+        "tmdb_release_date",
+        "tmdb_vote_average",
+        "tmdb_vote_count",
+        "tmdb_genre_ids",
+        "tmdb_genres",
+        "tmdb_media_type",
+        "tmdb_status",
+        "tmdb_episode_run_time",
+        "tmdb_number_of_seasons",
+        "tmdb_number_of_episodes",
+        "tmdb_origin_country",
+        "tmdb_spoken_languages",
+        "tmdb_external_ids_json",
+        "tmdb_search_query",
+        "tmdb_search_lang",
+        "tmdb_search_path",
+        "tmdb_match_score",
+        "tmdb_match_reason",
+        "tmdb_match_debug",
+        "tmdb_match_path",
+        "imdb_id",
+    ]:
+        cleaned.pop(key, None)
+    return cleaned
+
+
+
 def _humanize_subscription_reason(reason: str) -> str:
     if reason == "passed":
         return "подходит"
@@ -144,7 +180,8 @@ def build_match_explanation(db: Any, item: Dict[str, Any], live_item: Optional[D
 async def rematch_item_live(db: Any, tmdb: Any, item: Dict[str, Any]) -> Tuple[Optional[Dict[str, Any]], Optional[Dict[str, Any]], bool]:
     before = dict(item)
     try:
-        enriched = await tmdb.enrich_item(dict(item))
+        rematch_input = _strip_existing_match_fields(item)
+        enriched = await tmdb.enrich_item(rematch_input)
         db.save_item(enriched)
         refreshed = db.get_item(int(item["id"])) or db.find_item_by_kinozal_id(str(item.get("kinozal_id") or ""))
         if refreshed is not None and enriched.get("tmdb_match_path"):

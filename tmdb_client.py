@@ -18,6 +18,115 @@ from anime_resolver import resolve_anime_tmdb, should_use_anime_resolver
 from utils import utc_ts, compact_spaces
 
 
+_GENERIC_SINGLE_TOKEN_ANIME_ALIASES = {
+    "fate",
+    "destiny",
+    "unmei",
+    "promise",
+    "legend",
+    "hero",
+    "world",
+    "dream",
+    "story",
+    "love",
+}
+
+
+def _normalize_anime_guard_text(value: Any) -> str:
+    return normalize_match_text(compact_spaces(str(value or "")))
+
+
+def _extract_slash_title_candidates(raw_title: str) -> List[str]:
+    raw_title = compact_spaces(raw_title or "")
+    if not raw_title:
+        return []
+
+    out: List[str] = []
+
+    # сохраняем слэш-тайтлы как цельные кандидаты и их версию без slash
+    for candidate in re.findall(r"[A-Za-z0-9][^\n]{0,120}/[^\n]{0,120}", raw_title):
+        candidate = compact_spaces(candidate)
+        if candidate and candidate not in out:
+            out.append(candidate)
+
+        candidate_spaced = compact_spaces(candidate.replace("/", " "))
+        if candidate_spaced and candidate_spaced not in out:
+            out.append(candidate_spaced)
+
+    return out
+
+
+def _should_skip_generic_lexicon_expansion(item: Dict[str, Any], lexicon_best: Any) -> bool:
+    source_title = compact_spaces(item.get("source_title") or "")
+    cleaned_title = compact_spaces(item.get("cleaned_title") or "")
+
+    source_norm = _normalize_anime_guard_text(source_title)
+    cleaned_norm = _normalize_anime_guard_text(cleaned_title)
+    combined_norm = " ".join(x for x in [source_norm, cleaned_norm] if x).strip()
+
+    if not combined_norm:
+        return False
+
+    source_looks_specific = ("/" in source_title) or (len(combined_norm.split()) >= 2)
+    if not source_looks_specific:
+        return False
+
+    matched_generic = False
+    matched_specific = False
+
+    for alias in getattr(lexicon_best, "titles", [])[:20]:
+        alias_norm = _normalize_anime_guard_text(alias)
+        if not alias_norm:
+            continue
+        if alias_norm not in combined_norm:
+            continue
+
+        if len(alias_norm.split()) == 1 and alias_norm in _GENERIC_SINGLE_TOKEN_ANIME_ALIASES:
+            matched_generic = True
+        elif len(alias_norm.split()) >= 2 or len(alias_norm) >= 12:
+            matched_specific = True
+
+    canonical_norm = _normalize_anime_guard_text(getattr(lexicon_best, "canonical_title", ""))
+    if canonical_norm and canonical_norm in combined_norm:
+        if len(canonical_norm.split()) >= 2 or len(canonical_norm) >= 12:
+            matched_specific = True
+
+    return matched_generic and not matched_specific
+
+
+def _fallback_cleaned_title_from_source_title(source_title: str) -> str:
+    source_title = compact_spaces(source_title or "")
+    if not source_title:
+        return ""
+
+    parts = [compact_spaces(x) for x in source_title.split(" / ") if compact_spaces(x)]
+    if not parts:
+        return ""
+
+    title_parts = []
+    for part in parts:
+        if re.fullmatch(r"(19|20)\d{2}(?:-(19|20)\d{2})?", part):
+            break
+
+        if re.search(
+            r"\b(WEB|WEBRip|WEB-DL|BDRip|Blu-?Ray|DVDRip|HEVC|AVC|HDR|2160p|1080p|720p|x264|x265|RU|РУ|ЛМ|ПМ|СТ|ДБ|РМ)\b",
+            part,
+            flags=re.I,
+        ):
+            break
+
+        cleaned_part = re.sub(r"\s*\([^)]*сезон[^)]*\)\s*$", "", part, flags=re.I)
+        cleaned_part = re.sub(r"\s*\([^)]*серии?[^)]*\)\s*$", "", cleaned_part, flags=re.I)
+        cleaned_part = compact_spaces(cleaned_part)
+
+        if cleaned_part and cleaned_part not in title_parts:
+            title_parts.append(cleaned_part)
+
+    return " / ".join(title_parts[:2])
+
+
+
+
 class TMDBClient:
     def __init__(self, cfg: Any, db: Any, cache: Any, token: str, language: str, log: logging.Logger):
         self.anime_title_lexicon = None
@@ -435,6 +544,11 @@ class TMDBClient:
         lexicon_best = None
         tmdb_match_path = None
         lexicon_candidates_used = False
+        fallback_cleaned_title = compact_spaces(item.get("cleaned_title") or "")
+        if not fallback_cleaned_title:
+            fallback_cleaned_title = _fallback_cleaned_title_from_source_title(item.get("source_title") or "")
+            if fallback_cleaned_title:
+                item["cleaned_title"] = fallback_cleaned_title
         item["tmdb_match_path"] = None
         if self.anime_title_lexicon and should_use_anime_resolver(item):
             try:
@@ -445,10 +559,10 @@ class TMDBClient:
                     if value and value not in lexicon_candidates:
                         lexicon_candidates.append(value)
 
-                _push_lex(item.get("cleaned_title"))
+                _push_lex(fallback_cleaned_title)
                 _push_lex(item.get("source_title"))
 
-                for raw in [item.get("cleaned_title"), item.get("source_title")]:
+                for raw in [fallback_cleaned_title, item.get("source_title")]:
                     raw = str(raw or "")
                     if "/" in raw:
                         for part in raw.split("/"):
@@ -473,7 +587,7 @@ class TMDBClient:
                     logging.getLogger(__name__).info(
                         "Anime lexicon miss title=%s cleaned=%s",
                         item.get("source_title") or "",
-                        item.get("cleaned_title") or "",
+                        fallback_cleaned_title or "",
                     )
             except Exception:
                 logging.getLogger(__name__).exception(
@@ -497,7 +611,7 @@ class TMDBClient:
                     logging.getLogger(__name__).info(
                         "Anime resolver miss title=%s cleaned=%s",
                         item.get("source_title") or "",
-                        item.get("cleaned_title") or "",
+                        fallback_cleaned_title or "",
                     )
             except Exception:
                 logging.getLogger(__name__).exception(
@@ -618,42 +732,47 @@ class TMDBClient:
                 year = item.get("source_year")
                 candidates = title_search_candidates(
                     item.get("source_title") or "",
-                    item.get("cleaned_title") or "",
+                    fallback_cleaned_title or "",
                 )
 
+                extra_slash_candidates = _extract_slash_title_candidates(item.get("source_title") or "")
+                if extra_slash_candidates:
+                    candidates = extra_slash_candidates + [
+                        x for x in candidates if x not in extra_slash_candidates
+                    ]
+
                 if lexicon_best:
-                    item_media_type = str(item.get("media_type") or "").strip().lower()
-                    if item_media_type not in {"tv", "movie"} or lexicon_best.media_type == item_media_type:
-                        lexicon_extra: List[str] = []
+                    if _should_skip_generic_lexicon_expansion(item, lexicon_best):
+                        logging.getLogger(__name__).info(
+                            "Anime lexicon weak alias hit ignored title=%s canonical=%s reason=%s",
+                            item.get("source_title") or "",
+                            lexicon_best.canonical_title,
+                            "generic_single_token_alias",
+                        )
+                    else:
+                        expanded_candidates = []
+                        for value in lexicon_best.titles[:8]:
+                            value = " ".join(str(value or "").split()).strip()
+                            value_norm = _normalize_anime_guard_text(value)
+                            if (
+                                value
+                                and value not in expanded_candidates
+                                and value not in candidates
+                                and not (
+                                    len(value_norm.split()) == 1
+                                    and value_norm in _GENERIC_SINGLE_TOKEN_ANIME_ALIASES
+                                )
+                            ):
+                                expanded_candidates.append(value)
 
-                        def _push_lex_candidate(value: Any) -> None:
-                            value = compact_spaces(str(value or ""))
-                            if not value:
-                                return
-                            if len(normalize_match_text(value)) < 3:
-                                return
-                            if value not in lexicon_extra:
-                                lexicon_extra.append(value)
-
-                        _push_lex_candidate(lexicon_best.canonical_title)
-                        for alias in lexicon_best.titles[:8]:
-                            _push_lex_candidate(alias)
-
-                        if lexicon_extra:
-                            ordered_candidates: List[str] = []
-                            for candidate in lexicon_extra[:6] + candidates:
-                                candidate = compact_spaces(str(candidate or ""))
-                                if candidate and candidate not in ordered_candidates:
-                                    ordered_candidates.append(candidate)
-                            candidates = ordered_candidates
-                            lexicon_candidates_used = True
-                            self.log.info(
+                        if expanded_candidates:
+                            logging.getLogger(__name__).info(
                                 "Anime lexicon expanded candidates title=%s canonical=%s added=%s",
-                                item.get("source_title"),
+                                item.get("source_title") or "",
                                 lexicon_best.canonical_title,
-                                " | ".join(lexicon_extra[:6]),
+                                " | ".join(expanded_candidates),
                             )
-
+                            candidates = expanded_candidates + candidates
                 search_plan: List[Tuple[str, str, Optional[int]]] = []
                 strict_tv_only = bool(item.get("source_episode_progress")) or media_type == "tv"
                 if media_type == "tv":
