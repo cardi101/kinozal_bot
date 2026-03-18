@@ -94,6 +94,79 @@ def _should_skip_generic_lexicon_expansion(item: Dict[str, Any], lexicon_best: A
     return matched_generic and not matched_specific
 
 
+_GENERIC_CYRILLIC_SEARCH_TOKENS = {
+    "дело",
+    "фильм",
+    "серия",
+    "эпизод",
+    "выпуск",
+    "новости",
+    "матч",
+    "концерт",
+    "шоу",
+    "эфир",
+}
+
+
+def _should_skip_generic_search_candidate(item: Dict[str, Any], candidate: str) -> bool:
+    candidate = compact_spaces(str(candidate or ""))
+    if not candidate:
+        return True
+
+    norm = normalize_match_text(candidate)
+    norm = norm.replace("№", " ").replace("#", " ")
+    tokens = [tok for tok in re.findall(r"[a-zа-я0-9]+", norm, flags=re.I) if len(tok) > 1]
+
+    # Совсем мусорные/сверхобщие кейсы: "Дело", "Дело №", "Фильм", "Серия" и т.п.
+    if len(tokens) == 0:
+        return True
+
+    if len(tokens) == 1:
+        tok = tokens[0]
+        if tok in _GENERIC_CYRILLIC_SEARCH_TOKENS:
+            return True
+
+    if ("№" in candidate or "#" in candidate) and len(tokens) <= 1:
+        return True
+
+    # Для кириллицы с одним слабым токеном лучше не матчить автоматически.
+    if re.search(r"[А-Яа-яЁё]", candidate) and len(tokens) <= 1:
+        return True
+
+    return False
+
+
+def _is_hard_blocked_generic_candidate(candidate: str) -> bool:
+    candidate = compact_spaces(str(candidate or "")).lower()
+    if not candidate:
+        return True
+
+    candidate = candidate.replace("№", " ").replace("#", " ")
+    candidate = re.sub(r"\s+", " ", candidate).strip()
+
+    hard_block_exact = {
+        "дело",
+        "фильм",
+        "серия",
+        "эпизод",
+        "выпуск",
+        "эфир",
+        "матч",
+        "новости",
+        "концерт",
+        "шоу",
+    }
+
+    if candidate in hard_block_exact:
+        return True
+
+    if re.fullmatch(r"(дело|фильм|серия|эпизод|выпуск)\s+\d+", candidate):
+        return True
+
+    return False
+
+
+
 def _fallback_cleaned_title_from_source_title(source_title: str) -> str:
     source_title = compact_spaces(source_title or "")
     if not source_title:
@@ -635,7 +708,7 @@ class TMDBClient:
             return item
 
         try:
-            imdb_id = item.get("imdb_id")
+            source_imdb_id = item.get("source_imdb_id")
             details = None
             override = manual_tmdb_override_for_item(item)
             if override:
@@ -664,8 +737,8 @@ class TMDBClient:
                         override_tmdb_id,
                         exc_info=True,
                     )
-            if imdb_id and not details:
-                details = await self.find_by_imdb(imdb_id)
+            if source_imdb_id and not details:
+                details = await self.find_by_imdb(source_imdb_id)
                 if details:
                     tmdb_match_path = "imdb_lookup"
                     item["tmdb_match_path"] = tmdb_match_path
@@ -773,6 +846,18 @@ class TMDBClient:
                                 " | ".join(expanded_candidates),
                             )
                             candidates = expanded_candidates + candidates
+
+                raw_candidates = list(candidates)
+                candidates = [
+                    candidate for candidate in candidates
+                    if not _should_skip_generic_search_candidate(item, candidate)
+                ]
+                if raw_candidates and not candidates:
+                    self.log.info(
+                        "TMDB all candidates filtered as too generic for %s | raw_candidates=%s",
+                        item.get("source_title"),
+                        raw_candidates,
+                    )
                 search_plan: List[Tuple[str, str, Optional[int]]] = []
                 strict_tv_only = bool(item.get("source_episode_progress")) or media_type == "tv"
                 if media_type == "tv":
@@ -797,6 +882,14 @@ class TMDBClient:
 
                 seen = set()
                 for candidate, mt, y in search_plan:
+                    if _is_hard_blocked_generic_candidate(candidate):
+                        self.log.info(
+                            "TMDB hard-skipped generic candidate for %s -> %s",
+                            item.get("source_title"),
+                            candidate,
+                        )
+                        continue
+
                     key = (candidate.lower(), mt, y)
                     if key in seen:
                         continue
@@ -811,9 +904,25 @@ class TMDBClient:
                             details.get("tmdb_original_title"),
                         )
                         details = None
+
+                    if details and (details.get("media_type") or mt) == "movie" and not item.get("source_imdb_id"):
+                        source_year = parse_year(str(item.get("source_year") or ""))
+                        matched_year = parse_year(str(details.get("tmdb_release_date") or ""))
+                        if source_year and matched_year and abs(source_year - matched_year) > 2:
+                            self.log.info(
+                                "TMDB rejected movie search match by year delta for %s -> %s [source_year=%s tmdb_year=%s]",
+                                item.get("source_title"),
+                                candidate,
+                                source_year,
+                                matched_year,
+                            )
+                            details = None
+
                     if details:
                         matched_media_type = details.get("media_type") or mt
                         matched_year = parse_year(str(details.get("tmdb_release_date") or ""))
+                        tmdb_match_path = "search"
+                        item["tmdb_match_path"] = tmdb_match_path
                         self.log.info("TMDB matched %s -> %s [%s, tmdb_year=%s]", item.get("source_title"), candidate, matched_media_type, matched_year)
                         break
 

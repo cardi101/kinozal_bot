@@ -11,7 +11,7 @@ from admin_helpers import is_admin, extract_kinozal_id_from_text, parse_admin_ro
 from config import CFG
 from country_helpers import COUNTRY_NAMES_RU, parse_country_codes
 from delivery_sender import send_item_to_user
-from match_debug_helpers import build_match_explanation, rematch_item_live
+from match_debug_helpers import build_match_explanation, rematch_item_live, _strip_existing_match_fields
 from release_versioning import describe_variant_change, extract_kinozal_id, format_variant_summary
 from subscription_matching import match_subscription
 from text_access import format_dt, human_media_type
@@ -112,7 +112,7 @@ def register_admin_match_handlers(router: Router, db: Any, tmdb: Any) -> None:
 
         live_item = dict(item)
         try:
-            live_item = await tmdb.enrich_item(dict(item))
+            live_item = await tmdb.enrich_item(_strip_existing_match_fields(item))
         except Exception:
             log.exception("Live explain TMDB recompute failed for kinozal_id=%s", kinozal_id)
             live_item = dict(item)
