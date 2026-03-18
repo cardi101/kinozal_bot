@@ -124,6 +124,15 @@ def build_match_explanation(db: Any, item: Dict[str, Any], live_item: Optional[D
         f"TMDB в БД: {html.escape('есть' if item.get('tmdb_id') else 'нет')}",
     ]
 
+    source_imdb_id = compact_spaces(str(display_item.get("source_imdb_id") or item.get("source_imdb_id") or ""))
+    stored_imdb_id = compact_spaces(str(item.get("imdb_id") or ""))
+    if source_imdb_id:
+        lines.append(f"Source IMDb: {html.escape(source_imdb_id)}")
+    else:
+        lines.append("Source IMDb: —")
+    if stored_imdb_id:
+        lines.append(f"Stored IMDb: {html.escape(stored_imdb_id)}")
+
     if item.get("tmdb_id"):
         lines.append(
             f"TMDB в БД title: {html.escape(compact_spaces(str(item.get('tmdb_title') or item.get('tmdb_original_title') or '—')))} "
@@ -190,3 +199,4 @@ async def rematch_item_live(db: Any, tmdb: Any, item: Dict[str, Any]) -> Tuple[O
     except Exception:
         log.exception("Rematch failed for item_id=%s kinozal_id=%s", item.get("id"), item.get("kinozal_id"))
         return before, None, False
+

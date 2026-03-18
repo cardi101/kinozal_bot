@@ -1,7 +1,7 @@
 import html as html_lib
 import logging
 import re
-from typing import Any, Dict, Optional, Sequence
+from typing import Any, Dict, List, Optional, Sequence
 
 import httpx
 from aiogram import Bot
@@ -110,8 +110,8 @@ def _safe_truncate_html(text: str, limit: int) -> str:
 
     i = 0
     visible = 0
-    out: list[str] = []
-    open_tags: list[str] = []
+    out: List[str] = []
+    open_tags: List[str] = []
 
     tag_re = re.compile(r"(?is)<(/?)([a-zA-Z0-9]+)([^>]*)>")
 
@@ -168,13 +168,81 @@ def _safe_truncate_html(text: str, limit: int) -> str:
     while truncated.endswith("<"):
         truncated = truncated[:-1].rstrip()
 
-    if not truncated.endswith("…"):
-        truncated += "…"
-
     while open_tags:
         truncated += f"</{open_tags.pop()}>"
 
     return truncated
+
+
+def _prepare_primary_item(item: Dict[str, Any]) -> Dict[str, Any]:
+    prepared = dict(item)
+    prepared["tmdb_overview"] = ""
+    prepared["source_description"] = ""
+    return prepared
+
+
+def _normalize_release_text(value: str) -> str:
+    raw = str(value or "").strip()
+    if not raw:
+        return ""
+
+    lines: List[str] = []
+    for raw_line in raw.splitlines():
+        line = " ".join(str(raw_line or "").split()).strip()
+        if not line:
+            continue
+        lines.append(line)
+
+    return "\n".join(lines).strip()
+
+
+def _build_release_followup_messages(item: Dict[str, Any], limit: int = 3500) -> List[str]:
+    release_text = _normalize_release_text(item.get("source_release_text") or "")
+    if not release_text:
+        return []
+
+    release_title = str(item.get("source_title") or item.get("tmdb_title") or "Без названия").strip()
+    escaped_title = html_lib.escape(release_title)
+
+    source_lines = [html_lib.escape(line) for line in release_text.splitlines() if line.strip()]
+    if not source_lines:
+        return []
+
+    messages: List[str] = []
+    current_lines: List[str] = []
+
+    def header(first: bool) -> str:
+        if first:
+            return f"📎 <b>Релиз:</b> {escaped_title}"
+        return f"📎 <b>Релиз (продолжение):</b> {escaped_title}"
+
+    current_header = header(True)
+
+    for line in source_lines:
+        candidate_body = "\n".join(current_lines + [line]).strip()
+        candidate_text = f"{current_header}\n\n{candidate_body}".strip()
+
+        if current_lines and len(candidate_text) > limit:
+            messages.append(f"{current_header}\n\n" + "\n".join(current_lines))
+            current_header = header(False)
+            current_lines = [line]
+        else:
+            current_lines.append(line)
+
+    if current_lines:
+        messages.append(f"{current_header}\n\n" + "\n".join(current_lines))
+
+    return messages
+
+
+async def _send_release_followups(bot: Bot, tg_user_id: int, item: Dict[str, Any]) -> None:
+    for text in _build_release_followup_messages(item):
+        await bot.send_message(
+            tg_user_id,
+            text=text,
+            parse_mode=ParseMode.HTML,
+            disable_web_page_preview=True,
+        )
 
 
 async def send_item_to_user(
@@ -184,12 +252,16 @@ async def send_item_to_user(
     item: Dict[str, Any],
     subs: Optional[Sequence[Dict[str, Any]]],
 ) -> None:
-    text = item_message(db, item, subs)
+    primary_item = _prepare_primary_item(item)
+
+    text = item_message(db, primary_item, subs)
     text = _inject_compact_magnet_html(text, item)
 
     poster_url = item.get("tmdb_poster_url")
     full_html_text = short(text, 3900)
     full_plain_text = short(html_to_plain_text(text), 3900)
+
+    main_sent = False
 
     if poster_url:
         poster_file = await _build_poster_file(str(poster_url), item.get("id"))
@@ -202,7 +274,7 @@ async def send_item_to_user(
                     caption=caption_html,
                     parse_mode=ParseMode.HTML,
                 )
-                return
+                main_sent = True
             except Exception:
                 log.warning(
                     "send_photo(uploaded poster) failed for user=%s item=%s",
@@ -211,22 +283,36 @@ async def send_item_to_user(
                     exc_info=True,
                 )
 
-    try:
-        await bot.send_message(
-            tg_user_id,
-            text=full_html_text,
-            parse_mode=ParseMode.HTML,
-            disable_web_page_preview=CFG.disable_preview,
-        )
-    except Exception:
-        log.warning(
-            "send_message HTML failed for user=%s item=%s",
-            tg_user_id,
-            item.get("id"),
-            exc_info=True,
-        )
-        await bot.send_message(
-            tg_user_id,
-            text=full_plain_text,
-            disable_web_page_preview=CFG.disable_preview,
-        )
+    if not main_sent:
+        try:
+            await bot.send_message(
+                tg_user_id,
+                text=full_html_text,
+                parse_mode=ParseMode.HTML,
+                disable_web_page_preview=CFG.disable_preview,
+            )
+            main_sent = True
+        except Exception:
+            log.warning(
+                "send_message HTML failed for user=%s item=%s",
+                tg_user_id,
+                item.get("id"),
+                exc_info=True,
+            )
+            await bot.send_message(
+                tg_user_id,
+                text=full_plain_text,
+                disable_web_page_preview=CFG.disable_preview,
+            )
+            main_sent = True
+
+    if main_sent:
+        try:
+            await _send_release_followups(bot, tg_user_id, item)
+        except Exception:
+            log.warning(
+                "send release followup failed for user=%s item=%s",
+                tg_user_id,
+                item.get("id"),
+                exc_info=True,
+            )

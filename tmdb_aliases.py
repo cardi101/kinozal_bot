@@ -220,10 +220,29 @@ def is_short_acronym_tmdb_query(query: str) -> bool:
 
 
 def manual_tmdb_override_for_item(item: Dict[str, Any]) -> Optional[Tuple[str, int, str]]:
+    kinozal_id = compact_spaces(str(item.get("kinozal_id") or ""))
+    source_title = compact_spaces(str(item.get("source_title") or ""))
+    cleaned_title = compact_spaces(str(item.get("cleaned_title") or ""))
+    source_episode_progress = compact_spaces(str(item.get("source_episode_progress") or ""))
+
+    source_blob = " | ".join(x for x in [source_title, cleaned_title, source_episode_progress] if x).lower()
+
+    # Hotfix: Magalhães / Magellan (правильный TMDB movie/975335, 2025)
+    # Ловим не только конкретный Kinozal ID, но и обе раздачи 720p/1080p по названию+году.
+    if (
+        kinozal_id == "2132322"
+        or (
+            "magalhães" in source_blob
+            and "magellan" in source_blob
+            and "2025" in source_blob
+        )
+    ):
+        return "movie", 975335, "Magalhães"
+
     values = [
-        compact_spaces(str(item.get("source_title") or "")),
-        compact_spaces(str(item.get("cleaned_title") or "")),
-        compact_spaces(str(item.get("source_episode_progress") or "")),
+        source_title,
+        cleaned_title,
+        source_episode_progress,
     ]
     candidates: List[str] = []
     for value in values:

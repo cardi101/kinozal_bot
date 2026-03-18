@@ -19,6 +19,27 @@ from text_access import human_media_type
 from utils import compact_spaces
 
 
+def _preserve_multiline_overview(value: str) -> str:
+    raw = str(value or "").strip()
+    if not raw:
+        return ""
+
+    lines = []
+    seen = set()
+
+    for raw_line in raw.splitlines():
+        line = " ".join(raw_line.split()).strip()
+        if not line:
+            continue
+        key = line.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        lines.append(line)
+
+    return "\n".join(lines)
+
+
 def item_message(db: Any, item: Dict[str, Any], matched_subs: Optional[Sequence[Dict[str, Any]]] = None) -> str:
     def human_date(value: Optional[str]) -> Optional[str]:
         if not value:
@@ -156,7 +177,9 @@ def item_message(db: Any, item: Dict[str, Any], matched_subs: Optional[Sequence[
     overview = item.get("tmdb_overview") or item.get("source_description")
     if overview:
         lines.append("")
-        lines.append(html.escape(compact_spaces(overview)))
+        overview_text = _preserve_multiline_overview(overview)
+        for part in overview_text.splitlines():
+            lines.append(html.escape(part))
 
     text = "\n".join(lines)
     text = re.sub(r"\n{3,}", "\n\n", text)
