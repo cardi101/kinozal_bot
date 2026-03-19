@@ -3,6 +3,7 @@ from typing import Any, Dict, List
 
 from media_detection import is_non_video_release
 from subscription_matching import match_subscription
+from kinozal_details import enrich_kinozal_item_with_details
 
 
 log = logging.getLogger(__name__)
@@ -28,6 +29,7 @@ async def get_live_test_items_for_subscription(db: Any, source: Any, tmdb: Any, 
             continue
         try:
             item = await tmdb.enrich_item(item)
+            item = await enrich_kinozal_item_with_details(item)
         except Exception:
             log.warning(
                 "TMDB enrich failed during subscription test for sub=%s title=%s",

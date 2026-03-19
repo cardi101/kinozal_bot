@@ -8,6 +8,7 @@ from aiogram.types import CallbackQuery
 from access_helpers import ensure_access_for_callback
 from config import CFG
 from delivery_sender import send_item_to_user
+from kinozal_details import enrich_kinozal_item_with_details
 from subscription_test_helpers import get_live_test_items_for_subscription
 
 
@@ -31,6 +32,8 @@ def register_subscription_test_handlers(router: Router, db: Any, source: Any, tm
                 disable_web_page_preview=CFG.disable_preview,
             )
             for item in items:
+                item = await enrich_kinozal_item_with_details(dict(item))
+
                 await send_item_to_user(db, callback.bot, callback.message.chat.id, item, [sub])
             await callback.answer("Показал свежие")
             return
@@ -43,6 +46,8 @@ def register_subscription_test_handlers(router: Router, db: Any, source: Any, tm
                 disable_web_page_preview=CFG.disable_preview,
             )
             for item in fallback_items:
+                item = await enrich_kinozal_item_with_details(dict(item))
+
                 await send_item_to_user(db, callback.bot, callback.message.chat.id, item, [sub])
             await callback.answer("Показал из базы")
             return

@@ -23,6 +23,8 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      redis:
+        condition: service_started
     extra_hosts:
       - "host.docker.internal:host-gateway"
     environment:
@@ -51,6 +53,13 @@ services:
       ANIME_RESOLVER_ENABLED: "${ANIME_RESOLVER_ENABLED}"
       ANIME_RESOLVER_LOG_ONLY: "${ANIME_RESOLVER_LOG_ONLY}"
       ANIME_MAPPINGS_DIR: "${ANIME_MAPPINGS_DIR}"
+    networks:
+      - kinozal_net
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "no"]
     networks:
       - kinozal_net
 
