@@ -54,14 +54,11 @@ def _extract_info_hash(html: str, text: str) -> str:
         r"Info[\s\-]*hash[:\s]*([A-Fa-f0-9]{40})",
         r"\b([A-Fa-f0-9]{40})\b",
     ]
-    for pattern in patterns:
-        m = re.search(pattern, html, flags=re.I | re.S)
-        if m:
-            return m.group(1).upper()
-    for pattern in patterns:
-        m = re.search(pattern, text, flags=re.I | re.S)
-        if m:
-            return m.group(1).upper()
+    for source in (html, text):
+        for pattern in patterns:
+            m = re.search(pattern, source, flags=re.I | re.S)
+            if m:
+                return m.group(1).upper()
     return ""
 
 
@@ -70,20 +67,14 @@ def _extract_file_count(html: str, text: str) -> Optional[int]:
         r"Список\s+файлов\s+всего\s*(\d+)",
         r"Files\s+total\s*(\d+)",
     ]
-    for pattern in patterns:
-        m = re.search(pattern, html, flags=re.I | re.S)
-        if m:
-            try:
-                return int(m.group(1))
-            except Exception:
-                pass
-    for pattern in patterns:
-        m = re.search(pattern, text, flags=re.I | re.S)
-        if m:
-            try:
-                return int(m.group(1))
-            except Exception:
-                pass
+    for source in (html, text):
+        for pattern in patterns:
+            m = re.search(pattern, source, flags=re.I | re.S)
+            if m:
+                try:
+                    return int(m.group(1))
+                except Exception:
+                    pass
     return None
 
 
@@ -132,51 +123,156 @@ def _extract_release_tab_index(main_html: str, kinozal_id: str) -> Optional[int]
     return None
 
 
+def _release_repair_score(value: str) -> int:
+    value = str(value or "")
+    low = value.lower()
+
+    score = 0
+
+    good_markers = [
+        "аудио",
+        "субтитры",
+        "перевод",
+        "перевод и озвучивание",
+        "озвучивание",
+        "озвучка",
+        "релиз",
+        "автор релиза",
+        "без рекламы",
+        "реклама",
+        "любительск",
+        "профессиональ",
+        "дублирован",
+        "многоголос",
+        "одноголос",
+        "двухголос",
+        "закадров",
+        "роли дублировали",
+        "качество:",
+        "видео:",
+        "язык озвучки:",
+        "время раздачи:",
+        "примечание:",
+        "звук",
+        "русский",
+        "русские",
+        "английский",
+        "английские",
+        "японский",
+        "японские",
+    ]
+    for marker in good_markers:
+        if marker in low:
+            score += 12
+
+    score += len(re.findall(r"[А-Яа-яЁё]", value))
+
+    # типичные следы mojibake
+    score -= len(re.findall(r"[РС][Ѓ-џ]", value)) * 8
+    score -= value.count("Р›С") * 6
+    score -= value.count("РЎС") * 6
+    score -= value.count("РђС") * 6
+    score -= value.count("Р°Р") * 4
+    score -= value.count("Р ")
+    score -= value.count("С ")
+    return score
+
+
 def _repair_utf8_as_cp1251_mojibake(text: str) -> str:
     text = str(text or "")
     if not text:
         return ""
 
-    def marker_score(value: str) -> int:
-        low = value.lower()
-        score = 0
+    candidates = [text]
 
-        good_markers = [
-            "аудио",
-            "субтитры",
-            "перевод",
-            "перевод и озвучивание",
-            "озвучивание",
-            "релиз:",
-            "без рекламы",
-            "реклама",
-            "любительск",
-            "профессиональ",
-            "дублирован",
-            "многоголос",
-            "одноголос",
-            "двухголос",
-            "закадров",
-            "роли дублировали",
-            "качество:",
-            "видео:",
-        ]
-        for marker in good_markers:
-            if marker in low:
-                score += 10
-
-        score -= len(re.findall(r"[РС][Ѓ-џ]", value)) * 4
-        score -= value.count("Р›С")
-        score -= value.count("РЎС")
-        score += len(re.findall(r"[А-Яа-яЁё]", value))
-        return score
-
+    # Самый частый кейс: UTF-8 байты были прочитаны как cp1251
     try:
-        fixed = text.encode("cp1251", errors="ignore").decode("utf-8", errors="ignore")
-    except Exception:
-        return text
+        candidates.append(text.encode("cp1251").decode("utf-8"))
+    except UnicodeError:
+        pass
 
-    return fixed if marker_score(fixed) > marker_score(text) else text
+    # Иногда всплывают куски через latin1
+    try:
+        candidates.append(text.encode("latin1").decode("utf-8"))
+    except UnicodeError:
+        pass
+
+    # Второй проход для особо кривых строк
+    for base in list(candidates):
+        try:
+            fixed = base.encode("cp1251").decode("utf-8")
+            candidates.append(fixed)
+        except UnicodeError:
+            pass
+
+    uniq: List[str] = []
+    seen = set()
+    for item in candidates:
+        if item in seen:
+            continue
+        seen.add(item)
+        uniq.append(item)
+
+    return max(uniq, key=_release_repair_score)
+
+
+def _fix_common_release_text_glitches(line: str) -> str:
+    line = str(line or "")
+    if not line:
+        return ""
+
+    # Явные шаблоны mojibake, которые не всегда дожимаются общим repair
+    replacements = {
+        "РђСѓРґРёРѕ": "Аудио",
+        "РЎСѓР±С‚РёС‚СЂС‹": "Субтитры",
+        "РђРІС‚РѕСЂ": "Автор",
+        "Р—РІСѓРє": "Звук",
+        "РЇР·С‹Рє": "Язык",
+        "Р’СЂРµРјСЏ": "Время",
+        "РџСЂРёРјРµС‡Р°РЅРёРµ": "Примечание",
+        "Р РµР»РёР·Р°": "релиза",
+        "Р РµРєР»Р°РјС‹": "рекламы",
+        "Р СѓСЃСЃРєРёР№": "русский",
+        "Р СѓСЃСЃРєРёРµ": "русские",
+        "Р°РЅРіР»РёР№СЃРєРёР№": "английский",
+        "Р°РЅРіР»РёР№СЃРєРёРµ": "английские",
+        "РђРЎ3": "AC3",
+        "РљР±РёС‚/СЃ": "Кбит/с",
+    }
+    for bad, good in replacements.items():
+        line = line.replace(bad, good)
+
+    # типовые съеденные первые буквы
+    line = re.sub(r'(?i)(^|[\s\[\(\-/:;])удио\b', r'\1Аудио', line)
+    line = re.sub(r'(?i)(^|[\s\[\(\-/:;])убтитры\b', r'\1Субтитры', line)
+    line = re.sub(r'(?i)(^|[\s\[\(\-/:;])елиз\b', r'\1Релиз', line)
+    line = re.sub(r'(?i)(^|[\s\[\(\-/:;])усский\b', r'\1русский', line)
+    line = re.sub(r'(?i)(^|[\s\[\(\-/:;])усские\b', r'\1русские', line)
+    line = re.sub(r'(?i)(^|[\s\[\(\-/:;])усская\b', r'\1русская', line)
+    line = re.sub(r'(?i)(^|[\s\[\(\-/:;])усское\b', r'\1русское', line)
+    line = re.sub(r'(?i)(^|[\s\[\(\-/:;])нглийск', r'\1английск', line)
+    line = re.sub(r'(?i)(^|[\s\[\(\-/:;])понск', r'\1японск', line)
+
+    # остатки вида "Р релиза", "Р рекламы", "Р русские"
+    line = re.sub(r'\bР\s+релиза\b', 'релиза', line, flags=re.I)
+    line = re.sub(r'\bР\s+рекламы\b', 'рекламы', line, flags=re.I)
+    line = re.sub(r'\bР\s+русск', 'русск', line, flags=re.I)
+
+    # codec-глюки
+    line = re.sub(r'\bАС3\b', 'AC3', line)
+    line = re.sub(r'\bААС\b', 'AAC', line)
+    line = re.sub(r'\bЕ-AC-3\b', 'E-AC-3', line)
+    line = re.sub(r'\bНEVC\b', 'HEVC', line)
+
+    line = re.sub(r'\s{2,}', ' ', line).strip()
+    return line
+
+
+def _fix_release_line(raw_line: str) -> str:
+    line = _repair_utf8_as_cp1251_mojibake(raw_line)
+    line = _fix_common_release_text_glitches(line)
+    line = _compact(line)
+    return line
 
 
 def _extract_release_text_from_tab_html(tab_html: str) -> str:
@@ -184,44 +280,35 @@ def _extract_release_text_from_tab_html(tab_html: str) -> str:
     if not raw_html:
         return ""
 
-    def normalize_lines(text: str) -> str:
-        lines: List[str] = []
+    text = _strip_tags(raw_html)
+    if not text:
+        return ""
 
-        for raw_line in str(text or "").splitlines():
-            line = _compact(raw_line)
-            if not line:
-                continue
+    lines: List[str] = []
+    prev = None
 
-            if line in {
-                "Релиз",
-                "Скриншоты",
-                "Техданные",
-                "Интересно",
-                "Награды",
-                "Загрузка...",
-            }:
-                continue
+    for raw_line in text.splitlines():
+        line = _fix_release_line(raw_line)
+        if not line:
+            continue
 
-            lines.append(line)
+        if line in {
+            "Релиз",
+            "Скриншоты",
+            "Техданные",
+            "Интересно",
+            "Награды",
+            "Загрузка...",
+        }:
+            continue
 
-        # убираем только подряд идущие полные дубли, если такие внезапно есть
-        collapsed: List[str] = []
-        prev = None
-        for line in lines:
-            if line == prev:
-                continue
-            collapsed.append(line)
-            prev = line
+        if line == prev:
+            continue
 
-        return "\n".join(collapsed[:200]).strip()
+        lines.append(line)
+        prev = line
 
-    plain_text_raw = _strip_tags(raw_html)
-    repaired_text_raw = _repair_utf8_as_cp1251_mojibake(plain_text_raw)
-
-    plain_text = normalize_lines(plain_text_raw)
-    repaired_text = normalize_lines(repaired_text_raw)
-
-    return repaired_text if _score_release_text(repaired_text) > _score_release_text(plain_text) else plain_text
+    return "\n".join(lines[:200]).strip()
 
 
 def _score_release_text(text: str) -> int:
@@ -238,7 +325,7 @@ def _score_release_text(text: str) -> int:
         flags=re.I,
     )
     translate_line_re = re.compile(
-        r'^\s*(?:перевод(?:\s+и\s+озвучивание)?|озвучивание|озвучка)\s*:',
+        r'^\s*(?:перевод(?:\s+и\s+озвучивание)?|озвучивание|озвучка|язык озвучки)\s*:',
         flags=re.I,
     )
     numbered_voice_line_re = re.compile(
@@ -278,6 +365,12 @@ def _score_release_text(text: str) -> int:
         "одноголос",
         "двухголос",
         "закадров",
+        "язык озвучки",
+        "время раздачи",
+        "примечание",
+        "озвучка",
+        "озвучивание",
+        "звук",
     ]
     for marker in extra_markers:
         if marker in lowered:
@@ -316,6 +409,12 @@ def _score_release_text(text: str) -> int:
             "любительск",
             "профессиональ",
             "дублирован",
+            "язык озвучки",
+            "время раздачи",
+            "примечание",
+            "озвучка",
+            "озвучивание",
+            "звук",
         )
     ):
         score -= 12
@@ -327,23 +426,16 @@ async def _fetch_best_release_text(kinozal_id: str, source_link: str, main_html:
     def useful(text: str) -> bool:
         return _score_release_text(text) > 0
 
-    try:
-        body = await fetch_kinozal_html(f"{KINOZAL_BASE}/get_srv_details.php?id={kinozal_id}&pagesd=0")
-        parsed = _extract_release_text_from_tab_html(body)
-        if useful(parsed):
-            log.info("Selected release source for %s mode=pagesd idx=0 score=%s", source_link, _score_release_text(parsed))
-            return parsed
-    except Exception:
-        log.warning("Failed release fetch for %s mode=pagesd idx=0", source_link, exc_info=True)
-
     release_tab_index = _extract_release_tab_index(main_html, kinozal_id)
-    if release_tab_index is not None and release_tab_index != 0:
+
+    # Если удалось определить точный индекс вкладки "Релиз" — берём её как источник истины.
+    if release_tab_index is not None:
         try:
             body = await fetch_kinozal_html(f"{KINOZAL_BASE}/get_srv_details.php?id={kinozal_id}&pagesd={release_tab_index}")
             parsed = _extract_release_text_from_tab_html(body)
-            if useful(parsed):
+            if parsed:
                 log.info(
-                    "Selected release source for %s mode=pagesd idx=%s score=%s",
+                    "Selected release source for %s mode=pagesd idx=%s score=%s [release-tab-direct]",
                     source_link,
                     release_tab_index,
                     _score_release_text(parsed),
@@ -357,15 +449,19 @@ async def _fetch_best_release_text(kinozal_id: str, source_link: str, main_html:
                 exc_info=True,
             )
 
-    for idx in range(1, 8):
-        if idx == release_tab_index:
+    best_text = ""
+    best_score = -10**9
+
+    for idx in [0, 1, 2, 3, 4, 5, 6, 7]:
+        if release_tab_index is not None and idx == release_tab_index:
             continue
         try:
             body = await fetch_kinozal_html(f"{KINOZAL_BASE}/get_srv_details.php?id={kinozal_id}&pagesd={idx}")
             parsed = _extract_release_text_from_tab_html(body)
-            if useful(parsed):
-                log.info("Selected release source for %s mode=pagesd idx=%s score=%s", source_link, idx, _score_release_text(parsed))
-                return parsed
+            score = _score_release_text(parsed)
+            if parsed and score > best_score:
+                best_text = parsed
+                best_score = score
         except Exception:
             log.warning(
                 "Failed release fetch for %s mode=pagesd idx=%s",
@@ -373,6 +469,14 @@ async def _fetch_best_release_text(kinozal_id: str, source_link: str, main_html:
                 idx,
                 exc_info=True,
             )
+
+    if best_text and useful(best_text):
+        log.info(
+            "Selected release source for %s fallback-best score=%s",
+            source_link,
+            best_score,
+        )
+        return best_text
 
     return ""
 
@@ -437,10 +541,7 @@ async def enrich_kinozal_item_with_details(item: Dict[str, Any]) -> Dict[str, An
 
     _DETAILS_CACHE[source_link] = dict(extra)
     if len(_DETAILS_CACHE) > 512:
-        try:
-            _DETAILS_CACHE.pop(next(iter(_DETAILS_CACHE)))
-        except Exception:
-            pass
+        _DETAILS_CACHE.pop(next(iter(_DETAILS_CACHE)))
 
     merged = dict(item)
     merged.update(extra)

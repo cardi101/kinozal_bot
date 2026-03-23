@@ -113,16 +113,23 @@ async def process_new_items(db: Any, source: Any, tmdb: Any, bot: Bot) -> None:
                         item.get("source_uid"),
                     )
 
-                await send_item_to_user(db, bot, tg_user_id, item, matched_subs)
-                db.record_delivery(
-                    tg_user_id,
-                    item_id,
-                    int(matched_subs[0]["id"]),
-                    [int(sub["id"]) for sub in matched_subs],
-                )
-                await asyncio.sleep(0.12)
+                sent = False
+                try:
+                    await send_item_to_user(db, bot, tg_user_id, item, matched_subs)
+                    sent = True
+                except Exception:
+                    log.exception("Failed to deliver item=%s to user=%s", item_id, tg_user_id)
+
+                if sent:
+                    db.record_delivery(
+                        tg_user_id,
+                        item_id,
+                        int(matched_subs[0]["id"]),
+                        [int(sub["id"]) for sub in matched_subs],
+                    )
+                    await asyncio.sleep(0.12)
             except Exception:
-                log.exception("Failed to deliver item=%s to user=%s", item_id, tg_user_id)
+                log.exception("Unexpected error processing item=%s for user=%s", item_id, tg_user_id)
 
 
 async def poller(db: Any, source: Any, tmdb: Any, bot: Bot) -> None:

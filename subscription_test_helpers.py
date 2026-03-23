@@ -24,12 +24,12 @@ async def get_live_test_items_for_subscription(db: Any, source: Any, tmdb: Any, 
 
     for raw_item in fresh_items:
         item = dict(raw_item)
+        item = await enrich_kinozal_item_with_details(dict(item))
         source_text = f"{item.get('source_title') or ''} {item.get('source_description') or ''}"
         if item.get("media_type") == "other" or is_non_video_release(source_text):
             continue
         try:
             item = await tmdb.enrich_item(item)
-            item = await enrich_kinozal_item_with_details(item)
         except Exception:
             log.warning(
                 "TMDB enrich failed during subscription test for sub=%s title=%s",

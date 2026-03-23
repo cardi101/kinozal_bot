@@ -138,13 +138,6 @@ async def _ensure_login(force: bool = False) -> httpx.AsyncClient:
     if not username or not password:
         return client
 
-    if force:
-        _login_attempted = False
-        _login_ok = False
-
-    if _login_attempted and _login_ok:
-        return client
-
     async with _login_lock:
         if force:
             _login_attempted = False

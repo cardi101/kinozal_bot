@@ -10,6 +10,7 @@ from aiogram.types import BufferedInputFile
 
 from config import CFG
 from delivery_formatting import item_message
+from kinozal_details import enrich_kinozal_item_with_details
 from magnet_links import build_public_magnet_redirect_url
 from text_access import html_to_plain_text
 from utils import short
@@ -39,11 +40,12 @@ async def _build_poster_file(poster_url: str, item_id: Any) -> Optional[Buffered
                 )
                 return None
             content = resp.content
-            if not content:
+            if not content or len(content) < 1024:
                 log.info(
-                    "Skip empty poster body for item=%s url=%s",
+                    "Skip too-small poster for item=%s url=%s size=%s",
                     item_id,
                     poster_url,
+                    len(content or b""),
                 )
                 return None
             ext = "jpg"
@@ -254,8 +256,21 @@ async def send_item_to_user(
 ) -> None:
     primary_item = _prepare_primary_item(item)
 
+    for key in ("source_link", "source_info_hash", "source_magnet", "imdb_id", "tmdb_id", "media_type"):
+        if item.get(key) and not primary_item.get(key):
+            primary_item[key] = item.get(key)
+
+    try:
+        primary_item = await enrich_kinozal_item_with_details(dict(primary_item))
+    except Exception:
+        log.warning(
+            "Failed to enrich primary_item before formatting item=%s",
+            primary_item.get("id"),
+            exc_info=True,
+        )
+
     text = item_message(db, primary_item, subs)
-    text = _inject_compact_magnet_html(text, item)
+    text = _inject_compact_magnet_html(text, primary_item)
 
     poster_url = item.get("tmdb_poster_url")
     full_html_text = short(text, 3900)

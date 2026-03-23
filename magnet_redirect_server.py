@@ -1,11 +1,32 @@
+import collections
 import html
 import os
 import re
+import threading
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, quote, urlsplit
 
-HOST = "0.0.0.0"
+HOST = os.getenv("MAGNET_REDIRECT_HOST", "0.0.0.0")
 PORT = int(os.getenv("MAGNET_REDIRECT_PORT", "8081"))
+
+_RATE_LIMIT = int(os.getenv("MAGNET_RATE_LIMIT", "30"))
+_RATE_WINDOW = 60  # seconds
+_rate_lock = threading.Lock()
+_rate_counters: collections.defaultdict = collections.defaultdict(list)
+
+
+def _is_rate_limited(ip: str) -> bool:
+    if _RATE_LIMIT <= 0:
+        return False
+    now = time.monotonic()
+    with _rate_lock:
+        hits = [t for t in _rate_counters[ip] if now - t < _RATE_WINDOW]
+        _rate_counters[ip] = hits
+        if len(hits) >= _RATE_LIMIT:
+            return True
+        _rate_counters[ip].append(now)
+        return False
 
 def build_magnet(info_hash: str, dn: str) -> str:
     magnet = f"magnet:?xt=urn:btih:{info_hash}"
@@ -140,6 +161,11 @@ class Handler(BaseHTTPRequestHandler):
 
         if path == "/healthz":
             self._send(200, b"ok", "text/plain; charset=utf-8")
+            return
+
+        ip = (self.headers.get("X-Forwarded-For") or self.client_address[0] or "").split(",")[0].strip()
+        if _is_rate_limited(ip):
+            self._send(429, b"too many requests", "text/plain; charset=utf-8")
             return
 
         m = re.fullmatch(r"/m/([A-Fa-f0-9]{40})", path)
