@@ -61,51 +61,6 @@ class PGCompatConnection:
         self.dsn = dsn
         self._lock = threading.RLock()
         self.raw = connect(dsn, row_factory=dict_row, autocommit=True)
-    @staticmethod
-    def _sql(sql: str) -> str:
-        return sql.replace("?", "%s")
-
-    def _connect_raw(self) -> None:
-        self.raw = connect(self.dsn, row_factory=dict_row, autocommit=True)
-
-    def _close_raw_quietly(self) -> None:
-        raw = getattr(self, "raw", None)
-        self.raw = None
-        if raw is None:
-            return
-        try:
-            raw.close()
-        except Exception:
-            pass
-
-    def _ensure_connection(self) -> None:
-        raw = getattr(self, "raw", None)
-        is_bad = raw is None
-        if not is_bad:
-            try:
-                is_bad = bool(raw.closed) or bool(getattr(raw, "broken", False))
-            except Exception:
-                is_bad = True
-        if not is_bad:
-            return
-
-        with self._lock:
-            raw = getattr(self, "raw", None)
-            is_bad = raw is None
-            if not is_bad:
-                try:
-                    is_bad = bool(raw.closed) or bool(getattr(raw, "broken", False))
-                except Exception:
-                    is_bad = True
-            if is_bad:
-                self._close_raw_quietly()
-                self._connect_raw()
-
-    def reconnect(self) -> None:
-        with self._lock:
-            self._close_raw_quietly()
-            self._connect_raw()
-
     def _connect_raw(self) -> None:
         self.raw = connect(self.dsn, row_factory=dict_row, autocommit=True)
 
@@ -172,7 +127,7 @@ class PGCompatConnection:
 
     def executemany(self, sql: str, seq: Sequence[Sequence[Any]]):
         cur = self.raw.cursor()
-        cur.executemany(self._sql(sql), seq)
+        cur.executemany(self._normalize_sql(sql), seq)
         cur.close()
         return DummyCursor()
 
@@ -1117,7 +1072,14 @@ class DB:
 
         if not item.get("version_signature"):
             try:
-                item["version_signature"] = build_version_signature(item)
+                item["version_signature"] = build_version_signature(
+                    source_uid=item.get("source_uid"),
+                    media_type=item.get("media_type"),
+                    source_title=item.get("source_title"),
+                    source_episode_progress=item.get("source_episode_progress"),
+                    source_format=item.get("source_format"),
+                    source_audio_tracks=item.get("source_audio_tracks"),
+                )
             except Exception:
                 item["version_signature"] = ""
 
