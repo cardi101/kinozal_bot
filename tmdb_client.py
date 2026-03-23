@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import re
 from typing import Any, Dict, List, Optional, Tuple
@@ -11,6 +12,7 @@ from media_detection import is_non_video_release
 from parsing_basic import parse_year
 from title_prep import clean_release_title, looks_like_structured_numeric_title, normalize_structured_numeric_title, should_skip_tmdb_lookup, is_bad_tmdb_candidate
 from tmdb_aliases import is_long_latin_tmdb_query, is_short_or_common_tmdb_query, is_short_acronym_tmdb_query, manual_tmdb_override_for_item, title_search_candidates
+from item_years import extract_tv_season_hint
 from tmdb_match_validation import tmdb_match_looks_valid
 from anime_mapping_store import AnimeMappingStore
 from anime_title_lexicon import AnimeTitleLexicon
@@ -267,11 +269,18 @@ class TMDBClient:
             "accept": "application/json",
             "Authorization": f"Bearer {self.token}",
         }
-        response = await self.client.get(
-            f"{self.base}{path}",
-            params=params,
-            headers=headers,
-        )
+        _retryable = {500, 502, 503, 504}
+        for attempt in range(3):
+            response = await self.client.get(
+                f"{self.base}{path}",
+                params=params,
+                headers=headers,
+            )
+            if response.status_code in _retryable and attempt < 2:
+                self.log.warning("TMDB transient %s for %s, retry %d/2", response.status_code, path, attempt + 1)
+                await asyncio.sleep(1.5 * (attempt + 1))
+                continue
+            break
         response.raise_for_status()
         data = response.json()
         cache_ttl = self.cfg.tmdb_cache_ttl
@@ -875,13 +884,22 @@ class TMDBClient:
                                 (candidate, "movie", None),
                             ])
                 else:
+                    looks_like_series = bool(item.get("source_episode_progress")) or bool(extract_tv_season_hint(item))
                     for candidate in candidates:
-                        search_plan.extend([
-                            (candidate, "movie", year),
-                            (candidate, "movie", None),
-                            (candidate, "tv", None),
-                            (candidate, "tv", year),
-                        ])
+                        if looks_like_series:
+                            search_plan.extend([
+                                (candidate, "tv", year),
+                                (candidate, "tv", None),
+                                (candidate, "movie", year),
+                                (candidate, "movie", None),
+                            ])
+                        else:
+                            search_plan.extend([
+                                (candidate, "movie", year),
+                                (candidate, "movie", None),
+                                (candidate, "tv", None),
+                                (candidate, "tv", year),
+                            ])
 
                 seen = set()
                 for candidate, mt, y in search_plan:
