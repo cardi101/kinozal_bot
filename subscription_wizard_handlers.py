@@ -14,8 +14,12 @@ def register_subscription_wizard_handlers(router: Router, db: Any) -> None:
     async def cb_wiz_type(callback: CallbackQuery) -> None:
         if not await ensure_access_for_callback(db, callback):
             return
-        _, sub_id_str, media_type = callback.data.split(":")
-        sub_id = int(sub_id_str)
+        try:
+            _, sub_id_str, media_type = callback.data.split(":")
+            sub_id = int(sub_id_str)
+        except (ValueError, IndexError):
+            await callback.answer("Неверный формат", show_alert=True)
+            return
         if not db.subscription_belongs_to(sub_id, callback.from_user.id):
             await callback.answer("Подписка не найдена", show_alert=True)
             return
@@ -32,7 +36,11 @@ def register_subscription_wizard_handlers(router: Router, db: Any) -> None:
     async def cb_wiz_fmt_done(callback: CallbackQuery) -> None:
         if not await ensure_access_for_callback(db, callback):
             return
-        sub_id = int(callback.data.split(":")[1])
+        try:
+            sub_id = int(callback.data.split(":")[1])
+        except (ValueError, IndexError):
+            await callback.answer("Неверный формат", show_alert=True)
+            return
         if not db.subscription_belongs_to(sub_id, callback.from_user.id):
             await callback.answer("Подписка не найдена", show_alert=True)
             return
@@ -43,8 +51,12 @@ def register_subscription_wizard_handlers(router: Router, db: Any) -> None:
     async def cb_wiz_year(callback: CallbackQuery) -> None:
         if not await ensure_access_for_callback(db, callback):
             return
-        _, sub_id_str, code = callback.data.split(":")
-        sub_id = int(sub_id_str)
+        try:
+            _, sub_id_str, code = callback.data.split(":")
+            sub_id = int(sub_id_str)
+        except (ValueError, IndexError):
+            await callback.answer("Неверный формат", show_alert=True)
+            return
         if not db.subscription_belongs_to(sub_id, callback.from_user.id):
             await callback.answer("Подписка не найдена", show_alert=True)
             return
@@ -59,8 +71,12 @@ def register_subscription_wizard_handlers(router: Router, db: Any) -> None:
     async def cb_wiz_rating(callback: CallbackQuery) -> None:
         if not await ensure_access_for_callback(db, callback):
             return
-        _, sub_id_str, code = callback.data.split(":")
-        sub_id = int(sub_id_str)
+        try:
+            _, sub_id_str, code = callback.data.split(":")
+            sub_id = int(sub_id_str)
+        except (ValueError, IndexError):
+            await callback.answer("Неверный формат", show_alert=True)
+            return
         if not db.subscription_belongs_to(sub_id, callback.from_user.id):
             await callback.answer("Подписка не найдена", show_alert=True)
             return

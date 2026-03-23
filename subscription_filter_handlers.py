@@ -26,8 +26,12 @@ def register_subscription_filter_handlers(router: Router, db: Any) -> None:
     async def cb_sub_content_filter(callback: CallbackQuery) -> None:
         if not await ensure_access_for_callback(db, callback):
             return
-        _, sub_id_str, code = callback.data.split(":")
-        sub_id = int(sub_id_str)
+        try:
+            _, sub_id_str, code = callback.data.split(":")
+            sub_id = int(sub_id_str)
+        except (ValueError, IndexError):
+            await callback.answer("Неверный формат", show_alert=True)
+            return
         if not db.subscription_belongs_to(sub_id, callback.from_user.id):
             await callback.answer("Это не твоя подписка", show_alert=True)
             return
@@ -51,8 +55,12 @@ def register_subscription_filter_handlers(router: Router, db: Any) -> None:
     async def cb_subtype(callback: CallbackQuery) -> None:
         if not await ensure_access_for_callback(db, callback):
             return
-        _, sub_id_str, media_type = callback.data.split(":")
-        sub_id = int(sub_id_str)
+        try:
+            _, sub_id_str, media_type = callback.data.split(":")
+            sub_id = int(sub_id_str)
+        except (ValueError, IndexError):
+            await callback.answer("Неверный формат", show_alert=True)
+            return
         if not db.subscription_belongs_to(sub_id, callback.from_user.id):
             await callback.answer("Это не твоя подписка", show_alert=True)
             return
@@ -76,8 +84,12 @@ def register_subscription_filter_handlers(router: Router, db: Any) -> None:
     async def cb_subyear(callback: CallbackQuery) -> None:
         if not await ensure_access_for_callback(db, callback):
             return
-        _, sub_id_str, code = callback.data.split(":")
-        sub_id = int(sub_id_str)
+        try:
+            _, sub_id_str, code = callback.data.split(":")
+            sub_id = int(sub_id_str)
+        except (ValueError, IndexError):
+            await callback.answer("Неверный формат", show_alert=True)
+            return
         if not db.subscription_belongs_to(sub_id, callback.from_user.id):
             await callback.answer("Это не твоя подписка", show_alert=True)
             return
@@ -105,8 +117,12 @@ def register_subscription_filter_handlers(router: Router, db: Any) -> None:
     async def cb_sub_format_toggle(callback: CallbackQuery) -> None:
         if not await ensure_access_for_callback(db, callback):
             return
-        _, sub_id_str, fmt, mode = callback.data.split(":")
-        sub_id = int(sub_id_str)
+        try:
+            _, sub_id_str, fmt, mode = callback.data.split(":")
+            sub_id = int(sub_id_str)
+        except (ValueError, IndexError):
+            await callback.answer("Неверный формат", show_alert=True)
+            return
         if not db.subscription_belongs_to(sub_id, callback.from_user.id):
             await callback.answer("Это не твоя подписка", show_alert=True)
             return
@@ -132,8 +148,12 @@ def register_subscription_filter_handlers(router: Router, db: Any) -> None:
     async def cb_sub_rating(callback: CallbackQuery) -> None:
         if not await ensure_access_for_callback(db, callback):
             return
-        _, sub_id_str, code = callback.data.split(":")
-        sub_id = int(sub_id_str)
+        try:
+            _, sub_id_str, code = callback.data.split(":")
+            sub_id = int(sub_id_str)
+        except (ValueError, IndexError):
+            await callback.answer("Неверный формат", show_alert=True)
+            return
         if not db.subscription_belongs_to(sub_id, callback.from_user.id):
             await callback.answer("Это не твоя подписка", show_alert=True)
             return
@@ -146,9 +166,13 @@ def register_subscription_filter_handlers(router: Router, db: Any) -> None:
     async def cb_sub_edit_genres(callback: CallbackQuery) -> None:
         if not await ensure_access_for_callback(db, callback):
             return
-        parts = callback.data.split(":")
-        sub_id = int(parts[2])
-        page = int(parts[3]) if len(parts) > 3 else 0
+        try:
+            parts = callback.data.split(":")
+            sub_id = int(parts[2])
+            page = int(parts[3]) if len(parts) > 3 else 0
+        except (ValueError, IndexError):
+            await callback.answer("Неверный формат", show_alert=True)
+            return
         if not db.subscription_belongs_to(sub_id, callback.from_user.id):
             await callback.answer("Это не твоя подписка", show_alert=True)
             return
@@ -159,10 +183,14 @@ def register_subscription_filter_handlers(router: Router, db: Any) -> None:
     async def cb_sub_genre_toggle(callback: CallbackQuery) -> None:
         if not await ensure_access_for_callback(db, callback):
             return
-        _, sub_id_str, page_str, genre_id_str = callback.data.split(":")
-        sub_id = int(sub_id_str)
-        page = int(page_str)
-        genre_id = int(genre_id_str)
+        try:
+            _, sub_id_str, page_str, genre_id_str = callback.data.split(":")
+            sub_id = int(sub_id_str)
+            page = int(page_str)
+            genre_id = int(genre_id_str)
+        except (ValueError, IndexError):
+            await callback.answer("Неверный формат", show_alert=True)
+            return
         if not db.subscription_belongs_to(sub_id, callback.from_user.id):
             await callback.answer("Это не твоя подписка", show_alert=True)
             return
@@ -174,9 +202,13 @@ def register_subscription_filter_handlers(router: Router, db: Any) -> None:
     async def cb_sub_genres_page(callback: CallbackQuery) -> None:
         if not await ensure_access_for_callback(db, callback):
             return
-        _, sub_id_str, page_str = callback.data.split(":")
-        sub_id = int(sub_id_str)
-        page = int(page_str)
+        try:
+            _, sub_id_str, page_str = callback.data.split(":")
+            sub_id = int(sub_id_str)
+            page = int(page_str)
+        except (ValueError, IndexError):
+            await callback.answer("Неверный формат", show_alert=True)
+            return
         if not db.subscription_belongs_to(sub_id, callback.from_user.id):
             await callback.answer("Это не твоя подписка", show_alert=True)
             return
@@ -187,9 +219,13 @@ def register_subscription_filter_handlers(router: Router, db: Any) -> None:
     async def cb_sub_genres_clear(callback: CallbackQuery) -> None:
         if not await ensure_access_for_callback(db, callback):
             return
-        _, sub_id_str, page_str = callback.data.split(":")
-        sub_id = int(sub_id_str)
-        page = int(page_str)
+        try:
+            _, sub_id_str, page_str = callback.data.split(":")
+            sub_id = int(sub_id_str)
+            page = int(page_str)
+        except (ValueError, IndexError):
+            await callback.answer("Неверный формат", show_alert=True)
+            return
         if not db.subscription_belongs_to(sub_id, callback.from_user.id):
             await callback.answer("Это не твоя подписка", show_alert=True)
             return
@@ -201,9 +237,13 @@ def register_subscription_filter_handlers(router: Router, db: Any) -> None:
     async def cb_sub_edit_countries(callback: CallbackQuery) -> None:
         if not await ensure_access_for_callback(db, callback):
             return
-        parts = callback.data.split(":")
-        sub_id = int(parts[2])
-        page = int(parts[3]) if len(parts) > 3 else 0
+        try:
+            parts = callback.data.split(":")
+            sub_id = int(parts[2])
+            page = int(parts[3]) if len(parts) > 3 else 0
+        except (ValueError, IndexError):
+            await callback.answer("Неверный формат", show_alert=True)
+            return
         if not db.subscription_belongs_to(sub_id, callback.from_user.id):
             await callback.answer("Это не твоя подписка", show_alert=True)
             return
@@ -214,9 +254,13 @@ def register_subscription_filter_handlers(router: Router, db: Any) -> None:
     async def cb_sub_edit_exclude_countries(callback: CallbackQuery) -> None:
         if not await ensure_access_for_callback(db, callback):
             return
-        parts = callback.data.split(":")
-        sub_id = int(parts[2])
-        page = int(parts[3]) if len(parts) > 3 else 0
+        try:
+            parts = callback.data.split(":")
+            sub_id = int(parts[2])
+            page = int(parts[3]) if len(parts) > 3 else 0
+        except (ValueError, IndexError):
+            await callback.answer("Неверный формат", show_alert=True)
+            return
         if not db.subscription_belongs_to(sub_id, callback.from_user.id):
             await callback.answer("Это не твоя подписка", show_alert=True)
             return
@@ -227,9 +271,13 @@ def register_subscription_filter_handlers(router: Router, db: Any) -> None:
     async def cb_sub_country_toggle(callback: CallbackQuery) -> None:
         if not await ensure_access_for_callback(db, callback):
             return
-        _, mode, sub_id_str, page_str, country_code = callback.data.split(":")
-        sub_id = int(sub_id_str)
-        page = int(page_str)
+        try:
+            _, mode, sub_id_str, page_str, country_code = callback.data.split(":")
+            sub_id = int(sub_id_str)
+            page = int(page_str)
+        except (ValueError, IndexError):
+            await callback.answer("Неверный формат", show_alert=True)
+            return
         if not db.subscription_belongs_to(sub_id, callback.from_user.id):
             await callback.answer("Это не твоя подписка", show_alert=True)
             return
@@ -247,9 +295,13 @@ def register_subscription_filter_handlers(router: Router, db: Any) -> None:
     async def cb_sub_countries_page(callback: CallbackQuery) -> None:
         if not await ensure_access_for_callback(db, callback):
             return
-        _, mode, sub_id_str, page_str = callback.data.split(":")
-        sub_id = int(sub_id_str)
-        page = int(page_str)
+        try:
+            _, mode, sub_id_str, page_str = callback.data.split(":")
+            sub_id = int(sub_id_str)
+            page = int(page_str)
+        except (ValueError, IndexError):
+            await callback.answer("Неверный формат", show_alert=True)
+            return
         if not db.subscription_belongs_to(sub_id, callback.from_user.id):
             await callback.answer("Это не твоя подписка", show_alert=True)
             return
@@ -261,9 +313,13 @@ def register_subscription_filter_handlers(router: Router, db: Any) -> None:
     async def cb_sub_countries_clear(callback: CallbackQuery) -> None:
         if not await ensure_access_for_callback(db, callback):
             return
-        _, mode, sub_id_str, page_str = callback.data.split(":")
-        sub_id = int(sub_id_str)
-        page = int(page_str)
+        try:
+            _, mode, sub_id_str, page_str = callback.data.split(":")
+            sub_id = int(sub_id_str)
+            page = int(page_str)
+        except (ValueError, IndexError):
+            await callback.answer("Неверный формат", show_alert=True)
+            return
         if not db.subscription_belongs_to(sub_id, callback.from_user.id):
             await callback.answer("Это не твоя подписка", show_alert=True)
             return

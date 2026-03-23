@@ -20,6 +20,7 @@ _USER_AGENT = (
 )
 
 _client: Optional[httpx.AsyncClient] = None
+_client_lock = asyncio.Lock()
 _login_lock = asyncio.Lock()
 _login_attempted = False
 _login_ok = False
@@ -113,19 +114,20 @@ def _looks_like_guest_page(text: str) -> bool:
 async def _get_client() -> httpx.AsyncClient:
     global _client
 
-    if _client is None or getattr(_client, "is_closed", False):
-        _client = httpx.AsyncClient(
-            timeout=httpx.Timeout(_request_timeout()),
-            follow_redirects=True,
-            headers={
-                "User-Agent": _USER_AGENT,
-                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-                "Accept-Language": "ru,en;q=0.9",
-                "Referer": f"{KINOZAL_BASE}/",
-            },
-        )
+    async with _client_lock:
+        if _client is None or getattr(_client, "is_closed", False):
+            _client = httpx.AsyncClient(
+                timeout=httpx.Timeout(_request_timeout()),
+                follow_redirects=True,
+                headers={
+                    "User-Agent": _USER_AGENT,
+                    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                    "Accept-Language": "ru,en;q=0.9",
+                    "Referer": f"{KINOZAL_BASE}/",
+                },
+            )
 
-    return _client
+        return _client
 
 
 async def _ensure_login(force: bool = False) -> httpx.AsyncClient:
@@ -328,9 +330,11 @@ async def fetch_kinozal_html(url: str) -> str:
 async def close_kinozal_http() -> None:
     global _client, _login_attempted, _login_ok
 
-    if _client is not None and not getattr(_client, "is_closed", False):
-        await _client.aclose()
+    async with _login_lock:
+        _login_attempted = False
+        _login_ok = False
 
-    _client = None
-    _login_attempted = False
-    _login_ok = False
+    async with _client_lock:
+        if _client is not None and not getattr(_client, "is_closed", False):
+            await _client.aclose()
+        _client = None

@@ -126,10 +126,21 @@ class PGCompatConnection:
         raise RuntimeError("DB execute failed without explicit exception")
 
     def executemany(self, sql: str, seq: Sequence[Sequence[Any]]):
-        cur = self.raw.cursor()
-        cur.executemany(self._normalize_sql(sql), seq)
-        cur.close()
-        return DummyCursor()
+        last_error = None
+        norm_sql = self._normalize_sql(sql)
+        for _ in range(2):
+            try:
+                self._ensure_connection()
+                with self.raw.cursor() as cur:
+                    cur.executemany(norm_sql, seq)
+                return DummyCursor()
+            except (OperationalError, InterfaceError) as exc:
+                last_error = exc
+                self.reconnect()
+                time.sleep(0.2)
+        if last_error is not None:
+            raise last_error
+        raise RuntimeError("DB executemany failed without explicit exception")
 
     def executescript(self, script: str) -> None:
         statements = [x.strip() for x in script.split(";") if x.strip()]

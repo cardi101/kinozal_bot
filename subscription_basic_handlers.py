@@ -91,8 +91,12 @@ def register_subscription_basic_handlers(router: Router, db: Any) -> None:
     async def cb_sub_preset_apply(callback: CallbackQuery) -> None:
         if not await ensure_access_for_callback(db, callback):
             return
-        _, sub_id_str, flow, preset_key = callback.data.split(":")
-        sub_id = int(sub_id_str)
+        try:
+            _, sub_id_str, flow, preset_key = callback.data.split(":")
+            sub_id = int(sub_id_str)
+        except (ValueError, IndexError):
+            await callback.answer("Неверный формат", show_alert=True)
+            return
         if not db.subscription_belongs_to(sub_id, callback.from_user.id):
             await callback.answer("Это не твоя подписка", show_alert=True)
             return

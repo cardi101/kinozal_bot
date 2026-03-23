@@ -134,11 +134,12 @@ def _safe_truncate_html(text: str, limit: int) -> str:
                     if tag_name in _VOID_TAGS:
                         out.append(token)
                     elif closing:
-                        if tag_name in open_tags:
+                        raw_close = raw_name.lower()
+                        if raw_close in open_tags:
                             while open_tags:
                                 last = open_tags.pop()
                                 out.append(f"</{last}>")
-                                if last == tag_name:
+                                if last == raw_close:
                                     break
                     else:
                         if tag_name == "a":
@@ -147,7 +148,7 @@ def _safe_truncate_html(text: str, limit: int) -> str:
                                 i = m.end()
                                 continue
                         out.append(token)
-                        open_tags.append(tag_name)
+                        open_tags.append(raw_name.lower())
 
                 i = m.end()
                 continue

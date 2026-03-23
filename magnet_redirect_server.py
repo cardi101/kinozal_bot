@@ -12,15 +12,23 @@ PORT = int(os.getenv("MAGNET_REDIRECT_PORT", "8081"))
 
 _RATE_LIMIT = int(os.getenv("MAGNET_RATE_LIMIT", "30"))
 _RATE_WINDOW = 60  # seconds
+_CLEANUP_INTERVAL = 300  # seconds
 _rate_lock = threading.Lock()
 _rate_counters: collections.defaultdict = collections.defaultdict(list)
+_last_cleanup: float = 0.0
 
 
 def _is_rate_limited(ip: str) -> bool:
+    global _last_cleanup
     if _RATE_LIMIT <= 0:
         return False
     now = time.monotonic()
     with _rate_lock:
+        if now - _last_cleanup > _CLEANUP_INTERVAL:
+            stale = [k for k, v in _rate_counters.items() if not any(now - t < _RATE_WINDOW for t in v)]
+            for k in stale:
+                del _rate_counters[k]
+            _last_cleanup = now
         hits = [t for t in _rate_counters[ip] if now - t < _RATE_WINDOW]
         _rate_counters[ip] = hits
         if len(hits) >= _RATE_LIMIT:
