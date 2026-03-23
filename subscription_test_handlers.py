@@ -17,10 +17,21 @@ def register_subscription_test_handlers(router: Router, db: Any, source: Any, tm
     async def cb_sub_test(callback: CallbackQuery) -> None:
         if not await ensure_access_for_callback(db, callback):
             return
-        sub_id = int(callback.data.split(":")[2])
+
+        try:
+            sub_id = int(callback.data.split(":")[2])
+        except (IndexError, ValueError):
+            await callback.answer("Неверный формат запроса", show_alert=True)
+            return
         if not db.subscription_belongs_to(sub_id, callback.from_user.id):
             await callback.answer("Это не твоя подписка", show_alert=True)
             return
+
+        # Отвечаем на callback СРАЗУ, пока он не протух
+        try:
+            await callback.answer("Показываю свежие…", cache_time=1)
+        except Exception:
+            pass
 
         sub = db.get_subscription(sub_id)
         items = await get_live_test_items_for_subscription(db, source, tmdb, sub_id, limit=5)
@@ -32,10 +43,11 @@ def register_subscription_test_handlers(router: Router, db: Any, source: Any, tm
                 disable_web_page_preview=CFG.disable_preview,
             )
             for item in items:
-                item = await enrich_kinozal_item_with_details(dict(item))
-
+                try:
+                    item = await enrich_kinozal_item_with_details(dict(item))
+                except Exception:
+                    pass
                 await send_item_to_user(db, callback.bot, callback.message.chat.id, item, [sub])
-            await callback.answer("Показал свежие")
             return
 
         fallback_items = db.get_last_items_for_subscription(sub_id, 5)
@@ -46,10 +58,14 @@ def register_subscription_test_handlers(router: Router, db: Any, source: Any, tm
                 disable_web_page_preview=CFG.disable_preview,
             )
             for item in fallback_items:
-                item = await enrich_kinozal_item_with_details(dict(item))
-
+                try:
+                    item = await enrich_kinozal_item_with_details(dict(item))
+                except Exception:
+                    pass
                 await send_item_to_user(db, callback.bot, callback.message.chat.id, item, [sub])
-            await callback.answer("Показал из базы")
             return
 
-        await callback.answer("Совпадений среди свежих релизов пока нет", show_alert=True)
+        await callback.message.answer(
+            "Совпадений среди свежих релизов пока нет",
+            disable_web_page_preview=CFG.disable_preview,
+        )
