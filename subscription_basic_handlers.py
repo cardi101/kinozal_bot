@@ -20,20 +20,12 @@ def register_subscription_basic_handlers(router: Router, db: Any) -> None:
             return
         subs = db.list_user_subscriptions(message.from_user.id)
         if not subs:
-            await message.answer("У тебя пока нет подписок.", reply_markup=main_menu_kb(is_admin(message.from_user.id)))
+            q_start, _ = db.get_user_quiet_hours(message.from_user.id)
+            await message.answer("У тебя пока нет подписок.", reply_markup=main_menu_kb(is_admin(message.from_user.id), quiet_active=q_start is not None))
             return
         text = "Твои подписки:\n\n" + "\n\n".join(sub_summary(db, db.get_subscription(int(x["id"]))) for x in subs[:10])
         await message.answer(text, reply_markup=subscriptions_list_kb(subs), parse_mode=ParseMode.HTML)
 
-    @router.callback_query(F.data == "menu:root")
-    @router.callback_query(F.data == "menu:subs")
-    @router.callback_query(F.data == "menu:new")
-    @router.callback_query(F.data == "menu:latest")
-    @router.callback_query(F.data == "menu:whoami")
-    @router.callback_query(F.data == "menu:admin_invites")
-    @router.callback_query(F.data == "admin:invites")
-    @router.callback_query(F.data == "menu:admin_users")
-    @router.callback_query(F.data.startswith("admin:users:"))
     @router.callback_query(F.data.startswith("sub:view:"))
     async def cb_sub_view(callback: CallbackQuery) -> None:
         if not await ensure_access_for_callback(db, callback):
@@ -73,7 +65,8 @@ def register_subscription_basic_handlers(router: Router, db: Any) -> None:
         if subs:
             await safe_edit(callback, "Подписка удалена.", subscriptions_list_kb(subs))
         else:
-            await safe_edit(callback, "Подписка удалена. Список пуст.", main_menu_kb(is_admin(callback.from_user.id)))
+            q_start, _ = db.get_user_quiet_hours(callback.from_user.id)
+            await safe_edit(callback, "Подписка удалена. Список пуст.", main_menu_kb(is_admin(callback.from_user.id), quiet_active=q_start is not None))
         await callback.answer("Удалено")
 
     @router.callback_query(F.data.startswith("sub:edit_presets:"))
