@@ -1,12 +1,13 @@
 import asyncio
 import logging
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Set
 
 from aiogram import Bot
 
 from config import CFG
 from content_buckets import item_content_bucket
-from delivery_sender import send_item_to_user
+from delivery_sender import send_grouped_items_to_user, send_item_to_user
 from kinozal_details import enrich_kinozal_item_with_details
 from media_detection import is_non_video_release
 from release_versioning import describe_variant_change
@@ -15,6 +16,32 @@ from subscription_matching import match_subscription
 from utils import compact_spaces
 
 log = logging.getLogger(__name__)
+
+
+def _quiet_active(start_h: int, end_h: int, current_h: int) -> bool:
+    if start_h < end_h:
+        return start_h <= current_h < end_h
+    return current_h >= start_h or current_h < end_h
+
+
+async def _send_single(db: Any, bot: Bot, tg_user_id: int, d: Dict[str, Any]) -> None:
+    item = d["item"]
+    item_id = d["item_id"]
+    matched_subs = d["subs"]
+    previous_item = db.get_latest_delivered_related_item(tg_user_id, item)
+    if previous_item:
+        log.info(
+            "Delivering updated release item=%s to user=%s source_uid=%s reason=%s prev_item_id=%s",
+            item_id, tg_user_id, item.get("source_uid"),
+            describe_variant_change(previous_item, item), previous_item.get("id"),
+        )
+    else:
+        log.info("Delivering new release item=%s to user=%s source_uid=%s",
+                 item_id, tg_user_id, item.get("source_uid"))
+    await send_item_to_user(db, bot, tg_user_id, item, matched_subs)
+    db.record_delivery(tg_user_id, item_id,
+                       int(matched_subs[0]["id"]), [int(s["id"]) for s in matched_subs])
+    await asyncio.sleep(0.12)
 
 
 async def process_new_items(db: Any, source: Any, tmdb: Any, bot: Bot) -> None:
@@ -76,17 +103,11 @@ async def process_new_items(db: Any, source: Any, tmdb: Any, bot: Bot) -> None:
                         release_text_changed_ids.add(item_id)
                         if item_id not in touched_item_ids:
                             touched_item_ids.append(item_id)
-                        log.info(
-                            "Release text changed for item=%s source_uid=%s",
-                            item_id,
-                            enriched.get("source_uid"),
-                        )
+                        log.info("Release text changed for item=%s source_uid=%s",
+                                 item_id, enriched.get("source_uid"))
                     else:
-                        log.info(
-                            "Initialized release text baseline for item=%s source_uid=%s",
-                            item_id,
-                            enriched.get("source_uid"),
-                        )
+                        log.info("Initialized release text baseline for item=%s source_uid=%s",
+                                 item_id, enriched.get("source_uid"))
             except Exception:
                 log.warning("Failed to check release text for item=%s", item_id, exc_info=True)
 
@@ -105,7 +126,9 @@ async def process_new_items(db: Any, source: Any, tmdb: Any, bot: Bot) -> None:
 
     if not touched_item_ids:
         log.info("No new or enriched item versions")
-        return
+
+    # Phase 1: collect all planned deliveries
+    all_pending: Dict[int, List[Dict[str, Any]]] = {}
 
     for item_id in touched_item_ids:
         item = live_items_by_id.get(item_id) or db.get_item(item_id)
@@ -141,51 +164,111 @@ async def process_new_items(db: Any, source: Any, tmdb: Any, bot: Bot) -> None:
             db.update_item_release_text(item_id, item["source_release_text"])
 
         for tg_user_id, matched_subs in matches_by_user.items():
+            all_pending.setdefault(tg_user_id, []).append({
+                "item": item,
+                "item_id": item_id,
+                "subs": matched_subs,
+                "old_release_text": old_release_texts.get(item_id, ""),
+                "is_release_text_change": is_release_text_change,
+            })
+
+    # Phase 2: flush due pending deliveries from previous quiet periods
+    current_hour = datetime.now(timezone.utc).hour
+    due_pending = db.pop_due_pending_deliveries(current_hour)
+    for flush_uid, pd_list in due_pending.items():
+        for pd in pd_list:
+            pd_item_id = int(pd["item_id"])
+            if db.delivered(flush_uid, pd_item_id):
+                db.delete_pending_delivery(flush_uid, pd_item_id)
+                continue
+            pd_item = db.get_item(pd_item_id)
+            if not pd_item:
+                db.delete_pending_delivery(flush_uid, pd_item_id)
+                continue
             try:
-                old_release_text = old_release_texts.get(item_id, "")
-                if is_release_text_change:
-                    log.info(
-                        "Delivering release text update item=%s to user=%s source_uid=%s",
-                        item_id,
-                        tg_user_id,
-                        item.get("source_uid"),
-                    )
-                else:
-                    previous_item = db.get_latest_delivered_related_item(tg_user_id, item)
-                    if previous_item:
-                        log.info(
-                            "Delivering updated release item=%s to user=%s source_uid=%s reason=%s prev_item_id=%s",
-                            item_id,
-                            tg_user_id,
-                            item.get("source_uid"),
-                            describe_variant_change(previous_item, item),
-                            previous_item.get("id"),
-                        )
-                    else:
-                        log.info(
-                            "Delivering new release item=%s to user=%s source_uid=%s",
-                            item_id,
-                            tg_user_id,
-                            item.get("source_uid"),
-                        )
-
-                sent = False
-                try:
-                    await send_item_to_user(db, bot, tg_user_id, item, matched_subs, old_release_text=old_release_text)
-                    sent = True
-                except Exception:
-                    log.exception("Failed to deliver item=%s to user=%s", item_id, tg_user_id)
-
-                if sent:
-                    db.record_delivery(
-                        tg_user_id,
-                        item_id,
-                        int(matched_subs[0]["id"]),
-                        [int(sub["id"]) for sub in matched_subs],
-                    )
-                    await asyncio.sleep(0.12)
+                pd_item = await enrich_kinozal_item_with_details(dict(pd_item))
             except Exception:
-                log.exception("Unexpected error processing item=%s for user=%s", item_id, tg_user_id)
+                pass
+            sub_ids = [s.strip() for s in str(pd.get("matched_sub_ids") or "").split(",") if s.strip()]
+            pd_subs = [db.get_subscription(int(sid)) for sid in sub_ids if sid.isdigit()]
+            pd_subs = [s for s in pd_subs if s]
+            try:
+                log.info("Flushing pending delivery item=%s to user=%s", pd_item_id, flush_uid)
+                await send_item_to_user(db, bot, flush_uid, pd_item, pd_subs,
+                                        old_release_text=str(pd.get("old_release_text") or ""))
+                db.record_delivery(flush_uid, pd_item_id,
+                                   int(pd_subs[0]["id"]) if pd_subs else 0,
+                                   [int(s["id"]) for s in pd_subs])
+                db.delete_pending_delivery(flush_uid, pd_item_id)
+                await asyncio.sleep(0.12)
+            except Exception:
+                log.exception("Failed to flush pending delivery user=%s item=%s", flush_uid, pd_item_id)
+
+    if not all_pending:
+        return
+
+    # Phase 3: deliver current cycle items per user
+    for tg_user_id, deliveries in all_pending.items():
+        try:
+            q_start, q_end = db.get_user_quiet_hours(tg_user_id)
+            if q_start is not None and q_end is not None and _quiet_active(q_start, q_end, current_hour):
+                for d in deliveries:
+                    sub_ids_str = ",".join(str(s["id"]) for s in d["subs"])
+                    db.queue_pending_delivery(tg_user_id, d["item_id"], sub_ids_str,
+                                              d["old_release_text"], d["is_release_text_change"])
+                log.info("Queued %d deliveries for user=%s (quiet %02d:00-%02d:00 UTC)",
+                         len(deliveries), tg_user_id, q_start, q_end)
+                continue
+
+            rtc = [d for d in deliveries if d["is_release_text_change"]]
+            regular = [d for d in deliveries if not d["is_release_text_change"]]
+
+            tmdb_groups: Dict[int, List[Dict[str, Any]]] = {}
+            no_tmdb: List[Dict[str, Any]] = []
+            for d in regular:
+                tmdb_id = d["item"].get("tmdb_id")
+                if tmdb_id:
+                    tmdb_groups.setdefault(int(tmdb_id), []).append(d)
+                else:
+                    no_tmdb.append(d)
+
+            for d in rtc:
+                try:
+                    log.info("Delivering release text update item=%s to user=%s source_uid=%s",
+                             d["item_id"], tg_user_id, d["item"].get("source_uid"))
+                    await send_item_to_user(db, bot, tg_user_id, d["item"], d["subs"],
+                                            old_release_text=d["old_release_text"])
+                    db.record_delivery(tg_user_id, d["item_id"],
+                                       int(d["subs"][0]["id"]), [int(s["id"]) for s in d["subs"]])
+                    await asyncio.sleep(0.12)
+                except Exception:
+                    log.exception("Error delivering rtc item=%s to user=%s", d["item_id"], tg_user_id)
+
+            for d in no_tmdb:
+                try:
+                    await _send_single(db, bot, tg_user_id, d)
+                except Exception:
+                    log.exception("Error delivering item=%s to user=%s", d["item_id"], tg_user_id)
+
+            for tmdb_id, group in tmdb_groups.items():
+                try:
+                    if len(group) >= 2:
+                        all_subs = list({s["id"]: s for d in group for s in d["subs"]}.values())
+                        log.info("Delivering grouped %d items tmdb=%s to user=%s",
+                                 len(group), tmdb_id, tg_user_id)
+                        await send_grouped_items_to_user(db, bot, tg_user_id,
+                                                         [d["item"] for d in group], all_subs)
+                        for d in group:
+                            db.record_delivery(tg_user_id, d["item_id"],
+                                               int(d["subs"][0]["id"]),
+                                               [int(s["id"]) for s in d["subs"]])
+                            await asyncio.sleep(0.12)
+                    else:
+                        await _send_single(db, bot, tg_user_id, group[0])
+                except Exception:
+                    log.exception("Error delivering tmdb_group tmdb=%s to user=%s", tmdb_id, tg_user_id)
+        except Exception:
+            log.exception("Unexpected error processing deliveries for user=%s", tg_user_id)
 
 
 async def poller(db: Any, source: Any, tmdb: Any, bot: Bot) -> None:

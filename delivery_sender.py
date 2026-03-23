@@ -9,7 +9,7 @@ from aiogram.enums import ParseMode
 from aiogram.types import BufferedInputFile, InlineKeyboardMarkup
 
 from config import CFG
-from delivery_formatting import item_message
+from delivery_formatting import grouped_items_message, item_message
 from keyboards import mute_title_kb
 from kinozal_details import enrich_kinozal_item_with_details
 from magnet_links import build_public_magnet_redirect_url
@@ -369,3 +369,42 @@ async def send_item_to_user(
                 item.get("id"),
                 exc_info=True,
             )
+
+
+async def send_grouped_items_to_user(
+    db: Any,
+    bot: Bot,
+    tg_user_id: int,
+    items: List[Dict[str, Any]],
+    subs: Optional[Sequence[Dict[str, Any]]],
+) -> None:
+    text = grouped_items_message(db, items, subs)
+    first = items[0]
+    tmdb_id = first.get("tmdb_id")
+    action_kb: Optional[InlineKeyboardMarkup] = mute_title_kb(int(tmdb_id)) if tmdb_id else None
+
+    poster_url = first.get("tmdb_poster_url")
+    sent = False
+    if poster_url:
+        poster_file = await _build_poster_file(str(poster_url), first.get("id"))
+        if poster_file:
+            caption_html = _safe_truncate_html(text, 1000)
+            try:
+                await bot.send_photo(
+                    tg_user_id,
+                    photo=poster_file,
+                    caption=caption_html,
+                    parse_mode=ParseMode.HTML,
+                    reply_markup=action_kb,
+                )
+                sent = True
+            except Exception:
+                log.warning("send_photo failed for grouped delivery user=%s", tg_user_id, exc_info=True)
+    if not sent:
+        await bot.send_message(
+            tg_user_id,
+            text=short(text, 3900),
+            parse_mode=ParseMode.HTML,
+            disable_web_page_preview=CFG.disable_preview,
+            reply_markup=action_kb,
+        )

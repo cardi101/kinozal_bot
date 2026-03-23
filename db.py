@@ -420,6 +420,18 @@ class DB:
                     created_at BIGINT NOT NULL DEFAULT EXTRACT(EPOCH FROM NOW())::BIGINT,
                     UNIQUE (tg_user_id, tmdb_id)
                 );
+                ALTER TABLE users ADD COLUMN IF NOT EXISTS quiet_start_hour INTEGER;
+                ALTER TABLE users ADD COLUMN IF NOT EXISTS quiet_end_hour INTEGER;
+                CREATE TABLE IF NOT EXISTS pending_deliveries (
+                    id BIGSERIAL PRIMARY KEY,
+                    tg_user_id BIGINT NOT NULL,
+                    item_id BIGINT NOT NULL,
+                    matched_sub_ids TEXT NOT NULL DEFAULT '',
+                    old_release_text TEXT NOT NULL DEFAULT '',
+                    is_release_text_change INTEGER NOT NULL DEFAULT 0,
+                    queued_at BIGINT NOT NULL,
+                    UNIQUE (tg_user_id, item_id)
+                );
                 """
             )
 
@@ -1828,3 +1840,82 @@ class DB:
                 (tg_user_id, tmdb_id),
             ).fetchone()
             return row is not None
+
+    def get_user_delivery_history(self, tg_user_id: int, limit: int = 15) -> list:
+        with self.lock:
+            rows = self.conn.execute(
+                """SELECT i.id, i.source_title, i.source_link, i.tmdb_title, i.media_type,
+                          d.delivered_at
+                   FROM deliveries d
+                   JOIN items i ON d.item_id = i.id
+                   WHERE d.tg_user_id = ?
+                   ORDER BY d.delivered_at DESC
+                   LIMIT ?""",
+                (tg_user_id, limit),
+            ).fetchall()
+            return [dict(r) for r in rows]
+
+    def set_user_quiet_hours(self, tg_user_id: int, start_hour, end_hour) -> None:
+        ts = utc_ts()
+        with self.lock:
+            self.conn.execute(
+                "UPDATE users SET quiet_start_hour = ?, quiet_end_hour = ?, updated_at = ? WHERE tg_user_id = ?",
+                (start_hour, end_hour, ts, tg_user_id),
+            )
+            self.conn.commit()
+
+    def get_user_quiet_hours(self, tg_user_id: int):
+        with self.lock:
+            row = self.conn.execute(
+                "SELECT quiet_start_hour, quiet_end_hour FROM users WHERE tg_user_id = ?",
+                (tg_user_id,),
+            ).fetchone()
+            if not row:
+                return (None, None)
+            return (row["quiet_start_hour"], row["quiet_end_hour"])
+
+    def queue_pending_delivery(self, tg_user_id: int, item_id: int, matched_sub_ids: str,
+                                old_release_text: str, is_release_text_change: bool) -> None:
+        ts = utc_ts()
+        with self.lock:
+            self.conn.execute(
+                """INSERT INTO pending_deliveries
+                   (tg_user_id, item_id, matched_sub_ids, old_release_text, is_release_text_change, queued_at)
+                   VALUES (?, ?, ?, ?, ?, ?)
+                   ON CONFLICT (tg_user_id, item_id) DO NOTHING""",
+                (tg_user_id, item_id, matched_sub_ids or "", old_release_text or "",
+                 1 if is_release_text_change else 0, ts),
+            )
+            self.conn.commit()
+
+    def pop_due_pending_deliveries(self, current_hour: int) -> dict:
+        with self.lock:
+            rows = self.conn.execute(
+                """SELECT pd.tg_user_id, pd.item_id, pd.matched_sub_ids, pd.old_release_text,
+                          pd.is_release_text_change, u.quiet_start_hour, u.quiet_end_hour
+                   FROM pending_deliveries pd
+                   JOIN users u ON pd.tg_user_id = u.tg_user_id
+                   ORDER BY pd.queued_at ASC""",
+            ).fetchall()
+        result: dict = {}
+        for row in rows:
+            r = dict(row)
+            start_h = r.get("quiet_start_hour")
+            end_h = r.get("quiet_end_hour")
+            if start_h is not None and end_h is not None:
+                if start_h < end_h:
+                    still_quiet = start_h <= current_hour < end_h
+                else:
+                    still_quiet = current_hour >= start_h or current_hour < end_h
+                if still_quiet:
+                    continue
+            result.setdefault(r["tg_user_id"], []).append(r)
+        return result
+
+    def delete_pending_delivery(self, tg_user_id: int, item_id: int) -> None:
+        with self.lock:
+            self.conn.execute(
+                "DELETE FROM pending_deliveries WHERE tg_user_id = ? AND item_id = ?",
+                (tg_user_id, item_id),
+            )
+            self.conn.commit()

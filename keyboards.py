@@ -179,3 +179,19 @@ def unmute_title_kb(tmdb_id: int) -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
     kb.button(text="↩️ Отменить", callback_data=f"unmute_title:{tmdb_id}")
     return kb.as_markup()
+
+
+def quiet_hours_kb(current_start, current_end) -> InlineKeyboardMarkup:
+    presets = [
+        ("🌙 23:00–07:00 UTC", "23", "7"),
+        ("🌙 22:00–06:00 UTC", "22", "6"),
+        ("🌙 21:00–05:00 UTC", "21", "5"),
+        ("🌙 20:00–04:00 UTC", "20", "4"),
+    ]
+    kb = InlineKeyboardBuilder()
+    for label, s, e in presets:
+        active = current_start == int(s) and current_end == int(e)
+        kb.button(text=("✅ " if active else "") + label, callback_data=f"quiet:{s}:{e}")
+    kb.button(text="🔔 Отключить", callback_data="quiet:off")
+    kb.adjust(2, 2, 1)
+    return kb.as_markup()

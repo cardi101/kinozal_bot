@@ -184,3 +184,74 @@ def item_message(db: Any, item: Dict[str, Any], matched_subs: Optional[Sequence[
     text = "\n".join(lines)
     text = re.sub(r"\n{3,}", "\n\n", text)
     return text.strip()
+
+
+def grouped_items_message(db: Any, items: List[Dict[str, Any]], matched_subs: Optional[Sequence[Dict[str, Any]]] = None) -> str:
+    if not items:
+        return ""
+    first = items[0]
+    title = first.get("tmdb_title") or first.get("source_title") or "Без названия"
+    original = first.get("tmdb_original_title")
+    media_type = first.get("media_type") or "movie"
+    media = human_media_type(media_type)
+    rating = first.get("tmdb_rating")
+    votes = first.get("tmdb_vote_count")
+    year = item_display_year(first)
+
+    lines = [f"🆕 <b>{html.escape(title)}</b>"]
+    if original and original.lower() != title.lower():
+        lines.append(f"<i>Ориг.: {html.escape(original)}</i>")
+
+    meta = [media]
+    if year:
+        meta.append(str(year))
+    if rating is not None and float(rating) > 0:
+        if votes:
+            meta.append(f"TMDB {float(rating):.1f} ({int(votes)})")
+        else:
+            meta.append(f"TMDB {float(rating):.1f}")
+    lines.append("🎬 " + " • ".join(meta))
+
+    lines.append(f"\n📦 <b>Вышло {len(items)} варианта:</b>")
+    for item in items:
+        source_title = item.get("source_title") or ""
+        audio_variants = parse_audio_variants(source_title)
+        fmt = item.get("source_format")
+        release_type = infer_release_type(source_title)
+        parts = []
+        if audio_variants:
+            parts.append(format_audio_variants(audio_variants))
+        if fmt:
+            fmt_str = str(fmt)
+            parts.append(f"{fmt_str}p" if fmt_str.isdigit() else fmt_str)
+        if release_type:
+            parts.append(release_type)
+        desc = " / ".join(parts) if parts else compact_spaces(source_title)
+        link = item.get("source_link")
+        if link:
+            lines.append(f'  • <a href="{html.escape(link, quote=True)}">{html.escape(desc)}</a>')
+        else:
+            lines.append(f"  • {html.escape(desc)}")
+
+    if matched_subs:
+        matched_names = [html.escape(str(sub.get("name") or "").strip()) for sub in matched_subs if str(sub.get("name") or "").strip()]
+        matched_names = list(dict.fromkeys(matched_names))
+        if matched_names:
+            label = ", ".join(matched_names[:8])
+            if len(matched_names) > 8:
+                label += f" и ещё {len(matched_names) - 8}"
+            lines.append(f"\n🔔 <b>Подошло под:</b> {label}")
+
+    links = []
+    tmdb_id = first.get("tmdb_id")
+    if tmdb_id:
+        tmdb_kind = "tv" if media_type == "tv" else "movie"
+        links.append(f'<a href="https://www.themoviedb.org/{tmdb_kind}/{int(tmdb_id)}">TMDB</a>')
+    if first.get("imdb_id"):
+        links.append(f'<a href="https://www.imdb.com/title/{html.escape(str(first["imdb_id"]), quote=True)}/">IMDb</a>')
+    if links:
+        lines.append("🔗 " + " • ".join(links))
+
+    text = "\n".join(lines)
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    return text.strip()
