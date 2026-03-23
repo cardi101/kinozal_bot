@@ -20,23 +20,7 @@ log = logging.getLogger("kinozal-news-bot")
 _ALLOWED_TAGS = {"b", "strong", "i", "em", "u", "ins", "s", "strike", "del", "code", "pre", "a"}
 
 
-def _compute_release_text_diff(old_text: str, new_text: str) -> str:
-    if not old_text or not new_text:
-        return ""
-    old_lines = [l.strip() for l in old_text.splitlines() if l.strip()]
-    new_lines = [l.strip() for l in new_text.splitlines() if l.strip()]
-    old_set = set(old_lines)
-    new_set = set(new_lines)
-    added = [l for l in new_lines if l not in old_set]
-    removed = [l for l in old_lines if l not in new_set]
-    if not added and not removed:
-        return ""
-    parts = ["🔄 <b>Что изменилось в релизе:</b>"]
-    for line in added:
-        parts.append(f"  ➕ {html_lib.escape(line)}")
-    for line in removed:
-        parts.append(f"  ➖ {html_lib.escape(line)}")
-    return "\n".join(parts)
+
 _VOID_TAGS = {"br"}
 
 
@@ -218,7 +202,7 @@ def _normalize_release_text(value: str) -> str:
     return "\n".join(lines).strip()
 
 
-def _build_release_followup_messages(item: Dict[str, Any], limit: int = 3500) -> List[str]:
+def _build_release_followup_messages(item: Dict[str, Any], old_release_text: str = "", limit: int = 3500) -> List[str]:
     release_text = _normalize_release_text(item.get("source_release_text") or "")
     if not release_text:
         return []
@@ -226,16 +210,42 @@ def _build_release_followup_messages(item: Dict[str, Any], limit: int = 3500) ->
     release_title = str(item.get("source_title") or item.get("tmdb_title") or "Без названия").strip()
     escaped_title = html_lib.escape(release_title)
 
-    source_lines = [html_lib.escape(line) for line in release_text.splitlines() if line.strip()]
+    old_lines_set: set = set()
+    removed_lines: List[str] = []
+    if old_release_text:
+        old_normalized = _normalize_release_text(old_release_text)
+        old_lines_set = {l.strip() for l in old_normalized.splitlines() if l.strip()}
+        new_lines_set = {l.strip() for l in release_text.splitlines() if l.strip()}
+        removed_lines = [
+            f"  ➖ {html_lib.escape(l)}"
+            for l in old_normalized.splitlines()
+            if l.strip() and l.strip() not in new_lines_set
+        ]
+
+    source_lines: List[str] = []
+    for raw_line in release_text.splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        escaped = html_lib.escape(line)
+        if old_release_text and line not in old_lines_set:
+            source_lines.append(f"  ➕ <b>{escaped}</b>")
+        else:
+            source_lines.append(f"  {escaped}")
+
     if not source_lines:
         return []
+
+    if removed_lines:
+        source_lines.extend([""] + removed_lines)
 
     messages: List[str] = []
     current_lines: List[str] = []
 
     def header(first: bool) -> str:
         if first:
-            return f"📎 <b>Релиз:</b> {escaped_title}"
+            label = "🔄 <b>Релиз (изменился):</b>" if old_release_text else "📎 <b>Релиз:</b>"
+            return f"{label} {escaped_title}"
         return f"📎 <b>Релиз (продолжение):</b> {escaped_title}"
 
     current_header = header(True)
@@ -257,8 +267,8 @@ def _build_release_followup_messages(item: Dict[str, Any], limit: int = 3500) ->
     return messages
 
 
-async def _send_release_followups(bot: Bot, tg_user_id: int, item: Dict[str, Any]) -> None:
-    for text in _build_release_followup_messages(item):
+async def _send_release_followups(bot: Bot, tg_user_id: int, item: Dict[str, Any], old_release_text: str = "") -> None:
+    for text in _build_release_followup_messages(item, old_release_text=old_release_text):
         await bot.send_message(
             tg_user_id,
             text=text,
@@ -290,8 +300,7 @@ async def send_item_to_user(
             exc_info=True,
         )
 
-    release_text_diff = _compute_release_text_diff(old_release_text, primary_item.get("source_release_text") or "")
-    text = item_message(db, primary_item, subs, release_text_diff=release_text_diff)
+    text = item_message(db, primary_item, subs)
     text = _inject_compact_magnet_html(text, primary_item)
 
     poster_url = item.get("tmdb_poster_url")
@@ -345,7 +354,7 @@ async def send_item_to_user(
 
     if main_sent:
         try:
-            await _send_release_followups(bot, tg_user_id, item)
+            await _send_release_followups(bot, tg_user_id, item, old_release_text=old_release_text)
         except Exception:
             log.warning(
                 "send release followup failed for user=%s item=%s",
