@@ -481,16 +481,17 @@ async def _fetch_best_release_text(kinozal_id: str, source_link: str, main_html:
     return ""
 
 
-async def enrich_kinozal_item_with_details(item: Dict[str, Any]) -> Dict[str, Any]:
+async def enrich_kinozal_item_with_details(item: Dict[str, Any], force_refresh: bool = False) -> Dict[str, Any]:
     source_link = _compact(item.get("source_link") or "")
     if not source_link:
         return item
 
-    cached = _DETAILS_CACHE.get(source_link)
-    if cached:
-        merged = dict(item)
-        merged.update(cached)
-        return merged
+    if not force_refresh:
+        cached = _DETAILS_CACHE.get(source_link)
+        if cached:
+            merged = dict(item)
+            merged.update(cached)
+            return merged
 
     kinozal_id = _extract_kinozal_id(source_link)
     if not kinozal_id:

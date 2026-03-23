@@ -18,6 +18,25 @@ from utils import short
 log = logging.getLogger("kinozal-news-bot")
 
 _ALLOWED_TAGS = {"b", "strong", "i", "em", "u", "ins", "s", "strike", "del", "code", "pre", "a"}
+
+
+def _compute_release_text_diff(old_text: str, new_text: str) -> str:
+    if not old_text or not new_text:
+        return ""
+    old_lines = [l.strip() for l in old_text.splitlines() if l.strip()]
+    new_lines = [l.strip() for l in new_text.splitlines() if l.strip()]
+    old_set = set(old_lines)
+    new_set = set(new_lines)
+    added = [l for l in new_lines if l not in old_set]
+    removed = [l for l in old_lines if l not in new_set]
+    if not added and not removed:
+        return ""
+    parts = ["🔄 <b>Что изменилось в релизе:</b>"]
+    for line in added:
+        parts.append(f"  ➕ {html_lib.escape(line)}")
+    for line in removed:
+        parts.append(f"  ➖ {html_lib.escape(line)}")
+    return "\n".join(parts)
 _VOID_TAGS = {"br"}
 
 
@@ -254,6 +273,7 @@ async def send_item_to_user(
     tg_user_id: int,
     item: Dict[str, Any],
     subs: Optional[Sequence[Dict[str, Any]]],
+    old_release_text: str = "",
 ) -> None:
     primary_item = _prepare_primary_item(item)
 
@@ -270,7 +290,8 @@ async def send_item_to_user(
             exc_info=True,
         )
 
-    text = item_message(db, primary_item, subs)
+    release_text_diff = _compute_release_text_diff(old_release_text, primary_item.get("source_release_text") or "")
+    text = item_message(db, primary_item, subs, release_text_diff=release_text_diff)
     text = _inject_compact_magnet_html(text, primary_item)
 
     poster_url = item.get("tmdb_poster_url")

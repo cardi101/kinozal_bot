@@ -1,6 +1,6 @@
 import asyncio
 import logging
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Set
 
 from aiogram import Bot
 
@@ -27,6 +27,8 @@ async def process_new_items(db: Any, source: Any, tmdb: Any, bot: Bot) -> None:
     touched_item_ids: List[int] = []
     new_item_ids: List[int] = []
     live_items_by_id: Dict[int, Dict[str, Any]] = {}
+    release_text_changed_ids: Set[int] = set()
+    old_release_texts: Dict[int, str] = {}
 
     for raw_item in items:
         source_text = f"{raw_item.get('source_title') or ''} {raw_item.get('source_description') or ''}"
@@ -58,6 +60,33 @@ async def process_new_items(db: Any, source: Any, tmdb: Any, bot: Bot) -> None:
             touched_item_ids.append(item_id)
         elif materially_changed:
             touched_item_ids.append(item_id)
+        elif first_run_seen and db.was_delivered_to_anyone(item_id):
+            stored_item = db.get_item(item_id)
+            stored_release_text = (stored_item.get("source_release_text") or "") if stored_item else ""
+            try:
+                detail_enriched = await enrich_kinozal_item_with_details(dict(enriched), force_refresh=True)
+                fresh_release_text = detail_enriched.get("source_release_text") or ""
+                if fresh_release_text and fresh_release_text != stored_release_text:
+                    db.update_item_release_text(item_id, fresh_release_text)
+                    enriched["source_release_text"] = fresh_release_text
+                    live_items_by_id[item_id] = enriched
+                    if stored_release_text:
+                        old_release_texts[item_id] = stored_release_text
+                        release_text_changed_ids.add(item_id)
+                        touched_item_ids.append(item_id)
+                        log.info(
+                            "Release text changed for item=%s source_uid=%s",
+                            item_id,
+                            enriched.get("source_uid"),
+                        )
+                    else:
+                        log.info(
+                            "Initialized release text baseline for item=%s source_uid=%s",
+                            item_id,
+                            enriched.get("source_uid"),
+                        )
+            except Exception:
+                log.warning("Failed to check release text for item=%s", item_id, exc_info=True)
 
     enabled_subs = [db.get_subscription(int(sub["id"])) for sub in db.list_enabled_subscriptions()]
     enabled_subs = [sub for sub in enabled_subs if sub]
@@ -81,11 +110,16 @@ async def process_new_items(db: Any, source: Any, tmdb: Any, bot: Bot) -> None:
         if not item:
             continue
 
+        is_release_text_change = item_id in release_text_changed_ids
         matches_by_user: Dict[int, List[Dict[str, Any]]] = {}
         for sub in enabled_subs:
             tg_user_id = int(sub["tg_user_id"])
-            if db.delivered(tg_user_id, item_id) or db.delivered_equivalent(tg_user_id, item):
-                continue
+            if not is_release_text_change:
+                if db.delivered(tg_user_id, item_id) or db.delivered_equivalent(tg_user_id, item):
+                    continue
+            else:
+                if not db.delivered(tg_user_id, item_id):
+                    continue
             if not match_subscription(db, sub, item):
                 continue
             matches_by_user.setdefault(tg_user_id, []).append(sub)
@@ -98,29 +132,41 @@ async def process_new_items(db: Any, source: Any, tmdb: Any, bot: Bot) -> None:
         except Exception:
             log.warning("Failed to enrich item with kinozal details item_id=%s", item_id, exc_info=True)
 
+        if not is_release_text_change and item.get("source_release_text"):
+            db.update_item_release_text(item_id, item["source_release_text"])
+
         for tg_user_id, matched_subs in matches_by_user.items():
             try:
-                previous_item = db.get_latest_delivered_related_item(tg_user_id, item)
-                if previous_item:
+                old_release_text = old_release_texts.get(item_id, "")
+                if is_release_text_change:
                     log.info(
-                        "Delivering updated release item=%s to user=%s source_uid=%s reason=%s prev_item_id=%s",
+                        "Delivering release text update item=%s to user=%s source_uid=%s",
                         item_id,
                         tg_user_id,
                         item.get("source_uid"),
-                        describe_variant_change(previous_item, item),
-                        previous_item.get("id"),
                     )
                 else:
-                    log.info(
-                        "Delivering new release item=%s to user=%s source_uid=%s",
-                        item_id,
-                        tg_user_id,
-                        item.get("source_uid"),
-                    )
+                    previous_item = db.get_latest_delivered_related_item(tg_user_id, item)
+                    if previous_item:
+                        log.info(
+                            "Delivering updated release item=%s to user=%s source_uid=%s reason=%s prev_item_id=%s",
+                            item_id,
+                            tg_user_id,
+                            item.get("source_uid"),
+                            describe_variant_change(previous_item, item),
+                            previous_item.get("id"),
+                        )
+                    else:
+                        log.info(
+                            "Delivering new release item=%s to user=%s source_uid=%s",
+                            item_id,
+                            tg_user_id,
+                            item.get("source_uid"),
+                        )
 
                 sent = False
                 try:
-                    await send_item_to_user(db, bot, tg_user_id, item, matched_subs)
+                    await send_item_to_user(db, bot, tg_user_id, item, matched_subs, old_release_text=old_release_text)
                     sent = True
                 except Exception:
                     log.exception("Failed to deliver item=%s to user=%s", item_id, tg_user_id)

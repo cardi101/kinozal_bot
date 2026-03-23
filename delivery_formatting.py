@@ -40,7 +40,7 @@ def _preserve_multiline_overview(value: str) -> str:
     return "\n".join(lines)
 
 
-def item_message(db: Any, item: Dict[str, Any], matched_subs: Optional[Sequence[Dict[str, Any]]] = None) -> str:
+def item_message(db: Any, item: Dict[str, Any], matched_subs: Optional[Sequence[Dict[str, Any]]] = None, release_text_diff: str = "") -> str:
     def human_date(value: Optional[str]) -> Optional[str]:
         if not value:
             return None
@@ -173,6 +173,10 @@ def item_message(db: Any, item: Dict[str, Any], matched_subs: Optional[Sequence[
         links.append(f'<a href="https://www.imdb.com/title/{html.escape(str(item["imdb_id"]), quote=True)}/">IMDb</a>')
     if links:
         lines.append("🔗 " + " • ".join(links))
+
+    if release_text_diff:
+        lines.append("")
+        lines.append(release_text_diff)
 
     overview = item.get("tmdb_overview") or item.get("source_description")
     if overview:

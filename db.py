@@ -390,6 +390,7 @@ class DB:
                 ALTER TABLE items ADD COLUMN IF NOT EXISTS manual_bucket TEXT NOT NULL DEFAULT '';
                 ALTER TABLE items ADD COLUMN IF NOT EXISTS manual_country_codes TEXT NOT NULL DEFAULT '';
                 ALTER TABLE deliveries ADD COLUMN IF NOT EXISTS matched_subscription_ids TEXT;
+                ALTER TABLE items ADD COLUMN IF NOT EXISTS source_release_text TEXT NOT NULL DEFAULT '';
                 CREATE INDEX IF NOT EXISTS idx_users_access_state ON users(access_granted, access_expires_at);
                 CREATE INDEX IF NOT EXISTS idx_items_source_link ON items(source_link);
                 CREATE INDEX IF NOT EXISTS idx_items_media_source ON items(media_type, source_uid);
@@ -1135,6 +1136,7 @@ class DB:
             "tmdb_last_episode_episode_number": item.get("tmdb_last_episode_episode_number"),
             "manual_bucket": item.get("manual_bucket") or "",
             "manual_country_codes": ",".join(parse_country_codes(item.get("manual_country_codes"))) if item.get("manual_country_codes") is not None else "",
+            "source_release_text": item.get("source_release_text") or "",
             "raw_json": json.dumps(item.get("raw_json", {}), ensure_ascii=False, sort_keys=True),
             "created_at": utc_ts(),
         }
@@ -1201,6 +1203,7 @@ class DB:
                     "tmdb_last_episode_episode_number",
                     "manual_bucket",
                     "manual_country_codes",
+                    "source_release_text",
                     "raw_json",
                 ]
                 values = [merged[field] for field in fields_to_update]
@@ -1775,5 +1778,21 @@ class DB:
                 ON CONFLICT(tg_user_id, item_id) DO NOTHING
                 """,
                 (tg_user_id, item_id, sub_id, matched_ids_csv, utc_ts()),
+            )
+            self.conn.commit()
+
+    def was_delivered_to_anyone(self, item_id: int) -> bool:
+        with self.lock:
+            row = self.conn.execute(
+                "SELECT 1 FROM deliveries WHERE item_id = ? LIMIT 1",
+                (item_id,),
+            ).fetchone()
+            return row is not None
+
+    def update_item_release_text(self, item_id: int, text: str) -> None:
+        with self.lock:
+            self.conn.execute(
+                "UPDATE items SET source_release_text = ? WHERE id = ?",
+                (text or "", item_id),
             )
             self.conn.commit()
