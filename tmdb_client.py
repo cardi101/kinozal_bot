@@ -113,6 +113,9 @@ def _should_skip_generic_search_candidate(item: Dict[str, Any], candidate: str) 
     if not candidate:
         return True
 
+    if looks_like_structured_numeric_title(candidate):
+        return False
+
     norm = normalize_match_text(candidate)
     norm = norm.replace("№", " ").replace("#", " ")
     tokens = [tok for tok in re.findall(r"[a-zа-я0-9]+", norm, flags=re.I) if len(tok) > 1]

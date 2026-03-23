@@ -35,11 +35,11 @@ def extract_expected_tv_totals(item: Dict[str, Any]) -> Tuple[Optional[int], Opt
     total_episodes: Optional[int] = None
 
     season_patterns = [
-        r"\b\d+\s*[-–—]\s*(\d+)\s*сезон(?:а|ов)?\b",
+        r"\b\d+\s*[-–—]\s*(\d+)\s*сезон(?:а|ов|ы)?\b",
         r"\b\d+\s*[-–—]\s*(\d+)\s*season(?:s)?\b",
-        r"\b(\d+)\s*сезон(?:а|ов)?\s*:",
+        r"\b(\d+)\s*сезон(?:а|ов|ы)?\s*:",
         r"\b(\d+)\s*season(?:s)?\s*:",
-        r"\b(\d+)\s*сезон(?:а|ов)?\b",
+        r"\b(\d+)\s*сезон(?:а|ов|ы)?\b",
         r"\b(\d+)\s*season(?:s)?\b",
     ]
     for pattern in season_patterns:
@@ -87,11 +87,11 @@ def extract_tv_season_hint(item: Dict[str, Any]) -> Optional[int]:
         return None
 
     patterns = [
-        r"\b\d+\s*[-–—]\s*(\d+)\s*сезон(?:а|ов)?\b",
+        r"\b\d+\s*[-–—]\s*(\d+)\s*сезон(?:а|ов|ы)?\b",
         r"\b\d+\s*[-–—]\s*(\d+)\s*season(?:s)?\b",
-        r"\b(\d+)\s*сезон(?:а|ов)?\s*:",
+        r"\b(\d+)\s*сезон(?:а|ов|ы)?\s*:",
         r"\b(\d+)\s*season(?:s)?\s*:",
-        r"\b(\d+)\s*сезон(?:а|ов)?\b",
+        r"\b(\d+)\s*сезон(?:а|ов|ы)?\b",
         r"\b(\d+)\s*season(?:s)?\b",
     ]
     for pattern in patterns:

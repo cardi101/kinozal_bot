@@ -306,6 +306,10 @@ async def _fetch_kinozal_response(url: str) -> httpx.Response:
             client = await _ensure_login(force=True)
             response = await client.get(url)
             response.raise_for_status()
+            raw2 = response.content or b""
+            decoded2 = _decode_kinozal_bytes(raw2, response.headers.get("content-type", ""))
+            if _looks_like_guest_page(decoded2):
+                raise RuntimeError("Kinozal login failed: still getting guest page after forced re-login")
 
     return response
 

@@ -175,7 +175,7 @@ def tmdb_match_looks_valid(item: Dict[str, Any], query: str, details: Dict[str, 
 
     def reject(reason: str) -> bool:
         try:
-            log.info(
+            log.debug(
                 "TMDB validation reject: reason=%s | query=%s | source=%s | tmdb=%s | media=%s/%s | alias_only=%s | exact=%s | substring=%s | best_overlap=%.3f | best_similarity=%.3f | best_main_overlap=%.3f | best_main_similarity=%.3f | common_tokens=%s | year_delta=%s | season_hint=%s | expected_seasons=%s | expected_episodes=%s | tmdb_seasons=%s | tmdb_episodes=%s | anime_fallback=%s | continuation=%s | revival=%s",
                 reason,
                 query,

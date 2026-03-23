@@ -27,11 +27,11 @@ async def get_live_test_items_for_subscription(db: Any, source: Any, tmdb: Any, 
         title = str(raw_item.get("source_title") or "")
         if any(kw in category for kw in ("Русский", "Русская", "Русское", "Наше Кино")) or "/ РУ /" in title:
             continue
+        source_text = f"{raw_item.get('source_title') or ''} {raw_item.get('source_description') or ''}"
+        if raw_item.get("media_type") == "other" or is_non_video_release(source_text):
+            continue
         item = dict(raw_item)
         item = await enrich_kinozal_item_with_details(dict(item))
-        source_text = f"{item.get('source_title') or ''} {item.get('source_description') or ''}"
-        if item.get("media_type") == "other" or is_non_video_release(source_text):
-            continue
         try:
             item = await tmdb.enrich_item(item)
         except Exception:
