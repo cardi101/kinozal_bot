@@ -413,6 +413,13 @@ class DB:
                 CREATE INDEX IF NOT EXISTS idx_items_kinozal_id ON items(kinozal_id);
                 CREATE INDEX IF NOT EXISTS idx_items_archive_kinozal_id ON items_archive(kinozal_id, archived_at DESC);
                 CREATE INDEX IF NOT EXISTS idx_deliveries_archive_user_kinozal ON deliveries_archive(tg_user_id, kinozal_id, delivered_at DESC);
+                CREATE TABLE IF NOT EXISTS muted_titles (
+                    id BIGSERIAL PRIMARY KEY,
+                    tg_user_id BIGINT NOT NULL,
+                    tmdb_id INTEGER NOT NULL,
+                    created_at BIGINT NOT NULL DEFAULT EXTRACT(EPOCH FROM NOW())::BIGINT,
+                    UNIQUE (tg_user_id, tmdb_id)
+                );
                 """
             )
 
@@ -1796,3 +1803,28 @@ class DB:
                 (text or "", item_id),
             )
             self.conn.commit()
+
+    def mute_title(self, tg_user_id: int, tmdb_id: int) -> None:
+        ts = utc_ts()
+        with self.lock:
+            self.conn.execute(
+                "INSERT INTO muted_titles (tg_user_id, tmdb_id, created_at) VALUES (?, ?, ?) ON CONFLICT (tg_user_id, tmdb_id) DO NOTHING",
+                (tg_user_id, tmdb_id, ts),
+            )
+            self.conn.commit()
+
+    def unmute_title(self, tg_user_id: int, tmdb_id: int) -> None:
+        with self.lock:
+            self.conn.execute(
+                "DELETE FROM muted_titles WHERE tg_user_id = ? AND tmdb_id = ?",
+                (tg_user_id, tmdb_id),
+            )
+            self.conn.commit()
+
+    def is_title_muted(self, tg_user_id: int, tmdb_id: int) -> bool:
+        with self.lock:
+            row = self.conn.execute(
+                "SELECT 1 FROM muted_titles WHERE tg_user_id = ? AND tmdb_id = ? LIMIT 1",
+                (tg_user_id, tmdb_id),
+            ).fetchone()
+            return row is not None

@@ -6,10 +6,11 @@ from typing import Any, Dict, List, Optional, Sequence
 import httpx
 from aiogram import Bot
 from aiogram.enums import ParseMode
-from aiogram.types import BufferedInputFile
+from aiogram.types import BufferedInputFile, InlineKeyboardMarkup
 
 from config import CFG
 from delivery_formatting import item_message
+from keyboards import mute_title_kb
 from kinozal_details import enrich_kinozal_item_with_details
 from magnet_links import build_public_magnet_redirect_url
 from text_access import html_to_plain_text
@@ -303,6 +304,9 @@ async def send_item_to_user(
     text = item_message(db, primary_item, subs)
     text = _inject_compact_magnet_html(text, primary_item)
 
+    tmdb_id = item.get("tmdb_id") or primary_item.get("tmdb_id")
+    action_kb: Optional[InlineKeyboardMarkup] = mute_title_kb(int(tmdb_id)) if tmdb_id else None
+
     poster_url = item.get("tmdb_poster_url")
     full_html_text = short(text, 3900)
     full_plain_text = short(html_to_plain_text(text), 3900)
@@ -319,6 +323,7 @@ async def send_item_to_user(
                     photo=poster_file,
                     caption=caption_html,
                     parse_mode=ParseMode.HTML,
+                    reply_markup=action_kb,
                 )
                 main_sent = True
             except Exception:
@@ -336,6 +341,7 @@ async def send_item_to_user(
                 text=full_html_text,
                 parse_mode=ParseMode.HTML,
                 disable_web_page_preview=CFG.disable_preview,
+                reply_markup=action_kb,
             )
             main_sent = True
         except Exception:
@@ -349,6 +355,7 @@ async def send_item_to_user(
                 tg_user_id,
                 text=full_plain_text,
                 disable_web_page_preview=CFG.disable_preview,
+                reply_markup=action_kb,
             )
             main_sent = True
 

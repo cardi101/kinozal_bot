@@ -113,9 +113,12 @@ async def process_new_items(db: Any, source: Any, tmdb: Any, bot: Bot) -> None:
             continue
 
         is_release_text_change = item_id in release_text_changed_ids
+        item_tmdb_id = int(item["tmdb_id"]) if item.get("tmdb_id") else None
         matches_by_user: Dict[int, List[Dict[str, Any]]] = {}
         for sub in enabled_subs:
             tg_user_id = int(sub["tg_user_id"])
+            if item_tmdb_id and db.is_title_muted(tg_user_id, item_tmdb_id):
+                continue
             if not is_release_text_change:
                 if db.delivered(tg_user_id, item_id) or db.delivered_equivalent(tg_user_id, item):
                     continue

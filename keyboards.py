@@ -167,3 +167,15 @@ def admin_users_kb(page: int, has_prev: bool, has_next: bool) -> InlineKeyboardM
     kb.button(text="◀️ В меню", callback_data="menu:root")
     kb.adjust(2, 2)
     return kb.as_markup()
+
+
+def mute_title_kb(tmdb_id: int) -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    kb.button(text="🔕 Не уведомлять о названии", callback_data=f"mute_title:{tmdb_id}")
+    return kb.as_markup()
+
+
+def unmute_title_kb(tmdb_id: int) -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    kb.button(text="↩️ Отменить", callback_data=f"unmute_title:{tmdb_id}")
+    return kb.as_markup()
