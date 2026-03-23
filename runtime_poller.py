@@ -60,7 +60,8 @@ async def process_new_items(db: Any, source: Any, tmdb: Any, bot: Bot) -> None:
             touched_item_ids.append(item_id)
         elif materially_changed:
             touched_item_ids.append(item_id)
-        elif first_run_seen and db.was_delivered_to_anyone(item_id):
+
+        if not is_new and first_run_seen and db.was_delivered_to_anyone(item_id):
             stored_item = db.get_item(item_id)
             stored_release_text = (stored_item.get("source_release_text") or "") if stored_item else ""
             try:
@@ -73,7 +74,8 @@ async def process_new_items(db: Any, source: Any, tmdb: Any, bot: Bot) -> None:
                     if stored_release_text:
                         old_release_texts[item_id] = stored_release_text
                         release_text_changed_ids.add(item_id)
-                        touched_item_ids.append(item_id)
+                        if item_id not in touched_item_ids:
+                            touched_item_ids.append(item_id)
                         log.info(
                             "Release text changed for item=%s source_uid=%s",
                             item_id,
