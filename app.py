@@ -63,6 +63,7 @@ from subscription_filter_handlers import register_subscription_filter_handlers
 from subscription_input_handlers import register_subscription_input_handlers
 from subscription_wizard_handlers import register_subscription_wizard_handlers
 from mute_title_handlers import register_mute_title_handlers
+from muted_list_handlers import register_muted_list_handlers
 from history_handlers import register_history_handlers
 from quiet_hours_handlers import register_quiet_hours_handlers
 from subscription_test_handlers import register_subscription_test_handlers
@@ -126,6 +127,7 @@ register_subscription_input_handlers(router, db)
 register_subscription_wizard_handlers(router, db)
 register_subscription_test_handlers(router, db, source, tmdb)
 register_mute_title_handlers(router, db)
+register_muted_list_handlers(router, db)
 register_history_handlers(router, db)
 register_quiet_hours_handlers(router, db)
 register_user_handlers(router, db, source, tmdb)

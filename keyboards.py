@@ -13,9 +13,10 @@ def main_menu_kb(is_admin: bool, quiet_active: bool = False) -> InlineKeyboardMa
     kb.button(text="ℹ️ Мой ID", callback_data="menu:whoami")
     quiet_label = "🌙 Тихий режим ✅" if quiet_active else "🌙 Тихий режим"
     kb.button(text=quiet_label, callback_data="menu:quiet")
+    kb.button(text="🔕 Заглушённые", callback_data="menu:muted")
     if is_admin:
         kb.button(text="🛠 Инвайты", callback_data="menu:admin_invites")
-    kb.adjust(2, 2, 1, 1)
+    kb.adjust(2, 2, 2, 1)
     return kb.as_markup()
 
 

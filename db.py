@@ -1841,6 +1841,30 @@ class DB:
             ).fetchone()
             return row is not None
 
+    def list_muted_titles(self, tg_user_id: int, limit: int = 30) -> list:
+        with self.lock:
+            rows = self.conn.execute(
+                """SELECT mt.tmdb_id,
+                          COALESCE(
+                              (SELECT i.tmdb_title FROM items i
+                               WHERE i.tmdb_id = mt.tmdb_id AND i.tmdb_title IS NOT NULL
+                               ORDER BY i.id DESC LIMIT 1),
+                              (SELECT i.source_title FROM items i
+                               WHERE i.tmdb_id = mt.tmdb_id
+                               ORDER BY i.id DESC LIMIT 1)
+                          ) AS title,
+                          (SELECT i.media_type FROM items i
+                           WHERE i.tmdb_id = mt.tmdb_id
+                           ORDER BY i.id DESC LIMIT 1) AS media_type,
+                          mt.created_at
+                   FROM muted_titles mt
+                   WHERE mt.tg_user_id = ?
+                   ORDER BY mt.created_at DESC
+                   LIMIT ?""",
+                (tg_user_id, limit),
+            ).fetchall()
+            return [dict(r) for r in rows]
+
     def get_user_delivery_history(self, tg_user_id: int, limit: int = 15) -> list:
         with self.lock:
             rows = self.conn.execute(
