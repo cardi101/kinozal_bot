@@ -23,6 +23,9 @@ async def get_live_test_items_for_subscription(db: Any, source: Any, tmdb: Any, 
     matched: List[Dict[str, Any]] = []
 
     for raw_item in fresh_items:
+        category = str(raw_item.get("source_category_name") or "")
+        if any(kw in category for kw in ("Русский", "Русская", "Русское", "Наше Кино")):
+            continue
         item = dict(raw_item)
         item = await enrich_kinozal_item_with_details(dict(item))
         source_text = f"{item.get('source_title') or ''} {item.get('source_description') or ''}"
