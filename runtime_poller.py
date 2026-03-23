@@ -33,6 +33,10 @@ async def process_new_items(db: Any, source: Any, tmdb: Any, bot: Bot) -> None:
         if raw_item.get("media_type") == "other" or is_non_video_release(source_text):
             log.info("Skip non-video item: %s", raw_item.get("source_title"))
             continue
+        category = str(raw_item.get("source_category_name") or "")
+        if any(kw in category for kw in ("Русский", "Русская", "Русское", "Наше Кино")):
+            log.info("Skip Russian category item: %s [%s]", raw_item.get("source_title"), category)
+            continue
 
         enriched = await tmdb.enrich_item(dict(raw_item))
         if not enriched.get("tmdb_id") and compact_spaces(str(enriched.get("source_category_name") or "")):
