@@ -401,10 +401,13 @@ async def send_grouped_items_to_user(
             except Exception:
                 log.warning("send_photo failed for grouped delivery user=%s", tg_user_id, exc_info=True)
     if not sent:
-        await bot.send_message(
-            tg_user_id,
-            text=short(text, 3900),
-            parse_mode=ParseMode.HTML,
-            disable_web_page_preview=CFG.disable_preview,
-            reply_markup=action_kb,
-        )
+        try:
+            await bot.send_message(
+                tg_user_id,
+                text=short(text, 3900),
+                parse_mode=ParseMode.HTML,
+                disable_web_page_preview=CFG.disable_preview,
+                reply_markup=action_kb,
+            )
+        except Exception:
+            log.warning("send_message failed for grouped delivery user=%s", tg_user_id, exc_info=True)

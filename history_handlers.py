@@ -22,8 +22,11 @@ def register_history_handlers(router: Router, db: Any) -> None:
         lines = ["📋 <b>Последние уведомления:</b>\n"]
         for i, item in enumerate(items, 1):
             title = item.get("tmdb_title") or item.get("source_title") or "Без названия"
-            dt = datetime.fromtimestamp(int(item["delivered_at"]), tz=timezone.utc)
-            date_str = dt.strftime("%d.%m")
+            try:
+                dt = datetime.fromtimestamp(int(item["delivered_at"]), tz=timezone.utc)
+                date_str = dt.strftime("%d.%m")
+            except (TypeError, ValueError, OSError):
+                date_str = "?"
             link = item.get("source_link")
             if link:
                 lines.append(
