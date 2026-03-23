@@ -5,15 +5,17 @@ from aiogram.types import InlineKeyboardMarkup
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 
-def main_menu_kb(is_admin: bool) -> InlineKeyboardMarkup:
+def main_menu_kb(is_admin: bool, quiet_active: bool = False) -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
     kb.button(text="📂 Мои подписки", callback_data="menu:subs")
     kb.button(text="✨ Новая подписка", callback_data="menu:new")
     kb.button(text="📰 Последние релизы", callback_data="menu:latest")
     kb.button(text="ℹ️ Мой ID", callback_data="menu:whoami")
+    quiet_label = "🌙 Тихий режим ✅" if quiet_active else "🌙 Тихий режим"
+    kb.button(text=quiet_label, callback_data="menu:quiet")
     if is_admin:
         kb.button(text="🛠 Инвайты", callback_data="menu:admin_invites")
-    kb.adjust(2, 2, 1)
+    kb.adjust(2, 2, 1, 1)
     return kb.as_markup()
 
 
@@ -193,5 +195,6 @@ def quiet_hours_kb(current_start, current_end) -> InlineKeyboardMarkup:
         active = current_start == int(s) and current_end == int(e)
         kb.button(text=("✅ " if active else "") + label, callback_data=f"quiet:{s}:{e}")
     kb.button(text="🔔 Отключить", callback_data="quiet:off")
-    kb.adjust(2, 2, 1)
+    kb.button(text="◀️ В меню", callback_data="menu:root")
+    kb.adjust(2, 2, 1, 1)
     return kb.as_markup()

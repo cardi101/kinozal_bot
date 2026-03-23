@@ -9,7 +9,7 @@ from aiogram.types import CallbackQuery, Message
 from access_helpers import ensure_access_for_callback, ensure_access_for_message
 from admin_helpers import is_admin, format_admin_user_line
 from delivery_sender import send_item_to_user
-from keyboards import main_menu_kb, subscriptions_list_kb, preset_kb, admin_invites_kb, admin_users_kb
+from keyboards import main_menu_kb, subscriptions_list_kb, preset_kb, admin_invites_kb, admin_users_kb, quiet_hours_kb
 from menu_views import show_main_menu
 from latest_live_helpers import get_live_latest_items
 from service_helpers import safe_edit
@@ -22,13 +22,13 @@ def register_menu_handlers(router: Router, db: Any, source: Any, tmdb: Any, admi
     async def cmd_menu(message: Message) -> None:
         if not await ensure_access_for_message(db, message):
             return
-        await message.answer("Главное меню", reply_markup=main_menu_kb(is_admin(message.from_user.id)))
+        await show_main_menu(message, db)
 
     @router.callback_query(F.data == "menu:root")
     async def cb_menu_root(callback: CallbackQuery) -> None:
         if not await ensure_access_for_callback(db, callback):
             return
-        await show_main_menu(callback)
+        await show_main_menu(callback, db)
         await callback.answer()
 
     @router.callback_query(F.data == "menu:subs")
@@ -37,7 +37,8 @@ def register_menu_handlers(router: Router, db: Any, source: Any, tmdb: Any, admi
             return
         subs = db.list_user_subscriptions(callback.from_user.id)
         if not subs:
-            await safe_edit(callback, "У тебя пока нет подписок.", main_menu_kb(is_admin(callback.from_user.id)))
+            q_start, q_end = db.get_user_quiet_hours(callback.from_user.id)
+            await safe_edit(callback, "У тебя пока нет подписок.", main_menu_kb(is_admin(callback.from_user.id), quiet_active=q_start is not None))
             await callback.answer()
             return
         text = "Твои подписки:\n\n" + "\n\n".join(sub_summary(db, db.get_subscription(int(x["id"]))) for x in subs[:10])
@@ -158,4 +159,28 @@ def register_menu_handlers(router: Router, db: Any, source: Any, tmdb: Any, admi
         else:
             lines.append("Пользователей пока нет.")
         await safe_edit(callback, "\n\n".join(lines), admin_users_kb(page, page > 0, (page + 1) * admin_users_page_size < total))
+        await callback.answer()
+
+    @router.callback_query(F.data == "menu:quiet")
+    async def cb_menu_quiet(callback: CallbackQuery) -> None:
+        if not await ensure_access_for_callback(db, callback):
+            return
+        q_start, q_end = db.get_user_quiet_hours(callback.from_user.id)
+        if q_start is not None and q_end is not None:
+            status = f"✅ Активен: <b>{q_start:02d}:00 – {q_end:02d}:00 UTC</b>"
+        else:
+            status = "Отключён"
+        text = (
+            f"🌙 <b>Тихий режим</b>\n"
+            f"{status}\n\n"
+            f"Уведомления в выбранный промежуток <b>не приходят</b> — "
+            f"они накапливаются и доставляются сразу после его окончания.\n\n"
+            f"Время указывается в <b>UTC</b> (Москва = UTC+3).\n"
+            f"Примеры:\n"
+            f"  • Ночь МСК (23:00–09:00) → установи <b>20:00–06:00 UTC</b>\n"
+            f"  • Рабочий день (09:00–18:00 МСК) → установи <b>06:00–15:00 UTC</b>\n\n"
+            f"Или введи вручную: <code>/quiet ЧЧ ЧЧ</code>\n"
+            f"Отключить: <code>/quiet off</code>"
+        )
+        await safe_edit(callback, text, quiet_hours_kb(q_start, q_end))
         await callback.answer()

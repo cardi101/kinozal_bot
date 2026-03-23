@@ -73,12 +73,25 @@ def register_quiet_hours_handlers(router: Router, db: Any) -> None:
             db.set_user_quiet_hours(callback.from_user.id, start_h, end_h)
             q_start, q_end = start_h, end_h
 
-        status = _quiet_status(q_start, q_end)
+        if q_start is not None and q_end is not None:
+            status = f"✅ Активен: <b>{q_start:02d}:00 – {q_end:02d}:00 UTC</b>"
+        else:
+            status = "Отключён"
+        text = (
+            f"🌙 <b>Тихий режим</b>\n"
+            f"{status}\n\n"
+            f"Уведомления в выбранный промежуток <b>не приходят</b> — "
+            f"они накапливаются и доставляются сразу после его окончания.\n\n"
+            f"Время указывается в <b>UTC</b> (Москва = UTC+3).\n"
+            f"Примеры:\n"
+            f"  • Ночь МСК (23:00–09:00) → установи <b>20:00–06:00 UTC</b>\n"
+            f"  • Рабочий день (09:00–18:00 МСК) → установи <b>06:00–15:00 UTC</b>\n\n"
+            f"Или введи вручную: <code>/quiet ЧЧ ЧЧ</code>\n"
+            f"Отключить: <code>/quiet off</code>"
+        )
         try:
             await callback.message.edit_text(
-                f"🌙 <b>Тихий режим</b>\n{status}\n\n"
-                f"Выбери пресет или введи: <code>/quiet ЧЧ ЧЧ</code> (UTC)\n"
-                f"Отключить: <code>/quiet off</code>",
+                text,
                 parse_mode=ParseMode.HTML,
                 reply_markup=quiet_hours_kb(q_start, q_end),
             )
