@@ -34,8 +34,9 @@ async def process_new_items(db: Any, source: Any, tmdb: Any, bot: Bot) -> None:
             log.info("Skip non-video item: %s", raw_item.get("source_title"))
             continue
         category = str(raw_item.get("source_category_name") or "")
-        if any(kw in category for kw in ("Русский", "Русская", "Русское", "Наше Кино")):
-            log.info("Skip Russian category item: %s [%s]", raw_item.get("source_title"), category)
+        title = str(raw_item.get("source_title") or "")
+        if any(kw in category for kw in ("Русский", "Русская", "Русское", "Наше Кино")) or "/ РУ /" in title:
+            log.info("Skip Russian item: %s [%s]", title, category)
             continue
 
         enriched = await tmdb.enrich_item(dict(raw_item))
