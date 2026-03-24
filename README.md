@@ -35,6 +35,11 @@ Telegram-бот для мониторинга новых релизов на [Ki
 - Аккаунт на [Kinozal.tv](https://kinozal.tv)
 - [Telegram Bot Token](https://t.me/BotFather)
 - [TMDB API Read Token](https://www.themoviedb.org/settings/api)
+- Redis — бот ожидает его по адресу из `REDIS_URL`. Если Redis не входит в твой стек, проще всего поднять его рядом:
+
+```bash
+docker run -d --name kinozal-redis --restart unless-stopped redis:7-alpine
+```
 
 ### Установка
 
@@ -55,6 +60,8 @@ docker compose logs -f app
 git pull
 docker compose up -d --build
 ```
+
+Миграции БД применяются автоматически при старте.
 
 ---
 
@@ -90,6 +97,17 @@ docker compose up -d --build
 | `/muted` | Заглушённые названия |
 | `/quiet [ЧЧ ЧЧ\|off]` | Тихий режим: установить окно или отключить |
 | `/start` | Начало работы, активация инвайта |
+
+### Управление доступом
+
+При `ALLOW_MODE=invite` пользователи активируют бота через инвайт-код. Создать инвайт можно из админ-панели:
+
+```
+/create_invite <uses> <days> <note>
+```
+
+Пример: `/create_invite 1 30 друг` — одноразовый инвайт на 30 дней.
+Пользователь вводит код через `/start КОД` или просто отправляет код боту.
 
 ---
 
@@ -153,4 +171,4 @@ docker compose exec -T postgres pg_dumpall -U postgres > backup.sql
 
 ## Лицензия
 
-MIT
+[MIT](./LICENSE)
