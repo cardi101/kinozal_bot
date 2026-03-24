@@ -1,105 +1,156 @@
 # Kinozal Bot
 
-## Что исправлено
-- BOOTSTRAP_AS_READ по умолчанию выключен
-- SOURCE_FETCH_LIMIT по умолчанию 200
-- TMDB не дергается для игр/софта и прочего не-video контента
-- разные WEB-DL / WEB-DLRip / BDRip различаются в сообщении
-- апдейты по сериям отображаются в сообщении
-- dedupe опирается на source_uid + cleaned_title + release_type + resolution + episode_progress + year
-- bootstrap не делает TMDB enrichment, если включен режим mark-as-read
-- docker-compose уже с DNS для app
+Telegram-бот для мониторинга новых релизов на [Kinozal.tv](https://kinozal.tv). Отправляет уведомления по подпискам с обогащением через TMDB — постеры, рейтинги, жанры, статус сериала.
 
-## Как снести старый стек
-```bash
-docker compose down -v --remove-orphans
-```
-Если лежало в старой папке, потом можно удалить папку проекта: `rm -rf /opt/ИМЯ_ПАПКИ`
+![Python](https://img.shields.io/badge/Python-3.12-3776AB?logo=python&logoColor=white)
+![aiogram](https://img.shields.io/badge/aiogram-3.x-2CA5E0?logo=telegram&logoColor=white)
+![PostgreSQL](https://img.shields.io/badge/PostgreSQL-16-4169E1?logo=postgresql&logoColor=white)
+![Redis](https://img.shields.io/badge/Redis-7-DC382D?logo=redis&logoColor=white)
+![Docker](https://img.shields.io/badge/Docker-Compose-2496ED?logo=docker&logoColor=white)
 
-## Запуск
+---
+
+## Возможности
+
+- **Гибкие подписки** — фильтры по типу медиа, году, рейтингу TMDB, жанрам, странам, форматам, ключевым словам
+- **Пресеты и мастер** — готовые конфигурации (новинки кино, аниме, сериалы и др.) + пошаговое создание
+- **TMDB-обогащение** — постер, рейтинг, обзор, статус сериала, дата следующей серии
+- **Отслеживание изменений** — при изменении описания раздачи приходит обновление с выделенными строками (➕/➖)
+- **Группировка** — несколько версий одного тайтла (разные озвучки, качество) объединяются в одно сообщение
+- **Тихий режим** — настраиваемое окно тишины по UTC; уведомления накапливаются и доставляются после его окончания
+- **Mute по названию** — кнопка 🔕 на каждом уведомлении, управление списком через меню
+- **История доставок** — последние уведомления с датами и ссылками (`/history`)
+- **Тест подписки** — предпросмотр совпадений на реальных данных без ожидания поллинга
+- **Магнет-ссылки** — прямые ссылки через встроенный редирект-сервер
+- **Инвайт-система** — доступ по приглашениям с ограничением числа использований и сроком
+- **Админ-панель** — управление пользователями, доступами, диагностика совпадений TMDB
+
+---
+
+## Быстрый старт
+
+### Требования
+
+- Docker и Docker Compose
+- Аккаунт на [Kinozal.tv](https://kinozal.tv)
+- [Telegram Bot Token](https://t.me/BotFather)
+- [TMDB API Read Token](https://www.themoviedb.org/settings/api)
+
+### Установка
+
 ```bash
+git clone https://github.com/cardi101/kinozal_bot.git
+cd kinozal_bot
+
 cp .env.example .env
 nano .env
+
 docker compose up -d --build
 docker compose logs -f app
 ```
 
-## Ops notes
+### Обновление
 
-## Документация
-
-- [Архитектура проекта](./ARCHITECTURE.md)
-- [Снимок состояния handoff](./HANDOFF_STATUS.txt)
-
-## Текущая схема запуска
-
-Проект запускается через `docker compose` и состоит из трёх основных сервисов:
-
-- `app` — Telegram-бот
-- `postgres` — PostgreSQL 16
-
-Redis используется отдельно как `kinozal-redis`.
-
-## Сетевая схема
-
-Теперь PostgreSQL работает **внутри compose-стека** и не публикуется наружу на хост.
-
-Связи между сервисами:
-
-- `app` -> `postgres:5432`
-- `app` -> `redis://kinozal-redis:6379/0`
-
-## Переменные окружения
-
-Основная строка подключения к БД:
-
-```env
-DATABASE_URL=postgresql://postgres:change_this_password_please_2026@postgres:5432/kinozal_news
-
-Пример полного набора переменных — в .env.example.
-
-Быстрый запуск
+```bash
+git pull
 docker compose up -d --build
-docker compose ps
+```
+
+---
+
+## Конфигурация
+
+Все настройки задаются через `.env`. Шаблон — `.env.example`.
+
+| Переменная | Описание | Обязательно |
+|---|---|---|
+| `BOT_TOKEN` | Токен Telegram-бота | ✅ |
+| `ADMIN_IDS` | Telegram user_id администраторов (через запятую) | ✅ |
+| `KINOZAL_USERNAME` | Логин на Kinozal.tv | ✅ |
+| `KINOZAL_PASSWORD` | Пароль на Kinozal.tv | ✅ |
+| `TMDB_TOKEN` | TMDB API Read Access Token | ✅ |
+| `DATABASE_URL` | PostgreSQL DSN | ✅ |
+| `REDIS_URL` | Redis URL | ✅ |
+| `ALLOW_MODE` | `all` — открытый доступ, `invite` — только по инвайтам | — |
+| `POLL_SECONDS` | Интервал опроса Kinozal (по умолчанию `120`) | — |
+| `BOOTSTRAP_AS_READ` | При первом запуске пометить текущие релизы как доставленные (`1`/`0`) | — |
+| `TMDB_LANGUAGE` | Язык TMDB (по умолчанию `ru-RU`) | — |
+| `DEEP_LINK_BOT_USERNAME` | Username бота для магнет-ссылок | — |
+| `MAGNET_BASE_URL` | Публичный URL магнет-сервера | — |
+
+---
+
+## Команды
+
+| Команда | Описание |
+|---|---|
+| `/menu` | Главное меню |
+| `/subs` | Список подписок |
+| `/history` | Последние 15 доставленных релизов |
+| `/muted` | Заглушённые названия |
+| `/quiet [ЧЧ ЧЧ\|off]` | Тихий режим: установить окно или отключить |
+| `/start` | Начало работы, активация инвайта |
+
+---
+
+## Архитектура
+
+```
+app.py                  — точка входа, регистрация роутеров
+runtime_poller.py       — цикл поллинга и доставки (3 фазы)
+runtime_app.py          — запуск бота и планировщика
+
+kinozal_source.py       — парсинг ленты Kinozal.tv
+kinozal_details.py      — детали раздачи (описание, файлы)
+tmdb_client.py          — обогащение метаданными TMDB
+
+db.py                   — операции с PostgreSQL
+redis_cache.py          — кеш TMDB-запросов
+
+subscription_matching.py   — матчинг элемента под подписку
+delivery_formatting.py     — форматирование сообщений
+delivery_sender.py         — отправка в Telegram
+
+*_handlers.py           — обработчики команд и кнопок
+keyboards.py            — inline-клавиатуры
+```
+
+**Цикл доставки (3 фазы):**
+
+1. **Сбор** — новые элементы обогащаются через TMDB, проверяются изменения текста релиза
+2. **Flush** — доставка накопленных уведомлений после окончания тихого режима
+3. **Доставка** — матчинг по подпискам, группировка по TMDB ID, учёт тихого режима
+
+---
+
+## Инфраструктура
+
+| Сервис | Образ | Назначение |
+|---|---|---|
+| `app` | python:3.12-slim | Telegram-бот |
+| `postgres` | postgres:16 | Основная БД |
+| `redis` | redis:7-alpine | Кеш TMDB |
+| `magnet-web` | python:3.12-slim | HTTP-редирект для магнет-ссылок |
+| `caddy` | caddy:2 | Обратный прокси с TLS |
+
+### Диагностика
+
+```bash
+# Логи
 docker compose logs -f app
-Проверка PostgreSQL
 
-Проверить доступ к базе можно так:
+# Состояние сервисов
+docker compose ps
 
+# Консоль БД
 docker compose exec postgres psql -U postgres -d kinozal_news
 
-Проверить состояние сервисов:
-
-docker compose ps
-docker compose logs --tail=100 app
-docker compose logs --tail=100 postgres
-Важно
-
-PostgreSQL не должен быть опубликован наружу через ports
-
-app должен использовать внутренний адрес postgres:5432, а не host.docker.internal:5432
-
-.env не коммитится в репозиторий
-
-для новых развёртываний использовать .env.example как шаблон
-
-Резервное копирование
-
-Создать дамп всех баз:
-
+# Бэкап
 docker compose exec -T postgres pg_dumpall -U postgres > backup.sql
+```
 
-Восстановление:
+---
 
-cat backup.sql | docker compose exec -T postgres psql -U postgres -d postgres
-Причина изменения схемы
+## Лицензия
 
-Ранее приложение подключалось к PostgreSQL через host.docker.internal, а сама база жила вне compose-сервиса. После миграции PostgreSQL переведён внутрь compose-стека, чтобы:
-
-убрать внешний доступ к БД
-
-упростить сопровождение
-
-сделать запуск предсказуемым
-
-сократить зависимость от ручных контейнеров и нестабильных сетевых маршрутов
+MIT
