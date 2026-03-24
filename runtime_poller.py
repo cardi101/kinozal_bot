@@ -245,6 +245,8 @@ async def process_new_items(db: Any, source: Any, tmdb: Any, bot: Bot) -> None:
                     log.exception("Error delivering rtc item=%s to user=%s", d["item_id"], tg_user_id)
 
             for d in no_tmdb:
+                if db.delivered(tg_user_id, d["item_id"]):
+                    continue
                 try:
                     await _send_single(db, bot, tg_user_id, d)
                 except Exception:
@@ -252,6 +254,9 @@ async def process_new_items(db: Any, source: Any, tmdb: Any, bot: Bot) -> None:
 
             for tmdb_id, group in tmdb_groups.items():
                 try:
+                    group = [d for d in group if not db.delivered(tg_user_id, d["item_id"])]
+                    if not group:
+                        continue
                     if len(group) >= 2:
                         all_subs = list({s["id"]: s for d in group for s in d["subs"]}.values())
                         log.info("Delivering grouped %d items tmdb=%s to user=%s",
