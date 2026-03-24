@@ -61,6 +61,31 @@ def parse_audio_tracks(source_title: str) -> List[str]:
     return [str(item.get("label")) for item in parse_audio_variants(source_title) if item.get("label")]
 
 
+def parse_release_text_episode_ranges(release_text: str) -> Dict[str, str]:
+    """
+    Parses audio lines from release text and returns a mapping of
+    studio/dubbing names (lowercased) to episode range strings.
+
+    E.g. "Аудио 1: AC3, 6 ch - Русский (MVO, Дубляжная) 1-3 Серия"
+    → {"mvo": "1-3", "дубляжная": "1-3"}
+    """
+    result: Dict[str, str] = {}
+    audio_re = re.compile(
+        r'^\s*(?:аудио|audio)\s*\d+\s*:.*?\(([^)]+)\)\s*(\d+(?:-\d+)?)\s*сери(?:и|[яей])',
+        re.I | re.UNICODE,
+    )
+    for line in (release_text or "").splitlines():
+        m = audio_re.match(line)
+        if not m:
+            continue
+        ep_range = m.group(2)
+        for part in m.group(1).split(","):
+            name = compact_spaces(part).strip()
+            if name:
+                result[name.lower()] = ep_range
+    return result
+
+
 def infer_release_type(source_title: str) -> Optional[str]:
     source_title = (source_title or "").lower()
     for token, label in [

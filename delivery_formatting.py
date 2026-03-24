@@ -14,9 +14,39 @@ from parsing_audio import (
     infer_release_type,
     parse_audio_tracks,
     parse_audio_variants,
+    parse_release_text_episode_ranges,
 )
 from text_access import human_media_type
 from utils import compact_spaces
+
+
+def _annotate_audio_with_episode_ranges(
+    variants: List[Dict[str, Any]], ranges: Dict[str, str]
+) -> List[Dict[str, Any]]:
+    """Annotates audio variant labels with episode ranges from release text.
+
+    E.g. variant "ПМ (Дубляжная, HDrezka Studio, LostFilm)" with ranges
+    {"дубляжная": "1-3", "lostfilm": "1-3"} becomes
+    "ПМ (Дубляжная [1-3], HDrezka Studio, LostFilm [1-3])".
+    """
+    if not ranges:
+        return variants
+    result = []
+    for variant in variants:
+        label = str(variant.get("label") or "")
+        m = re.search(r'\(([^)]+)\)', label)
+        if m:
+            parts = [compact_spaces(p) for p in m.group(1).split(",")]
+            new_parts = []
+            for p in parts:
+                ep = ranges.get(p.lower())
+                new_parts.append(f"{p} [{ep}]" if ep else p)
+            new_inner = ", ".join(new_parts)
+            new_label = label[:m.start(1)] + new_inner + label[m.end(1):]
+            result.append({**variant, "label": new_label})
+        else:
+            result.append(variant)
+    return result
 
 
 def _preserve_multiline_overview(value: str) -> str:
@@ -120,7 +150,10 @@ def item_message(db: Any, item: Dict[str, Any], matched_subs: Optional[Sequence[
         lines.append(f"📺 <b>В торренте:</b> {html.escape(str(episode_progress))}")
 
     if audio_variants:
-        lines.append(f"🎧 <b>Озвучки:</b> {count_audio_variants(audio_variants)} • {html.escape(format_audio_variants(audio_variants))}")
+        release_text = str(item.get("source_release_text") or "")
+        ep_ranges = parse_release_text_episode_ranges(release_text)
+        display_variants = _annotate_audio_with_episode_ranges(audio_variants, ep_ranges)
+        lines.append(f"🎧 <b>Озвучки:</b> {count_audio_variants(audio_variants)} • {html.escape(format_audio_variants(display_variants))}")
 
     source_category_name = compact_spaces(str(item.get("source_category_name") or ""))
     if source_category_name:
