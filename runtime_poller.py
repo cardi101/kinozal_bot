@@ -140,6 +140,7 @@ async def process_new_items(db: Any, source: Any, tmdb: Any, bot: Bot) -> None:
 
         is_release_text_change = item_id in release_text_changed_ids
         item_tmdb_id = int(item["tmdb_id"]) if item.get("tmdb_id") else None
+        kinozal_id = item.get("kinozal_id") or extract_kinozal_id(item.get("source_uid"))
         matches_by_user: Dict[int, List[Dict[str, Any]]] = {}
         for sub in enabled_subs:
             tg_user_id = int(sub["tg_user_id"])
@@ -148,7 +149,6 @@ async def process_new_items(db: Any, source: Any, tmdb: Any, bot: Bot) -> None:
             if not is_release_text_change:
                 if db.delivered(tg_user_id, item_id) or db.delivered_equivalent(tg_user_id, item):
                     continue
-                kinozal_id = item.get("kinozal_id") or extract_kinozal_id(item.get("source_uid"))
                 if kinozal_id and db.recently_delivered_kinozal_id(tg_user_id, kinozal_id, cooldown_seconds=420):
                     continue
             else:
@@ -172,13 +172,18 @@ async def process_new_items(db: Any, source: Any, tmdb: Any, bot: Bot) -> None:
             db.update_item_release_text(item_id, item["source_release_text"])
 
         for tg_user_id, matched_subs in matches_by_user.items():
-            all_pending.setdefault(tg_user_id, []).append({
-                "item": item,
-                "item_id": item_id,
-                "subs": matched_subs,
-                "old_release_text": old_release_texts.get(item_id, ""),
-                "is_release_text_change": is_release_text_change,
-            })
+            if kinozal_id and not is_release_text_change:
+                sub_ids_str = ",".join(str(s["id"]) for s in matched_subs)
+                db.upsert_debounce(tg_user_id, kinozal_id, item_id, sub_ids_str, delay_seconds=300)
+                log.info("Debounce queued item=%s kinozal_id=%s to user=%s", item_id, kinozal_id, tg_user_id)
+            else:
+                all_pending.setdefault(tg_user_id, []).append({
+                    "item": item,
+                    "item_id": item_id,
+                    "subs": matched_subs,
+                    "old_release_text": old_release_texts.get(item_id, ""),
+                    "is_release_text_change": is_release_text_change,
+                })
 
     # Phase 2: flush due pending deliveries from previous quiet periods
     current_hour = datetime.now(timezone.utc).hour
@@ -211,6 +216,31 @@ async def process_new_items(db: Any, source: Any, tmdb: Any, bot: Bot) -> None:
                 await asyncio.sleep(0.12)
             except Exception:
                 log.exception("Failed to flush pending delivery user=%s item=%s", flush_uid, pd_item_id)
+
+    # Phase 2.5: flush due debounced deliveries into all_pending
+    for entry in db.pop_due_debounce():
+        db_uid = int(entry["tg_user_id"])
+        db_item_id = int(entry["item_id"])
+        if db.delivered(db_uid, db_item_id):
+            continue
+        db_item = db.get_item(db_item_id)
+        if not db_item:
+            continue
+        if db.delivered_equivalent(db_uid, db_item):
+            continue
+        sub_ids = [s.strip() for s in str(entry.get("matched_sub_ids") or "").split(",") if s.strip()]
+        subs = [db.get_subscription(int(sid)) for sid in sub_ids if sid.isdigit()]
+        subs = [s for s in subs if s]
+        if not subs:
+            continue
+        log.info("Debounce ready item=%s kinozal_id=%s to user=%s", db_item_id, entry["kinozal_id"], db_uid)
+        all_pending.setdefault(db_uid, []).append({
+            "item": db_item,
+            "item_id": db_item_id,
+            "subs": subs,
+            "old_release_text": "",
+            "is_release_text_change": False,
+        })
 
     if not all_pending:
         return

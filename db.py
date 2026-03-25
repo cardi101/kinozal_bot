@@ -432,6 +432,14 @@ class DB:
                     queued_at BIGINT NOT NULL,
                     UNIQUE (tg_user_id, item_id)
                 );
+                CREATE TABLE IF NOT EXISTS debounce_queue (
+                    tg_user_id BIGINT NOT NULL,
+                    kinozal_id TEXT NOT NULL,
+                    item_id BIGINT NOT NULL,
+                    matched_sub_ids TEXT NOT NULL DEFAULT '',
+                    deliver_after_ts BIGINT NOT NULL,
+                    UNIQUE (tg_user_id, kinozal_id)
+                );
                 """
             )
 
@@ -1807,6 +1815,35 @@ class DB:
                 (tg_user_id, item_id, utc_ts() - cooldown_seconds),
             ).fetchone()
             return row is not None
+
+    def upsert_debounce(self, tg_user_id: int, kinozal_id: str, item_id: int,
+                        matched_sub_ids: str, delay_seconds: int) -> None:
+        after_ts = utc_ts() + delay_seconds
+        with self.lock:
+            self.conn.execute(
+                """INSERT INTO debounce_queue (tg_user_id, kinozal_id, item_id, matched_sub_ids, deliver_after_ts)
+                   VALUES (?, ?, ?, ?, ?)
+                   ON CONFLICT (tg_user_id, kinozal_id) DO UPDATE SET
+                       item_id = excluded.item_id,
+                       matched_sub_ids = excluded.matched_sub_ids""",
+                (tg_user_id, kinozal_id, item_id, matched_sub_ids or "", after_ts),
+            )
+            self.conn.commit()
+
+    def pop_due_debounce(self) -> List[Dict[str, Any]]:
+        now = utc_ts()
+        with self.lock:
+            rows = self.conn.execute(
+                "SELECT * FROM debounce_queue WHERE deliver_after_ts <= ? ORDER BY deliver_after_ts ASC",
+                (now,),
+            ).fetchall()
+            if rows:
+                self.conn.execute(
+                    "DELETE FROM debounce_queue WHERE deliver_after_ts <= ?",
+                    (now,),
+                )
+                self.conn.commit()
+            return [dict(r) for r in rows]
 
     def recently_delivered_kinozal_id(self, tg_user_id: int, kinozal_id: str, cooldown_seconds: int) -> bool:
         with self.lock:
