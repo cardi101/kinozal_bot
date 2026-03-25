@@ -5,6 +5,7 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional, Sequence
 
 from country_helpers import human_country_names, parse_country_codes
+from magnet_links import build_public_magnet_redirect_url
 from genres_helpers import item_genre_names
 from item_years import item_display_year
 from parsing_audio import (
@@ -261,10 +262,15 @@ def grouped_items_message(db: Any, items: List[Dict[str, Any]], matched_subs: Op
             parts.append(release_type)
         desc = " / ".join(parts) if parts else compact_spaces(source_title)
         link = item.get("source_link")
+        magnet_url = build_public_magnet_redirect_url(item)
+        bullet_parts = []
         if link:
-            lines.append(f'  • <a href="{html.escape(link, quote=True)}">{html.escape(desc)}</a>')
+            bullet_parts.append(f'<a href="{html.escape(link, quote=True)}">{html.escape(desc)}</a>')
         else:
-            lines.append(f"  • {html.escape(desc)}")
+            bullet_parts.append(html.escape(desc))
+        if magnet_url:
+            bullet_parts.append(f'<a href="{html.escape(magnet_url, quote=True)}">🧲</a>')
+        lines.append("  • " + " • ".join(bullet_parts))
 
     if matched_subs:
         matched_names = [html.escape(str(sub.get("name") or "").strip()) for sub in matched_subs if str(sub.get("name") or "").strip()]

@@ -411,3 +411,11 @@ async def send_grouped_items_to_user(
             )
         except Exception:
             log.warning("send_message failed for grouped delivery user=%s", tg_user_id, exc_info=True)
+
+    for item in items:
+        if item.get("source_release_text"):
+            try:
+                await _send_release_followups(bot, tg_user_id, item, old_release_text="")
+                await asyncio.sleep(0.12)
+            except Exception:
+                log.warning("send_release_followup failed for grouped item user=%s", tg_user_id, exc_info=True)
