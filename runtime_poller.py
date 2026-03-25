@@ -106,6 +106,9 @@ async def process_new_items(db: Any, source: Any, tmdb: Any, bot: Bot) -> None:
                         log.info("Release text changed for item=%s source_uid=%s",
                                  item_id, enriched.get("source_uid"))
                     else:
+                        release_text_changed_ids.add(item_id)
+                        if item_id not in touched_item_ids:
+                            touched_item_ids.append(item_id)
                         log.info("Initialized release text baseline for item=%s source_uid=%s",
                                  item_id, enriched.get("source_uid"))
             except Exception:
