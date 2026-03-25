@@ -1834,14 +1834,10 @@ class DB:
         now = utc_ts()
         with self.lock:
             rows = self.conn.execute(
-                "SELECT * FROM debounce_queue WHERE deliver_after_ts <= ? ORDER BY deliver_after_ts ASC",
+                "DELETE FROM debounce_queue WHERE deliver_after_ts <= ? RETURNING *",
                 (now,),
             ).fetchall()
             if rows:
-                self.conn.execute(
-                    "DELETE FROM debounce_queue WHERE deliver_after_ts <= ?",
-                    (now,),
-                )
                 self.conn.commit()
             return [dict(r) for r in rows]
 

@@ -352,13 +352,21 @@ async def send_item_to_user(
                 item.get("id"),
                 exc_info=True,
             )
-            await bot.send_message(
-                tg_user_id,
-                text=full_plain_text,
-                disable_web_page_preview=CFG.disable_preview,
-                reply_markup=action_kb,
-            )
-            main_sent = True
+            try:
+                await bot.send_message(
+                    tg_user_id,
+                    text=full_plain_text,
+                    disable_web_page_preview=CFG.disable_preview,
+                    reply_markup=action_kb,
+                )
+                main_sent = True
+            except Exception:
+                log.warning(
+                    "send_message plain-text fallback also failed for user=%s item=%s",
+                    tg_user_id,
+                    item.get("id"),
+                    exc_info=True,
+                )
 
     if main_sent:
         try:
