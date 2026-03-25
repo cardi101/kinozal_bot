@@ -1808,6 +1808,19 @@ class DB:
             ).fetchone()
             return row is not None
 
+    def recently_delivered_kinozal_id(self, tg_user_id: int, kinozal_id: str, cooldown_seconds: int) -> bool:
+        with self.lock:
+            row = self.conn.execute(
+                """
+                SELECT 1 FROM deliveries d
+                JOIN items i ON i.id = d.item_id
+                WHERE d.tg_user_id = ? AND i.kinozal_id = ? AND d.delivered_at > ?
+                LIMIT 1
+                """,
+                (tg_user_id, kinozal_id, utc_ts() - cooldown_seconds),
+            ).fetchone()
+            return row is not None
+
     def was_delivered_to_anyone(self, item_id: int) -> bool:
         with self.lock:
             row = self.conn.execute(

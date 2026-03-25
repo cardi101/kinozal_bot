@@ -10,7 +10,7 @@ from content_buckets import item_content_bucket
 from delivery_sender import send_grouped_items_to_user, send_item_to_user
 from kinozal_details import enrich_kinozal_item_with_details
 from media_detection import is_non_video_release
-from release_versioning import describe_variant_change
+from release_versioning import describe_variant_change, extract_kinozal_id
 from source_health import note_source_cycle_failure, note_source_cycle_success
 from subscription_matching import match_subscription
 from utils import compact_spaces
@@ -147,6 +147,9 @@ async def process_new_items(db: Any, source: Any, tmdb: Any, bot: Bot) -> None:
                 continue
             if not is_release_text_change:
                 if db.delivered(tg_user_id, item_id) or db.delivered_equivalent(tg_user_id, item):
+                    continue
+                kinozal_id = item.get("kinozal_id") or extract_kinozal_id(item.get("source_uid"))
+                if kinozal_id and db.recently_delivered_kinozal_id(tg_user_id, kinozal_id, cooldown_seconds=420):
                     continue
             else:
                 if not db.delivered(tg_user_id, item_id):
