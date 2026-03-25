@@ -148,6 +148,8 @@ async def process_new_items(db: Any, source: Any, tmdb: Any, bot: Bot) -> None:
             else:
                 if not db.delivered(tg_user_id, item_id):
                     continue
+                if db.recently_delivered(tg_user_id, item_id, cooldown_seconds=420):
+                    continue
             if not match_subscription(db, sub, item):
                 continue
             matches_by_user.setdefault(tg_user_id, []).append(sub)

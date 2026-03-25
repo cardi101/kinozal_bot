@@ -1800,6 +1800,14 @@ class DB:
             )
             self.conn.commit()
 
+    def recently_delivered(self, tg_user_id: int, item_id: int, cooldown_seconds: int) -> bool:
+        with self.lock:
+            row = self.conn.execute(
+                "SELECT 1 FROM deliveries WHERE tg_user_id = ? AND item_id = ? AND delivered_at > ?",
+                (tg_user_id, item_id, utc_ts() - cooldown_seconds),
+            ).fetchone()
+            return row is not None
+
     def was_delivered_to_anyone(self, item_id: int) -> bool:
         with self.lock:
             row = self.conn.execute(
