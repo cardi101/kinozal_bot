@@ -174,7 +174,7 @@ async def process_new_items(db: Any, source: Any, tmdb: Any, bot: Bot) -> None:
         for tg_user_id, matched_subs in matches_by_user.items():
             if kinozal_id and not is_release_text_change:
                 sub_ids_str = ",".join(str(s["id"]) for s in matched_subs)
-                db.upsert_debounce(tg_user_id, kinozal_id, item_id, sub_ids_str, delay_seconds=300)
+                db.upsert_debounce(tg_user_id, kinozal_id, item_id, sub_ids_str, delay_seconds=120)
                 log.info("Debounce queued item=%s kinozal_id=%s to user=%s", item_id, kinozal_id, tg_user_id)
             else:
                 all_pending.setdefault(tg_user_id, []).append({
