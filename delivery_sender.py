@@ -410,6 +410,7 @@ async def send_grouped_items_to_user(
                 disable_web_page_preview=CFG.disable_preview,
                 reply_markup=action_kb,
             )
+            sent = True
         except Exception:
             log.warning("send_message failed for grouped delivery user=%s", tg_user_id, exc_info=True)
 

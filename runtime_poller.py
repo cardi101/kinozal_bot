@@ -193,7 +193,7 @@ async def process_new_items(db: Any, source: Any, tmdb: Any, bot: Bot) -> None:
             try:
                 pd_item = await enrich_kinozal_item_with_details(dict(pd_item))
             except Exception:
-                pass
+                log.warning("Failed to enrich pending item=%s", pd_item_id, exc_info=True)
             sub_ids = [s.strip() for s in str(pd.get("matched_sub_ids") or "").split(",") if s.strip()]
             pd_subs = [db.get_subscription(int(sid)) for sid in sub_ids if sid.isdigit()]
             pd_subs = [s for s in pd_subs if s]
