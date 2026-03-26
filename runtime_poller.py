@@ -218,14 +218,22 @@ async def process_new_items(db: Any, source: Any, tmdb: Any, bot: Bot) -> None:
                 log.exception("Failed to flush pending delivery user=%s item=%s", flush_uid, pd_item_id)
 
     # Phase 2.5: flush due debounced deliveries into all_pending
+    _enriched_cache: Dict[int, Dict[str, Any]] = {}
     for entry in db.pop_due_debounce():
         db_uid = int(entry["tg_user_id"])
         db_item_id = int(entry["item_id"])
         if db.delivered(db_uid, db_item_id):
             continue
-        db_item = db.get_item(db_item_id)
-        if not db_item:
-            continue
+        if db_item_id not in _enriched_cache:
+            raw = db.get_item(db_item_id)
+            if not raw:
+                continue
+            try:
+                _enriched_cache[db_item_id] = await enrich_kinozal_item_with_details(dict(raw))
+            except Exception:
+                log.warning("Failed to enrich debounced item=%s", db_item_id, exc_info=True)
+                _enriched_cache[db_item_id] = raw
+        db_item = _enriched_cache[db_item_id]
         if db.delivered_equivalent(db_uid, db_item):
             continue
         sub_ids = [s.strip() for s in str(entry.get("matched_sub_ids") or "").split(",") if s.strip()]
@@ -233,10 +241,6 @@ async def process_new_items(db: Any, source: Any, tmdb: Any, bot: Bot) -> None:
         subs = [s for s in subs if s]
         if not subs:
             continue
-        try:
-            db_item = await enrich_kinozal_item_with_details(dict(db_item))
-        except Exception:
-            log.warning("Failed to enrich debounced item=%s", db_item_id, exc_info=True)
         log.info("Debounce ready item=%s kinozal_id=%s to user=%s", db_item_id, entry["kinozal_id"], db_uid)
         all_pending.setdefault(db_uid, []).append({
             "item": db_item,
