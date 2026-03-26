@@ -7,6 +7,7 @@ from typing import Any, Dict, List, Optional, Sequence
 import httpx
 from aiogram import Bot
 from aiogram.enums import ParseMode
+from aiogram.exceptions import TelegramRetryAfter
 from aiogram.types import BufferedInputFile, InlineKeyboardMarkup
 
 from config import CFG
@@ -21,9 +22,22 @@ log = logging.getLogger("kinozal-news-bot")
 
 _ALLOWED_TAGS = {"b", "strong", "i", "em", "u", "ins", "s", "strike", "del", "code", "pre", "a"}
 
-
+_MAX_RETRIES = 3
 
 _VOID_TAGS = {"br"}
+
+
+async def _tg_retry(coro_fn, *args, **kwargs):
+    for attempt in range(_MAX_RETRIES):
+        try:
+            return await coro_fn(*args, **kwargs)
+        except TelegramRetryAfter as e:
+            if attempt == _MAX_RETRIES - 1:
+                raise
+            wait = min(e.retry_after + 1, 60)
+            log.warning("Telegram rate limit, retry_after=%ss, attempt=%d/%d",
+                        e.retry_after, attempt + 1, _MAX_RETRIES)
+            await asyncio.sleep(wait)
 
 
 async def _build_poster_file(poster_url: str, item_id: Any) -> Optional[BufferedInputFile]:
@@ -271,7 +285,7 @@ def _build_release_followup_messages(item: Dict[str, Any], old_release_text: str
 
 async def _send_release_followups(bot: Bot, tg_user_id: int, item: Dict[str, Any], old_release_text: str = "") -> None:
     for text in _build_release_followup_messages(item, old_release_text=old_release_text):
-        await bot.send_message(
+        await _tg_retry(bot.send_message,
             tg_user_id,
             text=text,
             parse_mode=ParseMode.HTML,
@@ -319,7 +333,7 @@ async def send_item_to_user(
         if poster_file:
             caption_html = _safe_truncate_html(text, 1000)
             try:
-                await bot.send_photo(
+                await _tg_retry(bot.send_photo,
                     tg_user_id,
                     photo=poster_file,
                     caption=caption_html,
@@ -337,7 +351,7 @@ async def send_item_to_user(
 
     if not main_sent:
         try:
-            await bot.send_message(
+            await _tg_retry(bot.send_message,
                 tg_user_id,
                 text=full_html_text,
                 parse_mode=ParseMode.HTML,
@@ -353,7 +367,7 @@ async def send_item_to_user(
                 exc_info=True,
             )
             try:
-                await bot.send_message(
+                await _tg_retry(bot.send_message,
                     tg_user_id,
                     text=full_plain_text,
                     disable_web_page_preview=CFG.disable_preview,
@@ -399,7 +413,7 @@ async def send_grouped_items_to_user(
         if poster_file:
             caption_html = _safe_truncate_html(text, 1000)
             try:
-                await bot.send_photo(
+                await _tg_retry(bot.send_photo,
                     tg_user_id,
                     photo=poster_file,
                     caption=caption_html,
@@ -411,7 +425,7 @@ async def send_grouped_items_to_user(
                 log.warning("send_photo failed for grouped delivery user=%s", tg_user_id, exc_info=True)
     if not sent:
         try:
-            await bot.send_message(
+            await _tg_retry(bot.send_message,
                 tg_user_id,
                 text=short(text, 3900),
                 parse_mode=ParseMode.HTML,
