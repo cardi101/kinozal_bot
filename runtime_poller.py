@@ -233,6 +233,10 @@ async def process_new_items(db: Any, source: Any, tmdb: Any, bot: Bot) -> None:
         subs = [s for s in subs if s]
         if not subs:
             continue
+        try:
+            db_item = await enrich_kinozal_item_with_details(dict(db_item))
+        except Exception:
+            log.warning("Failed to enrich debounced item=%s", db_item_id, exc_info=True)
         log.info("Debounce ready item=%s kinozal_id=%s to user=%s", db_item_id, entry["kinozal_id"], db_uid)
         all_pending.setdefault(db_uid, []).append({
             "item": db_item,
