@@ -1825,7 +1825,8 @@ class DB:
                    VALUES (?, ?, ?, ?, ?)
                    ON CONFLICT (tg_user_id, kinozal_id) DO UPDATE SET
                        item_id = excluded.item_id,
-                       matched_sub_ids = excluded.matched_sub_ids""",
+                       matched_sub_ids = excluded.matched_sub_ids,
+                       deliver_after_ts = excluded.deliver_after_ts""",
                 (tg_user_id, kinozal_id, item_id, matched_sub_ids or "", after_ts),
             )
             self.conn.commit()
