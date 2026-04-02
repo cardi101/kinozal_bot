@@ -15,7 +15,7 @@ class Config:
     )
     allow_mode: str = os.getenv("ALLOW_MODE", "invite").strip().lower()
     tmdb_token: str = os.getenv("TMDB_TOKEN", "").strip()
-    poll_seconds: int = int(os.getenv("POLL_SECONDS", "420"))
+    poll_seconds: int = int(os.getenv("POLL_SECONDS", "60"))
     request_timeout: int = int(os.getenv("REQUEST_TIMEOUT", "40"))
     database_url: str = os.getenv("DATABASE_URL", "").strip()
     redis_url: str = os.getenv("REDIS_URL", "").strip()
