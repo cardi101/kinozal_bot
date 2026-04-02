@@ -422,6 +422,7 @@ class DB:
                 );
                 ALTER TABLE users ADD COLUMN IF NOT EXISTS quiet_start_hour INTEGER;
                 ALTER TABLE users ADD COLUMN IF NOT EXISTS quiet_end_hour INTEGER;
+                ALTER TABLE debounce_queue ADD COLUMN IF NOT EXISTS reset_count INTEGER NOT NULL DEFAULT 0;
                 CREATE TABLE IF NOT EXISTS pending_deliveries (
                     id BIGSERIAL PRIMARY KEY,
                     tg_user_id BIGINT NOT NULL,
@@ -438,6 +439,7 @@ class DB:
                     item_id BIGINT NOT NULL,
                     matched_sub_ids TEXT NOT NULL DEFAULT '',
                     deliver_after_ts BIGINT NOT NULL,
+                    reset_count INTEGER NOT NULL DEFAULT 0,
                     UNIQUE (tg_user_id, kinozal_id)
                 );
                 """
@@ -1821,12 +1823,19 @@ class DB:
         after_ts = utc_ts() + delay_seconds
         with self.lock:
             self.conn.execute(
-                """INSERT INTO debounce_queue (tg_user_id, kinozal_id, item_id, matched_sub_ids, deliver_after_ts)
-                   VALUES (?, ?, ?, ?, ?)
+                """INSERT INTO debounce_queue (tg_user_id, kinozal_id, item_id, matched_sub_ids, deliver_after_ts, reset_count)
+                   VALUES (?, ?, ?, ?, ?, 0)
                    ON CONFLICT (tg_user_id, kinozal_id) DO UPDATE SET
                        item_id = excluded.item_id,
                        matched_sub_ids = excluded.matched_sub_ids,
-                       deliver_after_ts = excluded.deliver_after_ts""",
+                       deliver_after_ts = CASE
+                           WHEN debounce_queue.reset_count < 2 THEN excluded.deliver_after_ts
+                           ELSE debounce_queue.deliver_after_ts
+                       END,
+                       reset_count = CASE
+                           WHEN debounce_queue.reset_count < 2 THEN debounce_queue.reset_count + 1
+                           ELSE debounce_queue.reset_count
+                       END""",
                 (tg_user_id, kinozal_id, item_id, matched_sub_ids or "", after_ts),
             )
             self.conn.commit()
