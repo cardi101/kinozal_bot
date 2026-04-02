@@ -229,7 +229,7 @@ async def process_new_items(db: Any, source: Any, tmdb: Any, bot: Bot) -> None:
             if not raw:
                 continue
             try:
-                _enriched_cache[db_item_id] = await enrich_kinozal_item_with_details(dict(raw))
+                _enriched_cache[db_item_id] = await enrich_kinozal_item_with_details(dict(raw), force_refresh=True)
             except Exception:
                 log.warning("Failed to enrich debounced item=%s", db_item_id, exc_info=True)
                 _enriched_cache[db_item_id] = raw
