@@ -177,6 +177,22 @@ docker compose exec -T postgres pg_dumpall -U postgres > backup.sql
 
 ---
 
+## Фильтрация русского контента
+
+По умолчанию бот **пропускает раздачи с русским контентом** — категории «Русский», «Русская», «Русское», «Наше Кино» и тайтлы с меткой `/ РУ /`.
+
+Чтобы отключить этот фильтр, удалите в `runtime_poller.py` блок:
+
+```python
+if any(kw in category for kw in ("Русский", "Русская", "Русское", "Наше Кино")) or "/ РУ /" in title:
+    log.info("Skip Russian item: %s [%s]", title, category)
+    continue
+```
+
+После этого пересоберите контейнер: `docker compose up -d --build`.
+
+---
+
 ## Лицензия
 
 [MIT](./LICENSE)
