@@ -10,7 +10,7 @@ from content_buckets import item_content_bucket
 from delivery_sender import send_grouped_items_to_user, send_item_to_user
 from kinozal_details import enrich_kinozal_item_with_details
 from media_detection import is_non_video_release
-from release_versioning import describe_variant_change, extract_kinozal_id
+from release_versioning import describe_variant_change, extract_kinozal_id, parse_episode_progress
 from source_health import note_source_cycle_failure, note_source_cycle_success
 from subscription_matching import match_subscription
 from utils import compact_spaces
@@ -111,6 +111,27 @@ async def process_new_items(db: Any, source: Any, tmdb: Any, bot: Bot) -> None:
                             touched_item_ids.append(item_id)
                         log.info("Initialized release text baseline for item=%s source_uid=%s",
                                  item_id, enriched.get("source_uid"))
+
+                # Check if the details page title has a newer episode progress
+                # than what the browse page reported (browse page can be stale).
+                details_title = detail_enriched.get("details_title") or ""
+                if details_title:
+                    details_progress = parse_episode_progress(details_title)
+                    stored_progress = enriched.get("source_episode_progress") or ""
+                    if details_progress and details_progress != stored_progress:
+                        log.info(
+                            "Details page episode progress differs for item=%s: browse=%s details=%s, creating new version",
+                            item_id, stored_progress, details_progress,
+                        )
+                        enriched["source_title"] = details_title
+                        enriched["source_episode_progress"] = details_progress
+                        new_item_id, new_is_new, _ = db.save_item(enriched)
+                        if new_is_new:
+                            enriched["id"] = new_item_id
+                            live_items_by_id[new_item_id] = enriched
+                            new_item_ids.append(new_item_id)
+                            if new_item_id not in touched_item_ids:
+                                touched_item_ids.append(new_item_id)
             except Exception:
                 log.warning("Failed to check release text for item=%s", item_id, exc_info=True)
 

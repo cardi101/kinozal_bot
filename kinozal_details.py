@@ -38,6 +38,11 @@ def _extract_kinozal_id(link: str) -> str:
     return match.group(1) if match else ""
 
 
+def _extract_details_title(html: str) -> str:
+    m = re.search(r"<title>(.*?)(?:\s*::\s*Кинозал\.ТВ\s*)?</title>", html or "", flags=re.I)
+    return _compact(m.group(1)) if m else ""
+
+
 def _build_magnet_link(info_hash: str, title: str) -> str:
     clean_hash = _compact(info_hash).upper()
     clean_title = _compact(title) or "kinozal"
@@ -530,6 +535,8 @@ async def enrich_kinozal_item_with_details(item: Dict[str, Any], force_refresh: 
     if not file_count and file_lines:
         file_count = len(file_lines)
 
+    details_title = _extract_details_title(main_html)
+
     extra: Dict[str, Any] = {
         "source_imdb_id": source_imdb_id or "",
         "source_info_hash": info_hash or "",
@@ -538,6 +545,7 @@ async def enrich_kinozal_item_with_details(item: Dict[str, Any], force_refresh: 
         "source_file_list_json": json.dumps(file_lines, ensure_ascii=False) if file_lines else "",
         "source_magnet": _build_magnet_link(info_hash, item.get("source_title") or "") if info_hash else "",
         "source_release_text": release_text or "",
+        "details_title": details_title,
     }
 
     _DETAILS_CACHE[source_link] = dict(extra)
