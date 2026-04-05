@@ -309,7 +309,7 @@ def tmdb_match_looks_valid(item: Dict[str, Any], query: str, details: Dict[str, 
                 if not q_low or q_low not in d_low:
                     continue
                 remainder = compact_spaces(d_low.replace(q_low, "", 1)).strip(" :-–—")
-                if remainder and remainder in _DERIVATIVE_SUFFIXES:
+                if remainder and any(remainder == s or remainder.endswith(" " + s) for s in _DERIVATIVE_SUFFIXES):
                     return reject("tmdb_match_looks_valid:derivative_suffix")
 
     if re.search(r"[A-Za-z]", query or ""):
