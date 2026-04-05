@@ -95,8 +95,9 @@ def is_tv_continuation_parent_match(
     has_exact_normalized: bool,
     best_main_overlap: float,
     best_main_similarity: float,
+    has_substring: bool = False,
 ) -> bool:
-    strong_title_match = has_exact_normalized or best_main_overlap >= 0.72 or best_main_similarity >= 0.92
+    strong_title_match = has_exact_normalized or best_main_overlap >= 0.72 or best_main_similarity >= 0.92 or has_substring
     if not strong_title_match:
         return False
     season_hint = extract_tv_season_hint(item)
@@ -447,6 +448,7 @@ def tmdb_match_looks_valid(item: Dict[str, Any], query: str, details: Dict[str, 
             has_exact_normalized,
             best_main_overlap,
             best_main_similarity,
+            has_substring=has_substring,
         )
         tv_revival_reset_match = is_tv_revival_reset_match(
             item,
