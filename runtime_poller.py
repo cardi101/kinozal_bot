@@ -68,15 +68,23 @@ async def process_new_items(db: Any, source: Any, tmdb: Any, bot: Bot) -> None:
             log.info("Skip Russian item: %s [%s]", title, category)
             continue
 
-        enriched = await tmdb.enrich_item(dict(raw_item))
-        if not enriched.get("tmdb_id") and compact_spaces(str(enriched.get("source_category_name") or "")):
-            log.info(
-                "TMDB no match, using source category fallback title=%s category=%s bucket=%s media=%s",
-                enriched.get("source_title"),
-                enriched.get("source_category_name"),
-                item_content_bucket(enriched),
-                enriched.get("media_type"),
-            )
+        cached = db.find_existing_enriched(raw_item.get("source_uid"), raw_item.get("source_title"))
+        if cached:
+            enriched = dict(raw_item)
+            for key, value in cached.items():
+                if key.startswith("tmdb_") or key in ("imdb_id", "mal_id", "media_type", "cleaned_title"):
+                    if value is not None and not enriched.get(key):
+                        enriched[key] = value
+        else:
+            enriched = await tmdb.enrich_item(dict(raw_item))
+            if not enriched.get("tmdb_id") and compact_spaces(str(enriched.get("source_category_name") or "")):
+                log.info(
+                    "TMDB no match, using source category fallback title=%s category=%s bucket=%s media=%s",
+                    enriched.get("source_title"),
+                    enriched.get("source_category_name"),
+                    item_content_bucket(enriched),
+                    enriched.get("media_type"),
+                )
 
         item_id, is_new, materially_changed = db.save_item(enriched)
         enriched["id"] = item_id

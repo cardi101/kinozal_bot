@@ -914,6 +914,18 @@ class DB:
             )
             self.conn.commit()
 
+    def find_existing_enriched(self, source_uid: str, source_title: str) -> Optional[Dict[str, Any]]:
+        source_uid = compact_spaces(str(source_uid or ""))
+        source_title = compact_spaces(str(source_title or ""))
+        if not source_uid or not source_title:
+            return None
+        with self.lock:
+            row = self.conn.execute(
+                "SELECT * FROM items WHERE source_uid = ? AND source_title = ? AND tmdb_id IS NOT NULL ORDER BY created_at DESC LIMIT 1",
+                (source_uid, source_title),
+            ).fetchone()
+            return dict(row) if row else None
+
     def _find_existing_item_for_upsert(self, data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         row = self.conn.execute(
             "SELECT * FROM items WHERE source_uid = ? AND version_signature = ?",
