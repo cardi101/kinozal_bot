@@ -201,7 +201,7 @@ def _strip_title_part_metadata(part: str) -> str:
     part = compact_spaces(part or "")
     part = re.sub(r"\([^\)]*\)", " ", part)
     part = re.split(
-        r"\b(?:19\d{2}|20\d{2}|ДБ|ПМ|ЛМ|ПД|ПО|СТ|РУ|УКР|WEB|WEB\-DL|WEBRip|Blu|BDRip|Remux|Rip|HDR10\+?|HDR|SDR|HEVC|AVC|HDTV|HDTVRip|IPTV|DVB|DVBRip|SATRip|MP3|FLAC|FB2|EPUB|MOBI|PDF)\b",
+        r"\b(?:19\d{2}|20\d{2}|ДБ|ПМ|ЛМ|ПД|ПО|СТ|РУ|УКР|WEB\-DL|WEB\-DLRip|WEBRip|Blu|BDRip|Remux|Rip|HDR10\+?|HDR|SDR|HEVC|AVC|HDTV|HDTVRip|IPTV|DVB|DVBRip|SATRip|MP3|FLAC|FB2|EPUB|MOBI|PDF)\b",
         part,
         maxsplit=1,
         flags=re.I,

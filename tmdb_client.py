@@ -652,6 +652,10 @@ class TMDBClient:
                     if "/" in raw:
                         for part in raw.split("/"):
                             _push_lex(part)
+                    for paren in re.findall(r"\(([^()]+)\)", raw):
+                        _push_lex(paren)
+                    stripped = re.sub(r"\([^()]*\)", " ", raw)
+                    _push_lex(stripped)
 
                 lexicon_year = None
                 raw_year = str(item.get("source_year") or "").strip()
@@ -668,6 +672,11 @@ class TMDBClient:
                         lexicon_best.source,
                         ", ".join(lexicon_best.titles[:6]),
                     )
+                    for _src in (lexicon_best.raw or {}).get("sources") or []:
+                        _mal = re.search(r"myanimelist\.net/anime/(\d+)", str(_src))
+                        if _mal:
+                            item["mal_id"] = _mal.group(1)
+                            break
                 else:
                     logging.getLogger(__name__).info(
                         "Anime lexicon miss title=%s cleaned=%s",

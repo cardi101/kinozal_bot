@@ -203,6 +203,8 @@ def item_message(db: Any, item: Dict[str, Any], matched_subs: Optional[Sequence[
     if item.get("tmdb_id"):
         tmdb_kind = "tv" if media_type == "tv" else "movie"
         links.append(f'<a href="https://www.themoviedb.org/{tmdb_kind}/{int(item["tmdb_id"])}">TMDB</a>')
+    if item.get("mal_id"):
+        links.append(f'<a href="https://myanimelist.net/anime/{html.escape(str(item["mal_id"]), quote=True)}">MAL</a>')
     if item.get("imdb_id"):
         links.append(f'<a href="https://www.imdb.com/title/{html.escape(str(item["imdb_id"]), quote=True)}/">IMDb</a>')
     if links:
@@ -286,6 +288,8 @@ def grouped_items_message(db: Any, items: List[Dict[str, Any]], matched_subs: Op
     if tmdb_id:
         tmdb_kind = "tv" if media_type == "tv" else "movie"
         links.append(f'<a href="https://www.themoviedb.org/{tmdb_kind}/{int(tmdb_id)}">TMDB</a>')
+    if first.get("mal_id"):
+        links.append(f'<a href="https://myanimelist.net/anime/{html.escape(str(first["mal_id"]), quote=True)}">MAL</a>')
     if first.get("imdb_id"):
         links.append(f'<a href="https://www.imdb.com/title/{html.escape(str(first["imdb_id"]), quote=True)}/">IMDb</a>')
     if links:

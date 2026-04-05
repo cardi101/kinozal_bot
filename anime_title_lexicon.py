@@ -56,12 +56,15 @@ class AnimeLexiconEntry:
 
 
 class AnimeTitleLexicon:
+    _PREFIX_MIN_WORDS = 4
+
     def __init__(self, base_dir: str):
         self.base_dir = Path(base_dir)
         self.path = self.base_dir / "manami" / "anime-offline-database-minified.json"
         self.loaded = False
         self.entries: List[AnimeLexiconEntry] = []
         self.by_title: Dict[str, List[AnimeLexiconEntry]] = {}
+        self.by_prefix: Dict[str, List[AnimeLexiconEntry]] = {}
 
     def _load_json(self) -> Any:
         return json.loads(self.path.read_text(encoding="utf-8"))
@@ -146,6 +149,10 @@ class AnimeTitleLexicon:
                 if not norm:
                     continue
                 self.by_title.setdefault(norm, []).append(entry)
+                words = norm.split()
+                if len(words) > self._PREFIX_MIN_WORDS:
+                    prefix = " ".join(words[:self._PREFIX_MIN_WORDS])
+                    self.by_prefix.setdefault(prefix, []).append(entry)
 
         self.loaded = True
 
@@ -182,12 +189,30 @@ class AnimeTitleLexicon:
                 seen.add(key)
                 candidates.append(entry)
 
+        if not candidates:
+            for norm in normalized_queries:
+                words = norm.split()
+                if len(words) >= self._PREFIX_MIN_WORDS:
+                    prefix = " ".join(words[:self._PREFIX_MIN_WORDS])
+                    for entry in self.by_prefix.get(prefix, []):
+                        key = (entry.canonical_title, entry.year, entry.media_type, entry.season_hint)
+                        if key in seen:
+                            continue
+                        seen.add(key)
+                        candidates.append(entry)
+
         for entry in candidates:
             score = 0
             entry_norms = {_normalize_title(t) for t in entry.titles if _normalize_title(t)}
 
             if any(q in entry_norms for q in normalized_queries):
                 score += 100
+            elif any(
+                any(en.startswith(q + " ") for en in entry_norms)
+                for q in normalized_queries
+                if len(q.split()) >= self._PREFIX_MIN_WORDS
+            ):
+                score += 50
 
             if year is not None and entry.year is not None:
                 delta = abs(entry.year - year)

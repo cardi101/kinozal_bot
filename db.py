@@ -243,6 +243,7 @@ class DB:
                     source_episode_progress TEXT,
                     source_audio_tracks TEXT,
                     imdb_id TEXT,
+                    mal_id TEXT,
                     cleaned_title TEXT,
                     source_category_id TEXT,
                     source_category_name TEXT,
@@ -391,6 +392,7 @@ class DB:
                 ALTER TABLE items ADD COLUMN IF NOT EXISTS manual_country_codes TEXT NOT NULL DEFAULT '';
                 ALTER TABLE deliveries ADD COLUMN IF NOT EXISTS matched_subscription_ids TEXT;
                 ALTER TABLE items ADD COLUMN IF NOT EXISTS source_release_text TEXT NOT NULL DEFAULT '';
+                ALTER TABLE items ADD COLUMN IF NOT EXISTS mal_id TEXT;
                 CREATE INDEX IF NOT EXISTS idx_users_access_state ON users(access_granted, access_expires_at);
                 CREATE INDEX IF NOT EXISTS idx_items_source_link ON items(source_link);
                 CREATE INDEX IF NOT EXISTS idx_items_media_source ON items(media_type, source_uid);
@@ -1137,6 +1139,7 @@ class DB:
             "source_episode_progress": item.get("source_episode_progress"),
             "source_audio_tracks": json.dumps(item.get("source_audio_tracks", []), ensure_ascii=False),
             "imdb_id": item.get("imdb_id"),
+            "mal_id": item.get("mal_id"),
             "cleaned_title": item.get("cleaned_title"),
             "source_category_id": item.get("source_category_id"),
             "source_category_name": item.get("source_category_name"),
@@ -1204,6 +1207,7 @@ class DB:
                     "source_episode_progress",
                     "source_audio_tracks",
                     "imdb_id",
+                    "mal_id",
                     "cleaned_title",
                     "source_category_id",
                     "source_category_name",

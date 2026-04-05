@@ -291,6 +291,27 @@ def tmdb_match_looks_valid(item: Dict[str, Any], query: str, details: Dict[str, 
             if best_similarity_norm < 0.985 and not has_substring:
                 return reject("tmdb_match_looks_valid:L292")
 
+    _DERIVATIVE_SUFFIXES = {
+        "podcast", "podcasts", "compilation", "compilations",
+        "soundtrack", "soundtracks", "ost",
+        "behind the scenes", "making of",
+        "aftershow", "after show", "talk show", "talkshow",
+        "recap", "recaps", "rewind",
+        "stories", "diaries", "diary",
+    }
+    if not has_exact_normalized and has_substring:
+        for d in detail_variants:
+            d_low = compact_spaces(d).lower()
+            if not d_low:
+                continue
+            for q in query_variants:
+                q_low = compact_spaces(q).lower()
+                if not q_low or q_low not in d_low:
+                    continue
+                remainder = compact_spaces(d_low.replace(q_low, "", 1)).strip(" :-–—")
+                if remainder and remainder in _DERIVATIVE_SUFFIXES:
+                    return reject("tmdb_match_looks_valid:derivative_suffix")
+
     if re.search(r"[A-Za-z]", query or ""):
         if source_is_tv and details_media == "tv":
             if best_overlap < 0.18 and best_similarity_norm < 0.50 and best_common_tokens < 2 and not has_substring:
