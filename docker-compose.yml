@@ -55,6 +55,12 @@ services:
       ANIME_RESOLVER_ENABLED: "${ANIME_RESOLVER_ENABLED}"
       ANIME_RESOLVER_LOG_ONLY: "${ANIME_RESOLVER_LOG_ONLY}"
       ANIME_MAPPINGS_DIR: "${ANIME_MAPPINGS_DIR}"
+    healthcheck:
+      test: ["CMD-SHELL", "pgrep -f 'python.*app.py' || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
     networks:
       - kinozal_net
 
@@ -94,8 +100,6 @@ volumes:
   caddy_config:
 
   postgres_data:
-    external: true
-    name: "kinozal-postgres-clean-data-20260311-104819"
 
 networks:
   kinozal_net:

@@ -1,0 +1,11 @@
+target-version = "py312"
+line-length = 120
+
+[lint]
+select = ["E", "F", "W", "B"]
+ignore = [
+    "E501",   # line too long — handled by formatter where possible
+    "E741",   # ambiguous variable name
+    "F841",   # local variable assigned but never used
+    "B905",   # zip without strict
+]

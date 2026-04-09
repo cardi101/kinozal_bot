@@ -1,8 +1,6 @@
-import html
 from typing import Any
 
 from aiogram import F, Router
-from aiogram.enums import ParseMode
 from aiogram.types import CallbackQuery
 
 from access_helpers import ensure_access_for_callback

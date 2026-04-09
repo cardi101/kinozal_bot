@@ -1,16 +1,18 @@
 # Kinozal Bot
 
-Telegram-бот для мониторинга новых релизов на [Kinozal.tv](https://kinozal.tv). Отправляет уведомления по подпискам с обогащением через TMDB — постеры, рейтинги, жанры, статус сериала.
-
-<p align="center">
-  <img src="./assets/screenshot.png" alt="screenshot" />
-</p>
-
+[![CI](https://github.com/cardi101/kinozal_bot/actions/workflows/ci.yml/badge.svg)](https://github.com/cardi101/kinozal_bot/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/github/license/cardi101/kinozal_bot)](./LICENSE)
 ![Python](https://img.shields.io/badge/Python-3.12-3776AB?logo=python&logoColor=white)
 ![aiogram](https://img.shields.io/badge/aiogram-3.x-2CA5E0?logo=telegram&logoColor=white)
 ![PostgreSQL](https://img.shields.io/badge/PostgreSQL-16-4169E1?logo=postgresql&logoColor=white)
 ![Redis](https://img.shields.io/badge/Redis-7-DC382D?logo=redis&logoColor=white)
 ![Docker](https://img.shields.io/badge/Docker-Compose-2496ED?logo=docker&logoColor=white)
+
+Telegram-бот для мониторинга новых релизов на [Kinozal.tv](https://kinozal.tv). Отправляет уведомления по подпискам с обогащением через TMDB — постеры, рейтинги, жанры, статус сериала.
+
+<p align="center">
+  <img src="./assets/screenshot.png" alt="Kinozal Bot Screenshot" width="400" />
+</p>
 
 ---
 
@@ -174,6 +176,16 @@ docker compose exec postgres psql -U postgres -d kinozal_news
 # Бэкап
 docker compose exec -T postgres pg_dumpall -U postgres > backup.sql
 ```
+
+---
+
+## Contributing
+
+1. Fork the repository
+2. Create a feature branch (`git checkout -b feature/my-feature`)
+3. Make your changes and ensure `ruff check .` passes
+4. Commit (`git commit -m 'Add my feature'`)
+5. Push and open a Pull Request
 
 ---
 
