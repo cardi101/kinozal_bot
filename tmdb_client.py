@@ -9,6 +9,7 @@ import httpx
 from country_helpers import normalize_tmdb_language
 from match_text import similarity, normalize_match_text, text_tokens
 from media_detection import is_non_video_release
+from source_categories import source_category_forced_media_type
 from parsing_basic import parse_year
 from title_prep import clean_release_title, looks_like_structured_numeric_title, normalize_structured_numeric_title, should_skip_tmdb_lookup, is_bad_tmdb_candidate
 from tmdb_aliases import is_long_latin_tmdb_query, is_short_or_common_tmdb_query, is_short_acronym_tmdb_query, manual_tmdb_override_for_item, title_search_candidates
@@ -635,6 +636,12 @@ class TMDBClient:
             if fallback_cleaned_title:
                 item["cleaned_title"] = fallback_cleaned_title
         item["tmdb_match_path"] = None
+        if not item.get("media_type"):
+            forced = source_category_forced_media_type(
+                item.get("source_category_id"), item.get("source_category_name"),
+            )
+            if forced and forced != "other":
+                item["media_type"] = forced
         if self.anime_title_lexicon and should_use_anime_resolver(item):
             try:
                 lexicon_candidates = []
