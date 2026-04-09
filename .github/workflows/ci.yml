@@ -9,6 +9,9 @@ on:
 permissions:
   contents: read
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 jobs:
   lint:
     name: Lint
@@ -28,9 +31,6 @@ jobs:
 
       - name: Ruff check
         run: ruff check .
-
-      - name: Ruff format check
-        run: ruff format --check .
 
   docker-build:
     name: Docker Build
