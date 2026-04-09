@@ -6,7 +6,6 @@ select = ["E", "F", "W", "B"]
 ignore = [
     "E501",   # line too long — handled by formatter where possible
     "E741",   # ambiguous variable name
-    "F401",   # unused imports — too noisy for now, enable later
     "F841",   # local variable assigned but never used
     "B905",   # zip without strict
 ]
