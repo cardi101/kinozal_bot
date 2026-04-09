@@ -1,0 +1,16 @@
+target-version = "py312"
+line-length = 120
+
+[lint]
+select = ["E", "F", "W", "I", "UP", "B", "SIM"]
+ignore = [
+    "E501",   # line too long — handled by formatter where possible
+    "E741",   # ambiguous variable name
+    "F841",   # local variable assigned but never used
+    "B905",   # zip without strict
+    "SIM108", # ternary operator
+    "UP007",  # use X | Y for union types
+]
+
+[lint.isort]
+known-first-party = ["config", "db", "redis_cache"]
