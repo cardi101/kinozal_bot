@@ -41,6 +41,8 @@ def parse_episode_progress(text: str) -> Optional[str]:
         r"(\d+\s*выпуск(?:а|ов)?)",
         r"(s\d{1,2}\s*e\d{1,3}\s*-\s*e\d{1,3})",
         r"(s\d{1,2}\s*e\d{1,3})",
+        r"(\d+\s*-\s*\d+\s*из\s*\d+)",
+        r"(\d+\s*из\s*\d+)",
     ]
     for pattern in patterns:
         m = re.search(pattern, text, flags=re.I)

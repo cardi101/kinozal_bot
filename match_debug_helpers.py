@@ -45,6 +45,7 @@ def _strip_existing_match_fields(item: Dict[str, Any]) -> Dict[str, Any]:
         "tmdb_match_debug",
         "tmdb_match_path",
         "imdb_id",
+        "media_type",
     ]:
         cleaned.pop(key, None)
     return cleaned
