@@ -1,5 +1,6 @@
-from typing import Any, Dict, List
+from typing import Any, List
 
+from domain import ReleaseItem
 from kinozal_details import enrich_kinozal_item_with_details
 
 
@@ -7,15 +8,16 @@ class KinozalService:
     def __init__(self, source: Any) -> None:
         self.source = source
 
-    async def fetch_latest(self) -> List[Dict[str, Any]]:
-        return await self.source.fetch_latest()
+    async def fetch_latest(self) -> List[ReleaseItem]:
+        return [ReleaseItem.from_payload(item) for item in await self.source.fetch_latest()]
 
     async def enrich_item_with_details(
         self,
-        item: Dict[str, Any],
+        item: ReleaseItem,
         force_refresh: bool = False,
-    ) -> Dict[str, Any]:
-        return await enrich_kinozal_item_with_details(item, force_refresh=force_refresh)
+    ) -> ReleaseItem:
+        enriched = await enrich_kinozal_item_with_details(item.to_dict(), force_refresh=force_refresh)
+        return ReleaseItem.from_payload(enriched)
 
     async def close(self) -> None:
         await self.source.close()

@@ -5,6 +5,7 @@ from typing import Any, Dict, List, Set
 
 from config import CFG
 from content_buckets import item_content_bucket
+from domain import DeliveryCandidate, ReleaseItem, SubscriptionRecord
 from media_detection import is_non_video_release
 from release_versioning import extract_kinozal_id, parse_episode_progress
 from source_health import note_source_cycle_failure, note_source_cycle_success
@@ -45,7 +46,7 @@ class WorkerService:
         first_run_seen = self.repository.get_meta("bootstrap_done") == "1"
         touched_item_ids: List[int] = []
         new_item_ids: List[int] = []
-        live_items_by_id: Dict[int, Dict[str, Any]] = {}
+        live_items_by_id: Dict[int, ReleaseItem] = {}
         release_text_changed_ids: Set[int] = set()
         old_release_texts: Dict[int, str] = {}
 
@@ -63,24 +64,24 @@ class WorkerService:
 
             cached = self.repository.find_existing_enriched(raw_item.get("source_uid"), raw_item.get("source_title"))
             if cached:
-                enriched = dict(raw_item)
+                enriched = raw_item.clone()
                 for key, value in cached.items():
                     if key.startswith("tmdb_") or key in ("imdb_id", "mal_id", "media_type", "cleaned_title"):
                         if value is not None and not enriched.get(key):
-                            enriched[key] = value
+                            enriched.set(key, value)
             else:
-                enriched = await self.tmdb_service.enrich_item(dict(raw_item))
+                enriched = await self.tmdb_service.enrich_item(raw_item.clone())
                 if not enriched.get("tmdb_id") and compact_spaces(str(enriched.get("source_category_name") or "")):
                     log.info(
                         "TMDB no match, using source category fallback title=%s category=%s bucket=%s media=%s",
                         enriched.get("source_title"),
                         enriched.get("source_category_name"),
-                        item_content_bucket(enriched),
+                        item_content_bucket(enriched.to_dict()),
                         enriched.get("media_type"),
                     )
 
-            item_id, is_new, materially_changed = self.repository.save_item(enriched)
-            enriched["id"] = item_id
+            item_id, is_new, materially_changed = self.repository.save_item(enriched.to_dict())
+            enriched.set("id", item_id)
             live_items_by_id[item_id] = enriched
 
             if is_new:
@@ -94,25 +95,25 @@ class WorkerService:
                 stored_release_text = (stored_item.get("source_release_text") or "") if stored_item else ""
                 try:
                     detail_enriched = await self.kinozal_service.enrich_item_with_details(
-                        dict(enriched),
+                        enriched.clone(),
                         force_refresh=True,
                     )
                     fresh_release_text = detail_enriched.get("source_release_text") or ""
                     if fresh_release_text and fresh_release_text != stored_release_text:
                         self.repository.update_item_release_text(item_id, fresh_release_text)
-                        enriched["source_release_text"] = fresh_release_text
+                        enriched.set("source_release_text", fresh_release_text)
                         live_items_by_id[item_id] = enriched
                         if stored_release_text:
                             old_release_texts[item_id] = stored_release_text
                             release_text_changed_ids.add(item_id)
                             if item_id not in touched_item_ids:
                                 touched_item_ids.append(item_id)
-                            log.info("Release text changed for item=%s source_uid=%s", item_id, enriched.get("source_uid"))
+                            log.info("Release text changed for item=%s source_uid=%s", item_id, enriched.source_uid)
                         else:
                             release_text_changed_ids.add(item_id)
                             if item_id not in touched_item_ids:
                                 touched_item_ids.append(item_id)
-                            log.info("Initialized release text baseline for item=%s source_uid=%s", item_id, enriched.get("source_uid"))
+                            log.info("Initialized release text baseline for item=%s source_uid=%s", item_id, enriched.source_uid)
 
                     details_title = detail_enriched.get("details_title") or ""
                     if details_title:
@@ -125,12 +126,12 @@ class WorkerService:
                                 stored_progress,
                                 details_progress,
                             )
-                            enriched["source_title"] = details_title
-                            enriched["source_episode_progress"] = details_progress
-                            new_item_id, new_is_new, _ = self.repository.save_item(enriched)
+                            enriched.set("source_title", details_title)
+                            enriched.set("source_episode_progress", details_progress)
+                            new_item_id, new_is_new, _ = self.repository.save_item(enriched.to_dict())
                             if new_is_new:
-                                enriched["id"] = new_item_id
-                                live_items_by_id[new_item_id] = enriched
+                                enriched.set("id", new_item_id)
+                                live_items_by_id[new_item_id] = enriched.clone()
                                 new_item_ids.append(new_item_id)
                                 if new_item_id not in touched_item_ids:
                                     touched_item_ids.append(new_item_id)
@@ -142,7 +143,7 @@ class WorkerService:
         if not first_run_seen and CFG.start_fetch_as_read:
             for item_id in new_item_ids:
                 for sub in enabled_subs:
-                    self.delivery_service.record_delivery(int(sub["tg_user_id"]), item_id, [sub])
+                    self.delivery_service.record_delivery(sub.tg_user_id, item_id, [sub])
             self.repository.set_meta("bootstrap_done", "1")
             log.info("Bootstrap complete: %s items marked as delivered", len(new_item_ids))
             return
@@ -152,23 +153,26 @@ class WorkerService:
         if not touched_item_ids:
             log.info("No new or enriched item versions")
 
-        all_pending: Dict[int, List[Dict[str, Any]]] = {}
+        all_pending: Dict[int, List[DeliveryCandidate]] = {}
 
         for item_id in touched_item_ids:
-            item = live_items_by_id.get(item_id) or self.repository.get_item(item_id)
+            item = live_items_by_id.get(item_id)
+            if not item:
+                payload = self.repository.get_item(item_id)
+                item = ReleaseItem.from_payload(payload) if payload else None
             if not item:
                 continue
 
             is_release_text_change = item_id in release_text_changed_ids
-            item_tmdb_id = int(item["tmdb_id"]) if item.get("tmdb_id") else None
-            kinozal_id = item.get("kinozal_id") or extract_kinozal_id(item.get("source_uid"))
-            matches_by_user: Dict[int, List[Dict[str, Any]]] = {}
+            item_tmdb_id = item.tmdb_id
+            kinozal_id = item.kinozal_id or extract_kinozal_id(item.source_uid)
+            matches_by_user: Dict[int, List[SubscriptionRecord]] = {}
             for sub in enabled_subs:
-                tg_user_id = int(sub["tg_user_id"])
+                tg_user_id = sub.tg_user_id
                 if item_tmdb_id and self.repository.is_title_muted(tg_user_id, item_tmdb_id):
                     continue
                 if not is_release_text_change:
-                    if self.repository.delivered(tg_user_id, item_id) or self.repository.delivered_equivalent(tg_user_id, item):
+                    if self.repository.delivered(tg_user_id, item_id) or self.repository.delivered_equivalent(tg_user_id, item.to_dict()):
                         continue
                     if kinozal_id and self.repository.recently_delivered_kinozal_id(
                         tg_user_id,
@@ -189,16 +193,16 @@ class WorkerService:
                 continue
 
             try:
-                item = await self.kinozal_service.enrich_item_with_details(dict(item))
+                item = await self.kinozal_service.enrich_item_with_details(item.clone())
             except Exception:
                 log.warning("Failed to enrich item with kinozal details item_id=%s", item_id, exc_info=True)
 
             if not is_release_text_change and item.get("source_release_text"):
-                self.repository.update_item_release_text(item_id, item["source_release_text"])
+                self.repository.update_item_release_text(item_id, item.get("source_release_text"))
 
             for tg_user_id, matched_subs in matches_by_user.items():
                 if kinozal_id and not is_release_text_change:
-                    sub_ids_str = ",".join(str(sub["id"]) for sub in matched_subs)
+                    sub_ids_str = ",".join(str(sub.id) for sub in matched_subs)
                     self.repository.upsert_debounce(
                         tg_user_id,
                         kinozal_id,
@@ -208,13 +212,14 @@ class WorkerService:
                     )
                     log.info("Debounce queued item=%s kinozal_id=%s to user=%s", item_id, kinozal_id, tg_user_id)
                 else:
-                    all_pending.setdefault(tg_user_id, []).append({
-                        "item": item,
-                        "item_id": item_id,
-                        "subs": matched_subs,
-                        "old_release_text": old_release_texts.get(item_id, ""),
-                        "is_release_text_change": is_release_text_change,
-                    })
+                    all_pending.setdefault(tg_user_id, []).append(
+                        DeliveryCandidate(
+                            item=item.clone(),
+                            subs=list(matched_subs),
+                            old_release_text=old_release_texts.get(item_id, ""),
+                            is_release_text_change=is_release_text_change,
+                        )
+                    )
 
         current_hour = datetime.now(timezone.utc).hour
         await self._flush_due_pending_deliveries(current_hour)
@@ -234,13 +239,14 @@ class WorkerService:
                     self.repository.delete_pending_delivery(flush_uid, pending_item_id)
                     continue
 
-                pending_item = self.repository.get_item(pending_item_id)
-                if not pending_item:
+                pending_item_payload = self.repository.get_item(pending_item_id)
+                if not pending_item_payload:
                     self.repository.delete_pending_delivery(flush_uid, pending_item_id)
                     continue
 
+                pending_item = ReleaseItem.from_payload(pending_item_payload)
                 try:
-                    pending_item = await self.kinozal_service.enrich_item_with_details(dict(pending_item))
+                    pending_item = await self.kinozal_service.enrich_item_with_details(pending_item)
                 except Exception:
                     log.warning("Failed to enrich pending item=%s", pending_item_id, exc_info=True)
 
@@ -249,8 +255,11 @@ class WorkerService:
                     for sub_id in str(pending_delivery.get("matched_sub_ids") or "").split(",")
                     if sub_id.strip()
                 ]
-                pending_subs = [self.repository.get_subscription(int(sub_id)) for sub_id in sub_ids if sub_id.isdigit()]
-                pending_subs = [sub for sub in pending_subs if sub]
+                pending_subs = [
+                    SubscriptionRecord.from_payload(sub)
+                    for sub in [self.repository.get_subscription(int(sub_id)) for sub_id in sub_ids if sub_id.isdigit()]
+                    if sub
+                ]
                 try:
                     log.info("Flushing pending delivery item=%s to user=%s", pending_item_id, flush_uid)
                     await self.delivery_service.send_item(
@@ -265,8 +274,8 @@ class WorkerService:
                 except Exception:
                     log.exception("Failed to flush pending delivery user=%s item=%s", flush_uid, pending_item_id)
 
-    async def _flush_due_debounce(self, all_pending: Dict[int, List[Dict[str, Any]]]) -> None:
-        enriched_cache: Dict[int, Dict[str, Any]] = {}
+    async def _flush_due_debounce(self, all_pending: Dict[int, List[DeliveryCandidate]]) -> None:
+        enriched_cache: Dict[int, ReleaseItem] = {}
         for entry in self.repository.pop_due_debounce():
             tg_user_id = int(entry["tg_user_id"])
             item_id = int(entry["item_id"])
@@ -277,37 +286,42 @@ class WorkerService:
                 raw_item = self.repository.get_item(item_id)
                 if not raw_item:
                     continue
+                item = ReleaseItem.from_payload(raw_item)
                 try:
                     enriched_cache[item_id] = await self.kinozal_service.enrich_item_with_details(
-                        dict(raw_item),
+                        item,
                         force_refresh=True,
                     )
                 except Exception:
                     log.warning("Failed to enrich debounced item=%s", item_id, exc_info=True)
-                    enriched_cache[item_id] = raw_item
+                    enriched_cache[item_id] = item
 
             item = enriched_cache[item_id]
-            if self.repository.delivered_equivalent(tg_user_id, item):
+            if self.repository.delivered_equivalent(tg_user_id, item.to_dict()):
                 continue
 
             sub_ids = [sub_id.strip() for sub_id in str(entry.get("matched_sub_ids") or "").split(",") if sub_id.strip()]
-            subs = [self.repository.get_subscription(int(sub_id)) for sub_id in sub_ids if sub_id.isdigit()]
-            subs = [sub for sub in subs if sub]
+            subs = [
+                SubscriptionRecord.from_payload(sub)
+                for sub in [self.repository.get_subscription(int(sub_id)) for sub_id in sub_ids if sub_id.isdigit()]
+                if sub
+            ]
             if not subs:
                 continue
 
             log.info("Debounce ready item=%s kinozal_id=%s to user=%s", item_id, entry["kinozal_id"], tg_user_id)
-            all_pending.setdefault(tg_user_id, []).append({
-                "item": item,
-                "item_id": item_id,
-                "subs": subs,
-                "old_release_text": "",
-                "is_release_text_change": False,
-            })
+            all_pending.setdefault(tg_user_id, []).append(
+                DeliveryCandidate(
+                    item=item.clone(),
+                    subs=subs,
+                    old_release_text="",
+                    is_release_text_change=False,
+                )
+            )
 
     async def _deliver_current_cycle(
         self,
-        all_pending: Dict[int, List[Dict[str, Any]]],
+        all_pending: Dict[int, List[DeliveryCandidate]],
         current_hour: int,
     ) -> None:
         for tg_user_id, deliveries in all_pending.items():
@@ -319,13 +333,13 @@ class WorkerService:
                     and self._quiet_active(quiet_start, quiet_end, current_hour)
                 ):
                     for delivery in deliveries:
-                        sub_ids_str = ",".join(str(sub["id"]) for sub in delivery["subs"])
+                        sub_ids_str = ",".join(str(sub.id) for sub in delivery.subs)
                         self.repository.queue_pending_delivery(
                             tg_user_id,
-                            delivery["item_id"],
+                            delivery.item_id,
                             sub_ids_str,
-                            delivery["old_release_text"],
-                            delivery["is_release_text_change"],
+                            delivery.old_release_text,
+                            delivery.is_release_text_change,
                         )
                     log.info(
                         "Queued %d deliveries for user=%s (quiet %02d:00-%02d:00 UTC)",
@@ -336,15 +350,15 @@ class WorkerService:
                     )
                     continue
 
-                release_text_updates = [delivery for delivery in deliveries if delivery["is_release_text_change"]]
-                regular_deliveries = [delivery for delivery in deliveries if not delivery["is_release_text_change"]]
+                release_text_updates = [delivery for delivery in deliveries if delivery.is_release_text_change]
+                regular_deliveries = [delivery for delivery in deliveries if not delivery.is_release_text_change]
 
-                tmdb_groups: Dict[int, List[Dict[str, Any]]] = {}
-                without_tmdb: List[Dict[str, Any]] = []
+                tmdb_groups: Dict[int, List[DeliveryCandidate]] = {}
+                without_tmdb: List[DeliveryCandidate] = []
                 for delivery in regular_deliveries:
-                    tmdb_id = delivery["item"].get("tmdb_id")
+                    tmdb_id = delivery.item.tmdb_id
                     if tmdb_id:
-                        tmdb_groups.setdefault(int(tmdb_id), []).append(delivery)
+                        tmdb_groups.setdefault(tmdb_id, []).append(delivery)
                     else:
                         without_tmdb.append(delivery)
 
@@ -352,44 +366,44 @@ class WorkerService:
                     try:
                         log.info(
                             "Delivering release text update item=%s to user=%s source_uid=%s",
-                            delivery["item_id"],
+                            delivery.item_id,
                             tg_user_id,
-                            delivery["item"].get("source_uid"),
+                            delivery.item.source_uid,
                         )
                         await self.delivery_service.send_item(
                             tg_user_id,
-                            delivery["item"],
-                            delivery["subs"],
-                            old_release_text=delivery["old_release_text"],
+                            delivery.item,
+                            delivery.subs,
+                            old_release_text=delivery.old_release_text,
                         )
-                        self.delivery_service.record_delivery(tg_user_id, delivery["item_id"], delivery["subs"])
+                        self.delivery_service.record_delivery(tg_user_id, delivery.item_id, delivery.subs)
                         await asyncio.sleep(0.12)
                     except Exception:
-                        log.exception("Error delivering rtc item=%s to user=%s", delivery["item_id"], tg_user_id)
+                        log.exception("Error delivering rtc item=%s to user=%s", delivery.item_id, tg_user_id)
 
                 for delivery in without_tmdb:
-                    if self.repository.delivered(tg_user_id, delivery["item_id"]):
+                    if self.repository.delivered(tg_user_id, delivery.item_id):
                         continue
                     try:
                         await self.delivery_service.send_single(tg_user_id, delivery)
                     except Exception:
-                        log.exception("Error delivering item=%s to user=%s", delivery["item_id"], tg_user_id)
+                        log.exception("Error delivering item=%s to user=%s", delivery.item_id, tg_user_id)
 
                 for tmdb_id, group in tmdb_groups.items():
                     try:
-                        group = [delivery for delivery in group if not self.repository.delivered(tg_user_id, delivery["item_id"])]
+                        group = [delivery for delivery in group if not self.repository.delivered(tg_user_id, delivery.item_id)]
                         if not group:
                             continue
                         if len(group) >= 2:
-                            all_subs = list({sub["id"]: sub for delivery in group for sub in delivery["subs"]}.values())
+                            all_subs = list({sub.id: sub for delivery in group for sub in delivery.subs}.values())
                             log.info("Delivering grouped %d items tmdb=%s to user=%s", len(group), tmdb_id, tg_user_id)
                             await self.delivery_service.send_grouped_items(
                                 tg_user_id,
-                                [delivery["item"] for delivery in group],
+                                [delivery.item for delivery in group],
                                 all_subs,
                             )
                             for delivery in group:
-                                self.delivery_service.record_delivery(tg_user_id, delivery["item_id"], delivery["subs"])
+                                self.delivery_service.record_delivery(tg_user_id, delivery.item_id, delivery.subs)
                                 await asyncio.sleep(0.12)
                         else:
                             await self.delivery_service.send_single(tg_user_id, group[0])

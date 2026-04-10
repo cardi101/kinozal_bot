@@ -148,6 +148,8 @@ services/tmdb_service.py        — фасад над TMDB client
 services/subscription_service.py — матчинг и работа с подписками
 services/delivery_service.py    — доставка и группировка уведомлений
 
+domain/models.py        — внутренние модели item/subscription/delivery для worker pipeline
+
 repositories/worker_repository.py — repository adapter для worker-цикла
 repositories/users_repository.py  — пользователи, инвайты, quiet-hours
 repositories/subscriptions_repository.py — подписки, жанры, страны
