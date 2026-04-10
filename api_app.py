@@ -1,14 +1,19 @@
 from contextlib import asynccontextmanager
-from typing import Any, Optional
+from typing import TYPE_CHECKING, Any, Optional
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query
 from fastapi.responses import PlainTextResponse
 
-from api_bootstrap import ApiContainer, build_api_container
+if TYPE_CHECKING:
+    from api_bootstrap import ApiContainer
 
 
-def create_api_app(container: Optional[ApiContainer] = None) -> FastAPI:
-    runtime_container = container or build_api_container()
+def create_api_app(container: Optional["ApiContainer"] = None) -> FastAPI:
+    runtime_container = container
+    if runtime_container is None:
+        from api_bootstrap import build_api_container
+
+        runtime_container = build_api_container()
 
     @asynccontextmanager
     async def lifespan(_: FastAPI):
