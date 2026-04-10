@@ -422,7 +422,6 @@ class DB:
                 );
                 ALTER TABLE users ADD COLUMN IF NOT EXISTS quiet_start_hour INTEGER;
                 ALTER TABLE users ADD COLUMN IF NOT EXISTS quiet_end_hour INTEGER;
-                ALTER TABLE debounce_queue ADD COLUMN IF NOT EXISTS reset_count INTEGER NOT NULL DEFAULT 0;
                 CREATE TABLE IF NOT EXISTS pending_deliveries (
                     id BIGSERIAL PRIMARY KEY,
                     tg_user_id BIGINT NOT NULL,
@@ -442,6 +441,7 @@ class DB:
                     reset_count INTEGER NOT NULL DEFAULT 0,
                     UNIQUE (tg_user_id, kinozal_id)
                 );
+                ALTER TABLE debounce_queue ADD COLUMN IF NOT EXISTS reset_count INTEGER NOT NULL DEFAULT 0;
                 """
             )
 

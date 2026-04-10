@@ -97,12 +97,15 @@ make check
 | `TMDB_TOKEN` | TMDB API Read Access Token | ✅ |
 | `DATABASE_URL` | PostgreSQL DSN | ✅ |
 | `REDIS_URL` | Redis URL | ✅ |
-| `ALLOW_MODE` | `all` — открытый доступ, `invite` — только по инвайтам | — |
+| `ALLOW_MODE` | `open` — открытый доступ, `invite` — только по инвайтам, `manual` — ручная выдача доступа | — |
 | `POLL_SECONDS` | Интервал опроса Kinozal (по умолчанию `120`) | — |
 | `BOOTSTRAP_AS_READ` | При первом запуске пометить текущие релизы как доставленные (`1`/`0`) | — |
 | `TMDB_LANGUAGE` | Язык TMDB (по умолчанию `ru-RU`) | — |
 | `DEEP_LINK_BOT_USERNAME` | Username бота для магнет-ссылок | — |
 | `MAGNET_BASE_URL` | Публичный URL магнет-сервера, например `https://magnet.example.com` | — |
+| `API_HOST` | Host для optional HTTP API (по умолчанию `0.0.0.0`) | — |
+| `API_PORT` | Порт для optional HTTP API (по умолчанию `8000`) | — |
+| `ADMIN_HTTP_TOKEN` | Токен для `/admin/*` HTTP endpoints; если пустой, admin HTTP выключен | — |
 
 > **Магнет-ссылки** требуют публичного домена с HTTPS — Telegram не открывает `http://` ссылки в клиенте.
 > Нужно: купить домен, направить его A-запись на сервер, прописать в `Caddyfile` и задать `MAGNET_BASE_URL`.
@@ -141,12 +144,16 @@ app.py                  — точка входа, регистрация роу
 app_bootstrap.py        — composition root, сборка зависимостей и router wiring
 runtime_poller.py       — тонкий worker entrypoint, сборка зависимостей
 runtime_app.py          — запуск бота и планировщика
+api.py                  — ASGI entrypoint для optional HTTP API
+api_app.py              — FastAPI routes и auth dependency
+api_bootstrap.py        — composition root для HTTP API
 
 services/worker_service.py      — orchestration цикла поллинга и доставки
 services/kinozal_service.py     — фасад над Kinozal source/details
 services/tmdb_service.py        — фасад над TMDB client
 services/subscription_service.py — матчинг и работа с подписками
 services/delivery_service.py    — доставка и группировка уведомлений
+services/admin_api_service.py   — health/metrics/admin debug/reparse facade
 
 domain/models.py        — внутренние модели item/subscription/delivery для worker pipeline
 
@@ -175,11 +182,38 @@ keyboards.py            — inline-клавиатуры
 
 ---
 
+## HTTP API
+
+`FastAPI` здесь опционален и не заменяет worker. Основной engine остаётся в poller-процессе, а HTTP-слой нужен для health, diagnostics и admin actions.
+
+Доступные endpoints:
+
+- `GET /health`
+- `GET /metrics`
+- `GET /admin/subscriptions/{user_id}`
+- `GET /admin/match-debug?kinozal_id=...&live=true`
+- `POST /admin/reparse/{kinozal_id}`
+
+`/admin/*` endpoints защищены заголовком `X-Admin-Token`. Если `ADMIN_HTTP_TOKEN` не задан, admin HTTP endpoints отключены и возвращают `503`.
+
+Примеры:
+
+```bash
+curl http://localhost:8000/health
+curl http://localhost:8000/metrics
+curl -H "X-Admin-Token: $ADMIN_HTTP_TOKEN" http://localhost:8000/admin/subscriptions/123456789
+curl -H "X-Admin-Token: $ADMIN_HTTP_TOKEN" "http://localhost:8000/admin/match-debug?kinozal_id=12345&live=true"
+curl -X POST -H "X-Admin-Token: $ADMIN_HTTP_TOKEN" http://localhost:8000/admin/reparse/12345
+```
+
+---
+
 ## Инфраструктура
 
 | Сервис | Образ | Назначение |
 |---|---|---|
 | `app` | python:3.12-slim | Telegram-бот |
+| `api` | python:3.12-slim | Optional FastAPI facade для health/admin/debug |
 | `postgres` | postgres:16 | Основная БД |
 | `redis` | redis:7-alpine | Кеш TMDB |
 | `magnet-web` | python:3.12-slim | HTTP-редирект для магнет-ссылок |
@@ -190,6 +224,7 @@ keyboards.py            — inline-клавиатуры
 ```bash
 # Логи
 docker compose logs -f app
+docker compose logs -f api
 
 # Состояние сервисов
 docker compose ps

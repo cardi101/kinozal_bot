@@ -64,6 +64,50 @@ services:
     networks:
       - kinozal_net
 
+  api:
+    build: .
+    command: ["uvicorn", "api:app", "--host", "0.0.0.0", "--port", "8000"]
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    volumes:
+      - .:/app
+    environment:
+      BOT_TOKEN: "${BOT_TOKEN}"
+      ADMIN_IDS: "${ADMIN_IDS}"
+      ALLOW_MODE: "${ALLOW_MODE}"
+      TMDB_TOKEN: "${TMDB_TOKEN}"
+      KINOZAL_USERNAME: "${KINOZAL_USERNAME}"
+      KINOZAL_PASSWORD: "${KINOZAL_PASSWORD}"
+      REQUEST_TIMEOUT: "${REQUEST_TIMEOUT}"
+      DATABASE_URL: "${DATABASE_URL}"
+      REDIS_URL: "${REDIS_URL}"
+      TMDB_LANGUAGE: "${TMDB_LANGUAGE}"
+      STARTUP_DB_RETRIES: "${STARTUP_DB_RETRIES}"
+      STARTUP_DB_RETRY_DELAY: "${STARTUP_DB_RETRY_DELAY}"
+      TMDB_CACHE_TTL: "${TMDB_CACHE_TTL}"
+      ANIME_RESOLVER_ENABLED: "${ANIME_RESOLVER_ENABLED}"
+      ANIME_RESOLVER_LOG_ONLY: "${ANIME_RESOLVER_LOG_ONLY}"
+      ANIME_MAPPINGS_DIR: "${ANIME_MAPPINGS_DIR}"
+      SOURCE_ERROR_ALERT_THRESHOLD: "${SOURCE_ERROR_ALERT_THRESHOLD}"
+      SOURCE_ERROR_ALERT_REPEAT_MINUTES: "${SOURCE_ERROR_ALERT_REPEAT_MINUTES}"
+      API_HOST: "${API_HOST:-0.0.0.0}"
+      API_PORT: "${API_PORT:-8000}"
+      ADMIN_HTTP_TOKEN: "${ADMIN_HTTP_TOKEN:-}"
+    ports:
+      - "${API_PORT:-8000}:8000"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:8000/health >/dev/null || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    networks:
+      - kinozal_net
+
   redis:
     image: redis:7-alpine
     restart: unless-stopped
@@ -87,6 +131,7 @@ services:
     restart: unless-stopped
     depends_on:
       - magnet-web
+      - api
     ports:
       - "80:80"
       - "443:443"
