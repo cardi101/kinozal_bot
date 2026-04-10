@@ -138,6 +138,7 @@ make check
 
 ```
 app.py                  — точка входа, регистрация роутеров
+app_bootstrap.py        — composition root, сборка зависимостей и router wiring
 runtime_poller.py       — тонкий worker entrypoint, сборка зависимостей
 runtime_app.py          — запуск бота и планировщика
 
