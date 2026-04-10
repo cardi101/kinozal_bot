@@ -26,6 +26,8 @@ logs/
 *~
 .idea/
 .vscode/
+.codex
+.codex/
 .DS_Store
 *.pyc
 *.pyo

@@ -69,6 +69,19 @@ docker compose up -d --build
 
 Миграции БД применяются автоматически при старте.
 
+### Локальная разработка
+
+Для локальной проверки без Docker:
+
+```bash
+make install
+make lint
+make test
+make check
+```
+
+`make install` создаёт локальный `.venv` и ставит runtime-зависимости проекта вместе с `pytest` и `ruff`.
+
 ---
 
 ## Конфигурация
@@ -125,14 +138,17 @@ docker compose up -d --build
 
 ```
 app.py                  — точка входа, регистрация роутеров
-runtime_poller.py       — цикл поллинга и доставки (3 фазы)
+runtime_poller.py       — тонкий worker entrypoint, сборка зависимостей
 runtime_app.py          — запуск бота и планировщика
 
-kinozal_source.py       — парсинг ленты Kinozal.tv
-kinozal_details.py      — детали раздачи (описание, файлы)
-tmdb_client.py          — обогащение метаданными TMDB
+services/worker_service.py      — orchestration цикла поллинга и доставки
+services/kinozal_service.py     — фасад над Kinozal source/details
+services/tmdb_service.py        — фасад над TMDB client
+services/subscription_service.py — матчинг и работа с подписками
+services/delivery_service.py    — доставка и группировка уведомлений
 
-db.py                   — операции с PostgreSQL
+repositories/worker_repository.py — repository adapter для worker-цикла
+db.py                   — операции с PostgreSQL (кандидат на дальнейшее дробление)
 redis_cache.py          — кеш TMDB-запросов
 
 subscription_matching.py   — матчинг элемента под подписку
@@ -183,7 +199,7 @@ docker compose exec -T postgres pg_dumpall -U postgres > backup.sql
 
 1. Fork the repository
 2. Create a feature branch (`git checkout -b feature/my-feature`)
-3. Make your changes and ensure `ruff check .` passes
+3. Make your changes and ensure `make check` passes
 4. Commit (`git commit -m 'Add my feature'`)
 5. Push and open a Pull Request
 
@@ -193,7 +209,7 @@ docker compose exec -T postgres pg_dumpall -U postgres > backup.sql
 
 По умолчанию бот **пропускает раздачи с русским контентом** — категории «Русский», «Русская», «Русское», «Наше Кино» и тайтлы с меткой `/ РУ /`.
 
-Чтобы отключить этот фильтр, удалите в `runtime_poller.py` блок:
+Чтобы отключить этот фильтр, удалите в `services/worker_service.py` блок:
 
 ```python
 if any(kw in category for kw in ("Русский", "Русская", "Русское", "Наше Кино")) or "/ РУ /" in title:
