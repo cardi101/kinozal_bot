@@ -68,6 +68,7 @@ docker compose up -d --build
 ```
 
 Миграции БД применяются автоматически при старте.
+Для рабочего инстанса не используй `docker compose down -v`: этот флаг удаляет volume'ы, включая Postgres data.
 
 ### Локальная разработка
 
@@ -95,6 +96,7 @@ make check
 | `KINOZAL_USERNAME` | Логин на Kinozal.tv | ✅ |
 | `KINOZAL_PASSWORD` | Пароль на Kinozal.tv | ✅ |
 | `TMDB_TOKEN` | TMDB API Read Access Token | ✅ |
+| `POSTGRES_VOLUME_NAME` | Явное имя Docker volume для Postgres data, чтобы не получить новый пустой volume при смене compose project name | — |
 | `DATABASE_URL` | PostgreSQL DSN | ✅ |
 | `REDIS_URL` | Redis URL | ✅ |
 | `ALLOW_MODE` | `open` — открытый доступ, `invite` — только по инвайтам, `manual` — ручная выдача доступа | — |
@@ -234,7 +236,12 @@ docker compose exec postgres psql -U postgres -d kinozal_news
 
 # Бэкап
 docker compose exec -T postgres pg_dumpall -U postgres > backup.sql
+
+# Активный volume с данными Postgres
+docker volume inspect "$POSTGRES_VOLUME_NAME"
 ```
+
+Postgres data привязан к явному имени volume из `POSTGRES_VOLUME_NAME`. Это снижает риск потерять БД из-за смены compose project name или другого окружения с тем же репозиторием.
 
 ---
 

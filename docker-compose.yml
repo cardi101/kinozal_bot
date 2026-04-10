@@ -145,6 +145,7 @@ volumes:
   caddy_config:
 
   postgres_data:
+    name: "${POSTGRES_VOLUME_NAME:-kinozal_bot_postgres_data}"
 
 networks:
   kinozal_net:
