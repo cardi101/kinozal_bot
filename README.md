@@ -165,7 +165,9 @@ repositories/subscriptions_repository.py — подписки, жанры, ст�
 repositories/items_repository.py  — items, timelines, cleanup, rematch
 repositories/delivery_repository.py — deliveries, debounce, muted, history
 repositories/meta_repository.py   — meta и TMDB genres
-db.py                   — тонкий PostgreSQL facade и schema init
+db_migrations.py        — migration runner и schema_migrations bookkeeping
+migrations/0001_initial_schema.sql — baseline schema migration
+db.py                   — тонкий PostgreSQL facade и запуск migrations
 redis_cache.py          — кеш TMDB-запросов
 
 subscription_matching.py   — матчинг элемента под подписку

@@ -9,6 +9,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY *.py .
 COPY domain ./domain
+COPY migrations ./migrations
 COPY repositories ./repositories
 COPY services ./services
 COPY data ./data
