@@ -1,4 +1,5 @@
 import html
+import logging
 from typing import Any, Dict, Tuple
 
 from aiogram.enums import ParseMode
@@ -9,6 +10,8 @@ from keyboards import match_review_kb
 from subscription_matching import match_subscription
 from utils import compact_spaces
 
+
+log = logging.getLogger(__name__)
 
 REVIEW_MATCH_CONFIDENCES = {"medium", "low", "unmatched"}
 
@@ -51,12 +54,14 @@ def build_match_review_alert(item: Dict[str, Any], affected_users: int) -> str:
     return "\n".join(lines)
 
 
-async def notify_admins_about_match_review(bot: Any, item: Dict[str, Any], affected_users: int) -> None:
+async def notify_admins_about_match_review(bot: Any, item: Dict[str, Any], affected_users: int) -> int:
     text = build_match_review_alert(item, affected_users)
     kinozal_id = compact_spaces(str(item.get("kinozal_id") or ""))
     reply_markup = match_review_kb(kinozal_id, has_tmdb_match=bool(item.get("tmdb_id"))) if kinozal_id else None
     if not CFG.admin_ids:
-        return
+        log.warning("Match review notification skipped: no ADMIN_IDS configured kinozal_id=%s", kinozal_id or "—")
+        return 0
+    sent_count = 0
     for admin_id in CFG.admin_ids:
         try:
             await bot.send_message(
@@ -66,8 +71,10 @@ async def notify_admins_about_match_review(bot: Any, item: Dict[str, Any], affec
                 disable_web_page_preview=True,
                 reply_markup=reply_markup,
             )
+            sent_count += 1
         except Exception:
-            continue
+            log.exception("Admin review send failed admin_id=%s kinozal_id=%s", int(admin_id), kinozal_id or "—")
+    return sent_count
 
 
 async def deliver_item_to_matching_subscriptions(db: Any, bot: Any, item: Dict[str, Any]) -> Tuple[int, int]:

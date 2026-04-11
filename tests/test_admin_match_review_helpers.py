@@ -1,0 +1,59 @@
+import asyncio
+
+from admin_match_review_helpers import notify_admins_about_match_review
+from config import CFG
+
+
+class _DummyBot:
+    def __init__(self, fail_for: int | None = None) -> None:
+        self.fail_for = fail_for
+        self.sent_to: list[int] = []
+
+    async def send_message(self, chat_id: int, *args, **kwargs) -> None:
+        if self.fail_for is not None and chat_id == self.fail_for:
+            raise RuntimeError("send failed")
+        self.sent_to.append(chat_id)
+
+
+def test_notify_admins_about_match_review_returns_successful_send_count() -> None:
+    original_admin_ids = CFG.admin_ids
+    CFG.admin_ids = (101, 202)
+    bot = _DummyBot(fail_for=202)
+    item = {
+        "kinozal_id": "2130471",
+        "source_title": "Seiren",
+        "tmdb_id": 123,
+        "tmdb_title": "Seiren",
+        "tmdb_match_confidence": "low",
+        "tmdb_match_path": "search",
+        "tmdb_match_evidence": "weak title overlap",
+    }
+
+    try:
+        sent_count = asyncio.run(notify_admins_about_match_review(bot, item, affected_users=0))
+    finally:
+        CFG.admin_ids = original_admin_ids
+
+    assert sent_count == 1
+    assert bot.sent_to == [101]
+
+
+def test_notify_admins_about_match_review_returns_zero_without_admins() -> None:
+    original_admin_ids = CFG.admin_ids
+    CFG.admin_ids = ()
+    bot = _DummyBot()
+    item = {
+        "kinozal_id": "1943921",
+        "source_title": "Zeder",
+        "tmdb_match_confidence": "unmatched",
+        "tmdb_match_path": "search",
+        "tmdb_match_evidence": "no match",
+    }
+
+    try:
+        sent_count = asyncio.run(notify_admins_about_match_review(bot, item, affected_users=0))
+    finally:
+        CFG.admin_ids = original_admin_ids
+
+    assert sent_count == 0
+    assert bot.sent_to == []

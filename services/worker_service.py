@@ -288,8 +288,19 @@ class WorkerService:
                 review = self.repository.get_pending_match_review_by_item_id(item_id)
                 if review and not review.get("notified_at"):
                     try:
-                        await notify_admins_about_match_review(self.bot, item.to_dict(), affected_users=len(matches_by_user))
-                        self.repository.mark_match_review_notified(item_id)
+                        sent_count = await notify_admins_about_match_review(
+                            self.bot,
+                            item.to_dict(),
+                            affected_users=len(matches_by_user),
+                        )
+                        if sent_count > 0:
+                            self.repository.mark_match_review_notified(item_id)
+                        else:
+                            log.warning(
+                                "Match review not marked notified item=%s kinozal_id=%s sent_count=0",
+                                item_id,
+                                kinozal_id,
+                            )
                     except Exception:
                         log.exception("Failed to notify admins about match review item=%s", item_id)
                 log.info(

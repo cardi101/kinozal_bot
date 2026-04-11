@@ -7,7 +7,11 @@ from aiogram.enums import ParseMode
 from aiogram.filters import Command, CommandObject
 from aiogram.types import CallbackQuery, Message
 
-from admin_match_review_helpers import build_match_review_alert, deliver_item_to_matching_subscriptions
+from admin_match_review_helpers import (
+    build_match_review_alert,
+    deliver_item_to_matching_subscriptions,
+    notify_admins_about_match_review,
+)
 from admin_helpers import is_admin, extract_kinozal_id_from_text, parse_admin_route_target
 from config import CFG
 from country_helpers import COUNTRY_NAMES_RU, parse_country_codes
@@ -285,6 +289,73 @@ def register_admin_match_handlers(router: Router, db: Any, tmdb: Any) -> None:
             item = db.get_item(int(review["item_id"]))
             if item:
                 await _send_match_review_card(message, item)
+
+    @router.message(Command("reviewmatch"))
+    async def cmd_reviewmatch(message: Message, command: CommandObject) -> None:
+        if not is_admin(message.from_user.id):
+            await message.answer("Только для администратора.")
+            return
+
+        kinozal_id = extract_kinozal_id(command.args or "")
+        if not kinozal_id and message.reply_to_message:
+            replied_text = message.reply_to_message.html_text or message.reply_to_message.text or message.reply_to_message.caption or ""
+            kinozal_id = extract_kinozal_id_from_text(replied_text)
+        if not kinozal_id:
+            await message.answer("Используй: /reviewmatch <kinozal_id>")
+            return
+
+        review = db.get_pending_match_review(kinozal_id)
+        item = db.find_item_by_kinozal_id(kinozal_id)
+        if not review or not item:
+            await message.answer(f"Pending review для Kinozal ID {kinozal_id} не найден.")
+            return
+
+        await _send_match_review_card(message, item)
+        sent_count = await notify_admins_about_match_review(message.bot, item, affected_users=_count_matching_users(item))
+        if sent_count > 0:
+            db.mark_match_review_notified(int(review["item_id"]))
+        await message.answer(
+            f"🧪 Review resend for {kinozal_id}: в этот чат отправлено 1 карточку, админам отправлено {sent_count}.",
+            disable_web_page_preview=True,
+        )
+
+    @router.message(Command("reviewpending"))
+    async def cmd_reviewpending(message: Message, command: CommandObject) -> None:
+        if not is_admin(message.from_user.id):
+            await message.answer("Только для администратора.")
+            return
+
+        raw = compact_spaces(str(command.args or ""))
+        limit = 10
+        if raw.isdigit():
+            limit = max(1, min(int(raw), 30))
+
+        reviews = db.list_pending_match_reviews(limit=limit)
+        if not reviews:
+            await message.answer("Очередь match review пуста.")
+            return
+
+        resent_admin = 0
+        shown_here = 0
+        for review in reviews:
+            item = db.get_item(int(review["item_id"]))
+            if not item:
+                continue
+            shown_here += 1
+            await _send_match_review_card(message, item)
+            item_sent_count = await notify_admins_about_match_review(
+                message.bot,
+                item,
+                affected_users=_count_matching_users(item),
+            )
+            resent_admin += item_sent_count
+            if item_sent_count > 0:
+                db.mark_match_review_notified(int(review["item_id"]))
+
+        await message.answer(
+            f"🧪 Review resend done: карточек в этот чат {shown_here}, отправок админам {resent_admin}.",
+            disable_web_page_preview=True,
+        )
 
     @router.message(Command("matchcandidates"))
     async def cmd_matchcandidates(message: Message, command: CommandObject) -> None:
