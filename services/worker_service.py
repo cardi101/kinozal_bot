@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import time
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Set
 
@@ -9,7 +10,7 @@ from domain import DeliveryCandidate, ReleaseItem, SubscriptionRecord
 from media_detection import is_non_video_release
 from release_versioning import extract_kinozal_id, parse_episode_progress
 from source_health import note_source_cycle_failure, note_source_cycle_success
-from utils import compact_spaces
+from utils import compact_spaces, utc_ts
 
 log = logging.getLogger(__name__)
 
@@ -32,13 +33,83 @@ class WorkerService:
         self.bot = bot
 
     @staticmethod
+    def _new_cycle_metrics() -> Dict[str, int]:
+        return {
+            "items_fetched_total": 0,
+            "items_filtered_non_video_total": 0,
+            "items_filtered_russian_total": 0,
+            "items_tmdb_enriched_total": 0,
+            "items_saved_new_total": 0,
+            "items_saved_updated_total": 0,
+            "release_text_changes_total": 0,
+            "debounce_queued_total": 0,
+            "pending_queued_total": 0,
+            "deliveries_sent_total": 0,
+            "grouped_messages_total": 0,
+            "bootstrap_marked_read_total": 0,
+        }
+
+    def _meta_int(self, key: str, default: int = 0) -> int:
+        try:
+            value = self.repository.get_meta(key)
+            return int(value) if value is not None else default
+        except Exception:
+            return default
+
+    def _set_metric(self, key: str, value: Any) -> None:
+        self.repository.set_meta(key, str(value))
+
+    def _increment_metric(self, key: str, delta: int) -> None:
+        if delta <= 0:
+            return
+        self._set_metric(key, self._meta_int(key) + delta)
+
+    def _record_cycle_metrics(
+        self,
+        cycle_started_at: int,
+        cycle_metrics: Dict[str, int],
+        duration_seconds: float,
+        failed: bool,
+    ) -> None:
+        self._increment_metric("metrics_worker_cycles_total", 1)
+        if failed:
+            self._increment_metric("metrics_worker_cycle_failures_total", 1)
+
+        self._set_metric("metrics_worker_cycle_last_started_at", cycle_started_at)
+        self._set_metric("metrics_worker_cycle_last_finished_at", utc_ts())
+        self._set_metric("metrics_worker_cycle_duration_seconds", f"{duration_seconds:.6f}")
+        self._set_metric("metrics_worker_last_cycle_items_fetched", cycle_metrics["items_fetched_total"])
+        self._set_metric("metrics_worker_last_cycle_new_items", cycle_metrics["items_saved_new_total"])
+        self._set_metric("metrics_worker_last_cycle_updated_items", cycle_metrics["items_saved_updated_total"])
+        self._set_metric("metrics_worker_last_cycle_deliveries_sent", cycle_metrics["deliveries_sent_total"])
+
+        for metric_name in (
+            "items_fetched_total",
+            "items_filtered_non_video_total",
+            "items_filtered_russian_total",
+            "items_tmdb_enriched_total",
+            "items_saved_new_total",
+            "items_saved_updated_total",
+            "release_text_changes_total",
+            "debounce_queued_total",
+            "pending_queued_total",
+            "deliveries_sent_total",
+            "grouped_messages_total",
+            "bootstrap_marked_read_total",
+        ):
+            self._increment_metric(f"metrics_worker_{metric_name}", cycle_metrics[metric_name])
+
+    @staticmethod
     def _quiet_active(start_h: int, end_h: int, current_h: int) -> bool:
         if start_h < end_h:
             return start_h <= current_h < end_h
         return current_h >= start_h or current_h < end_h
 
-    async def process_new_items(self) -> None:
+    async def process_new_items(self, cycle_metrics: Dict[str, int] | None = None) -> None:
+        if cycle_metrics is None:
+            cycle_metrics = self._new_cycle_metrics()
         items = await self.kinozal_service.fetch_latest()
+        cycle_metrics["items_fetched_total"] += len(items)
         if not items:
             log.info("Source returned no items")
             return
@@ -53,12 +124,14 @@ class WorkerService:
         for raw_item in items:
             source_text = f"{raw_item.get('source_title') or ''} {raw_item.get('source_description') or ''}"
             if raw_item.get("media_type") == "other" or is_non_video_release(source_text):
+                cycle_metrics["items_filtered_non_video_total"] += 1
                 log.info("Skip non-video item: %s", raw_item.get("source_title"))
                 continue
 
             category = str(raw_item.get("source_category_name") or "")
             title = str(raw_item.get("source_title") or "")
             if any(kw in category for kw in ("Русский", "Русская", "Русское", "Наше Кино")) or "/ РУ /" in title:
+                cycle_metrics["items_filtered_russian_total"] += 1
                 log.info("Skip Russian item: %s [%s]", title, category)
                 continue
 
@@ -70,6 +143,7 @@ class WorkerService:
                         if value is not None and not enriched.get(key):
                             enriched.set(key, value)
             else:
+                cycle_metrics["items_tmdb_enriched_total"] += 1
                 enriched = await self.tmdb_service.enrich_item(raw_item.clone())
                 if not enriched.get("tmdb_id") and compact_spaces(str(enriched.get("source_category_name") or "")):
                     log.info(
@@ -85,9 +159,11 @@ class WorkerService:
             live_items_by_id[item_id] = enriched
 
             if is_new:
+                cycle_metrics["items_saved_new_total"] += 1
                 new_item_ids.append(item_id)
                 touched_item_ids.append(item_id)
             elif materially_changed:
+                cycle_metrics["items_saved_updated_total"] += 1
                 touched_item_ids.append(item_id)
 
             if not is_new and first_run_seen and self.repository.was_delivered_to_anyone(item_id):
@@ -106,6 +182,7 @@ class WorkerService:
                         if stored_release_text:
                             old_release_texts[item_id] = stored_release_text
                             release_text_changed_ids.add(item_id)
+                            cycle_metrics["release_text_changes_total"] += 1
                             if item_id not in touched_item_ids:
                                 touched_item_ids.append(item_id)
                             log.info("Release text changed for item=%s source_uid=%s", item_id, enriched.source_uid)
@@ -130,6 +207,7 @@ class WorkerService:
                             enriched.set("source_episode_progress", details_progress)
                             new_item_id, new_is_new, _ = self.repository.save_item(enriched.to_dict())
                             if new_is_new:
+                                cycle_metrics["items_saved_new_total"] += 1
                                 enriched.set("id", new_item_id)
                                 live_items_by_id[new_item_id] = enriched.clone()
                                 new_item_ids.append(new_item_id)
@@ -144,6 +222,7 @@ class WorkerService:
             for item_id in new_item_ids:
                 for sub in enabled_subs:
                     self.delivery_service.record_delivery(sub.tg_user_id, item_id, [sub])
+                    cycle_metrics["bootstrap_marked_read_total"] += 1
             self.repository.set_meta("bootstrap_done", "1")
             log.info("Bootstrap complete: %s items marked as delivered", len(new_item_ids))
             return
@@ -210,6 +289,7 @@ class WorkerService:
                         sub_ids_str,
                         delay_seconds=120,
                     )
+                    cycle_metrics["debounce_queued_total"] += 1
                     log.info("Debounce queued item=%s kinozal_id=%s to user=%s", item_id, kinozal_id, tg_user_id)
                 else:
                     all_pending.setdefault(tg_user_id, []).append(
@@ -222,15 +302,15 @@ class WorkerService:
                     )
 
         current_hour = datetime.now(timezone.utc).hour
-        await self._flush_due_pending_deliveries(current_hour)
+        await self._flush_due_pending_deliveries(current_hour, cycle_metrics)
         await self._flush_due_debounce(all_pending)
 
         if not all_pending:
             return
 
-        await self._deliver_current_cycle(all_pending, current_hour)
+        await self._deliver_current_cycle(all_pending, current_hour, cycle_metrics)
 
-    async def _flush_due_pending_deliveries(self, current_hour: int) -> None:
+    async def _flush_due_pending_deliveries(self, current_hour: int, cycle_metrics: Dict[str, int]) -> None:
         due_pending = self.repository.pop_due_pending_deliveries(current_hour)
         for flush_uid, pending_deliveries in due_pending.items():
             for pending_delivery in pending_deliveries:
@@ -269,6 +349,7 @@ class WorkerService:
                         old_release_text=str(pending_delivery.get("old_release_text") or ""),
                     )
                     self.delivery_service.record_delivery(flush_uid, pending_item_id, pending_subs)
+                    cycle_metrics["deliveries_sent_total"] += 1
                     self.repository.delete_pending_delivery(flush_uid, pending_item_id)
                     await asyncio.sleep(0.12)
                 except Exception:
@@ -323,6 +404,7 @@ class WorkerService:
         self,
         all_pending: Dict[int, List[DeliveryCandidate]],
         current_hour: int,
+        cycle_metrics: Dict[str, int],
     ) -> None:
         for tg_user_id, deliveries in all_pending.items():
             try:
@@ -341,6 +423,7 @@ class WorkerService:
                             delivery.old_release_text,
                             delivery.is_release_text_change,
                         )
+                    cycle_metrics["pending_queued_total"] += len(deliveries)
                     log.info(
                         "Queued %d deliveries for user=%s (quiet %02d:00-%02d:00 UTC)",
                         len(deliveries),
@@ -377,6 +460,7 @@ class WorkerService:
                             old_release_text=delivery.old_release_text,
                         )
                         self.delivery_service.record_delivery(tg_user_id, delivery.item_id, delivery.subs)
+                        cycle_metrics["deliveries_sent_total"] += 1
                         await asyncio.sleep(0.12)
                     except Exception:
                         log.exception("Error delivering rtc item=%s to user=%s", delivery.item_id, tg_user_id)
@@ -386,6 +470,7 @@ class WorkerService:
                         continue
                     try:
                         await self.delivery_service.send_single(tg_user_id, delivery)
+                        cycle_metrics["deliveries_sent_total"] += 1
                     except Exception:
                         log.exception("Error delivering item=%s to user=%s", delivery.item_id, tg_user_id)
 
@@ -402,11 +487,14 @@ class WorkerService:
                                 [delivery.item for delivery in group],
                                 all_subs,
                             )
+                            cycle_metrics["grouped_messages_total"] += 1
                             for delivery in group:
                                 self.delivery_service.record_delivery(tg_user_id, delivery.item_id, delivery.subs)
+                                cycle_metrics["deliveries_sent_total"] += 1
                                 await asyncio.sleep(0.12)
                         else:
                             await self.delivery_service.send_single(tg_user_id, group[0])
+                            cycle_metrics["deliveries_sent_total"] += 1
                     except Exception:
                         log.exception("Error delivering tmdb_group tmdb=%s to user=%s", tmdb_id, tg_user_id)
             except Exception:
@@ -414,12 +502,24 @@ class WorkerService:
 
     async def poll_forever(self) -> None:
         while True:
+            cycle_started_at = utc_ts()
+            cycle_started_monotonic = time.monotonic()
+            cycle_metrics = self._new_cycle_metrics()
+            cycle_failed = False
             try:
-                await self.process_new_items()
+                await self.process_new_items(cycle_metrics)
                 await note_source_cycle_success(self.repository.db, self.bot)
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
+                cycle_failed = True
                 await note_source_cycle_failure(self.repository.db, self.bot, exc)
                 log.exception("Poller cycle failed")
+            finally:
+                self._record_cycle_metrics(
+                    cycle_started_at,
+                    cycle_metrics,
+                    time.monotonic() - cycle_started_monotonic,
+                    failed=cycle_failed,
+                )
             await asyncio.sleep(CFG.poll_seconds)

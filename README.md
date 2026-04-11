@@ -204,7 +204,7 @@ keyboards.py            — inline-клавиатуры
 - `GET /admin/match-debug?kinozal_id=...&live=true`
 - `POST /admin/reparse/{kinozal_id}`
 
-`/metrics` отдаёт Prometheus text exposition format и подходит для обычного scrape Prometheus/Grafana Agent.
+`/metrics` отдаёт Prometheus text exposition format и включает health/db метрики, а также worker counters вроде `items_fetched`, `deliveries_sent`, `debounce_queued` и длительности последнего цикла.
 
 `/admin/*` endpoints защищены заголовком `X-Admin-Token`. Если `ADMIN_HTTP_TOKEN` не задан, admin HTTP endpoints отключены и возвращают `503`.
 `SENTRY_DSN` опционален: если он задан, и worker, и `api` будут отправлять unhandled exceptions и `ERROR`-логи в Sentry.

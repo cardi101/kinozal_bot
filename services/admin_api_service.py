@@ -27,6 +27,20 @@ class AdminApiService:
             "source_last_failed_at": int(self.db.get_meta("source_last_failed_at") or 0),
         }
 
+    def _meta_int(self, key: str, default: int = 0) -> int:
+        try:
+            value = self.db.get_meta(key)
+            return int(value) if value is not None else default
+        except Exception:
+            return default
+
+    def _meta_float(self, key: str, default: float = 0.0) -> float:
+        try:
+            value = self.db.get_meta(key)
+            return float(value) if value is not None else default
+        except Exception:
+            return default
+
     def get_metrics_payload(self) -> bytes:
         db_ok = True
         try:
@@ -36,9 +50,9 @@ class AdminApiService:
 
         users_total = self.db.count_users()
         subscriptions_enabled = len(self.db.list_enabled_subscriptions())
-        source_fail_streak = int(self.db.get_meta("source_fail_streak") or 0)
-        source_last_success_at = int(self.db.get_meta("source_last_success_at") or 0)
-        source_last_failed_at = int(self.db.get_meta("source_last_failed_at") or 0)
+        source_fail_streak = self._meta_int("source_fail_streak")
+        source_last_success_at = self._meta_int("source_last_success_at")
+        source_last_failed_at = self._meta_int("source_last_failed_at")
         source_status = self.db.get_meta("source_health_status") or "unknown"
         return build_metrics_payload(
             database_up=db_ok,
@@ -48,6 +62,94 @@ class AdminApiService:
             source_last_success_at=source_last_success_at,
             source_last_failed_at=source_last_failed_at,
             source_status=source_status,
+            extra_counters={
+                "kinozal_bot_worker_cycles_total": (
+                    "Total completed worker cycles",
+                    self._meta_int("metrics_worker_cycles_total"),
+                ),
+                "kinozal_bot_worker_cycle_failures_total": (
+                    "Total failed worker cycles",
+                    self._meta_int("metrics_worker_cycle_failures_total"),
+                ),
+                "kinozal_bot_worker_items_fetched_total": (
+                    "Total items fetched from source",
+                    self._meta_int("metrics_worker_items_fetched_total"),
+                ),
+                "kinozal_bot_worker_items_filtered_non_video_total": (
+                    "Total source items skipped as non-video",
+                    self._meta_int("metrics_worker_items_filtered_non_video_total"),
+                ),
+                "kinozal_bot_worker_items_filtered_russian_total": (
+                    "Total source items skipped as Russian content",
+                    self._meta_int("metrics_worker_items_filtered_russian_total"),
+                ),
+                "kinozal_bot_worker_items_tmdb_enriched_total": (
+                    "Total items passed through TMDB enrichment",
+                    self._meta_int("metrics_worker_items_tmdb_enriched_total"),
+                ),
+                "kinozal_bot_worker_items_saved_new_total": (
+                    "Total new items inserted into database",
+                    self._meta_int("metrics_worker_items_saved_new_total"),
+                ),
+                "kinozal_bot_worker_items_saved_updated_total": (
+                    "Total existing items materially updated",
+                    self._meta_int("metrics_worker_items_saved_updated_total"),
+                ),
+                "kinozal_bot_worker_release_text_changes_total": (
+                    "Total detected release text changes",
+                    self._meta_int("metrics_worker_release_text_changes_total"),
+                ),
+                "kinozal_bot_worker_debounce_queued_total": (
+                    "Total deliveries queued into debounce",
+                    self._meta_int("metrics_worker_debounce_queued_total"),
+                ),
+                "kinozal_bot_worker_pending_queued_total": (
+                    "Total deliveries queued due to quiet hours",
+                    self._meta_int("metrics_worker_pending_queued_total"),
+                ),
+                "kinozal_bot_worker_deliveries_sent_total": (
+                    "Total delivered item notifications",
+                    self._meta_int("metrics_worker_deliveries_sent_total"),
+                ),
+                "kinozal_bot_worker_grouped_messages_total": (
+                    "Total grouped delivery messages sent",
+                    self._meta_int("metrics_worker_grouped_messages_total"),
+                ),
+                "kinozal_bot_worker_bootstrap_marked_read_total": (
+                    "Total deliveries marked as read during bootstrap",
+                    self._meta_int("metrics_worker_bootstrap_marked_read_total"),
+                ),
+            },
+            extra_gauges={
+                "kinozal_bot_worker_cycle_duration_seconds": (
+                    "Last completed worker cycle duration in seconds",
+                    self._meta_float("metrics_worker_cycle_duration_seconds"),
+                ),
+                "kinozal_bot_worker_cycle_last_started_at": (
+                    "Last worker cycle start timestamp",
+                    self._meta_int("metrics_worker_cycle_last_started_at"),
+                ),
+                "kinozal_bot_worker_cycle_last_finished_at": (
+                    "Last worker cycle finish timestamp",
+                    self._meta_int("metrics_worker_cycle_last_finished_at"),
+                ),
+                "kinozal_bot_worker_last_cycle_items_fetched": (
+                    "Items fetched in the last worker cycle",
+                    self._meta_int("metrics_worker_last_cycle_items_fetched"),
+                ),
+                "kinozal_bot_worker_last_cycle_new_items": (
+                    "New items inserted in the last worker cycle",
+                    self._meta_int("metrics_worker_last_cycle_new_items"),
+                ),
+                "kinozal_bot_worker_last_cycle_updated_items": (
+                    "Updated items in the last worker cycle",
+                    self._meta_int("metrics_worker_last_cycle_updated_items"),
+                ),
+                "kinozal_bot_worker_last_cycle_deliveries_sent": (
+                    "Delivered item notifications in the last worker cycle",
+                    self._meta_int("metrics_worker_last_cycle_deliveries_sent"),
+                ),
+            },
         )
 
     def get_user_subscriptions(self, user_id: int) -> Dict[str, Any]:
