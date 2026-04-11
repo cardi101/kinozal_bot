@@ -79,9 +79,11 @@ make install
 make lint
 make test
 make check
+make smoke
 ```
 
 `make install` создаёт локальный `.venv` и ставит runtime-зависимости проекта вместе с `pytest` и `ruff`.
+`make smoke` поднимает `postgres + redis + api`, проверяет `/health`, `schema_migrations` и bootstrap-пути `app`/`api` внутри контейнера.
 
 ---
 

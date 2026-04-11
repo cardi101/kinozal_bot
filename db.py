@@ -123,6 +123,10 @@ class PGCompatConnection:
     def commit(self) -> None:
         return None
 
+    def close(self) -> None:
+        with self._lock:
+            self._close_raw_quietly()
+
 
 class DB:
     def __init__(self, dsn: str):
@@ -172,3 +176,7 @@ class DB:
 
     def row_to_dict(self, row: Optional[Any]) -> Optional[Dict[str, Any]]:
         return dict(row) if row else None
+
+    def close(self) -> None:
+        with self.lock:
+            self.conn.close()
