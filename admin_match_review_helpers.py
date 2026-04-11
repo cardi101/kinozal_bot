@@ -48,7 +48,10 @@ def build_match_review_alert(item: Dict[str, Any], affected_users: int) -> str:
         lines.append(f"/rejectmatch {html.escape(str(kinozal_id))}")
     lines.append(f"/nomatch {html.escape(str(kinozal_id))}")
     lines.append(f"/forcedeliver {html.escape(str(kinozal_id))}")
-    lines.append(f"/overridematch {html.escape(str(kinozal_id))} <tmdb_id> <movie|tv>")
+    lines.append(
+        f"/overridematch {html.escape(str(kinozal_id))} "
+        f"&lt;tmdb_id&gt; &lt;movie|tv&gt;"
+    )
     lines.append(f"/matchcandidates {html.escape(str(kinozal_id))}")
     lines.append(f"/explainmatch {html.escape(str(kinozal_id))}")
     return "\n".join(lines)

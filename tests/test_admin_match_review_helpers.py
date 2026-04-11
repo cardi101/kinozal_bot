@@ -1,6 +1,6 @@
 import asyncio
 
-from admin_match_review_helpers import notify_admins_about_match_review
+from admin_match_review_helpers import build_match_review_alert, notify_admins_about_match_review
 from config import CFG
 
 
@@ -57,3 +57,22 @@ def test_notify_admins_about_match_review_returns_zero_without_admins() -> None:
 
     assert sent_count == 0
     assert bot.sent_to == []
+
+
+def test_build_match_review_alert_escapes_override_placeholders() -> None:
+    text = build_match_review_alert(
+        {
+            "kinozal_id": "1943921",
+            "source_title": "Zeder",
+            "tmdb_id": 123,
+            "tmdb_title": "Zeder",
+            "tmdb_match_confidence": "low",
+            "tmdb_match_path": "search",
+            "tmdb_match_evidence": "weak overlap",
+        },
+        affected_users=0,
+    )
+
+    assert "&lt;tmdb_id&gt;" in text
+    assert "&lt;movie|tv&gt;" in text
+    assert "<tmdb_id>" not in text
