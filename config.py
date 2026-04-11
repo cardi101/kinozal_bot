@@ -25,6 +25,16 @@ def _env_int(name: str, default: int) -> int:
     return int(stripped)
 
 
+def _env_float(name: str, default: float) -> float:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    stripped = value.strip()
+    if not stripped:
+        return default
+    return float(stripped)
+
+
 @dataclass
 class Config:
     bot_token: str = _env_str("BOT_TOKEN")
@@ -56,6 +66,10 @@ class Config:
 
     source_error_alert_threshold: int = _env_int("SOURCE_ERROR_ALERT_THRESHOLD", 3)
     source_error_alert_repeat_minutes: int = _env_int("SOURCE_ERROR_ALERT_REPEAT_MINUTES", 180)
+    sentry_dsn: str = _env_str("SENTRY_DSN")
+    sentry_environment: str = _env_str("SENTRY_ENVIRONMENT", "production")
+    sentry_release: str = _env_str("SENTRY_RELEASE")
+    sentry_traces_sample_rate: float = _env_float("SENTRY_TRACES_SAMPLE_RATE", 0.0)
     api_host: str = _env_str("API_HOST", "0.0.0.0")
     api_port: int = _env_int("API_PORT", 8000)
     admin_http_token: str = _env_str("ADMIN_HTTP_TOKEN")

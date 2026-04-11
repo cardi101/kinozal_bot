@@ -110,6 +110,10 @@ make smoke
 | `API_HOST` | Host для optional HTTP API (по умолчанию `0.0.0.0`) | — |
 | `API_PORT` | Порт для optional HTTP API (по умолчанию `8000`) | — |
 | `ADMIN_HTTP_TOKEN` | Токен для `/admin/*` HTTP endpoints; если пустой, admin HTTP выключен | — |
+| `SENTRY_DSN` | DSN для отправки runtime-ошибок в Sentry; если пустой, Sentry выключен | — |
+| `SENTRY_ENVIRONMENT` | Environment tag для Sentry (например `production`, `staging`) | — |
+| `SENTRY_TRACES_SAMPLE_RATE` | Trace sampling rate для Sentry, по умолчанию `0.0` | — |
+| `SENTRY_RELEASE` | Release tag для Sentry, если хочешь привязку ошибок к commit/release | — |
 
 > **Магнет-ссылки** требуют публичного домена с HTTPS — Telegram не открывает `http://` ссылки в клиенте.
 > Нужно: купить домен, направить его A-запись на сервер, прописать в `Caddyfile` и задать `MAGNET_BASE_URL`.
@@ -203,6 +207,7 @@ keyboards.py            — inline-клавиатуры
 `/metrics` отдаёт Prometheus text exposition format и подходит для обычного scrape Prometheus/Grafana Agent.
 
 `/admin/*` endpoints защищены заголовком `X-Admin-Token`. Если `ADMIN_HTTP_TOKEN` не задан, admin HTTP endpoints отключены и возвращают `503`.
+`SENTRY_DSN` опционален: если он задан, и worker, и `api` будут отправлять unhandled exceptions и `ERROR`-логи в Sentry.
 
 Примеры:
 

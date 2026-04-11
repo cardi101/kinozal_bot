@@ -15,6 +15,7 @@ from kinozal_source import KinozalSource
 from menu_handlers import register_menu_handlers
 from mute_title_handlers import register_mute_title_handlers
 from muted_list_handlers import register_muted_list_handlers
+from observability import init_sentry
 from quiet_hours_handlers import register_quiet_hours_handlers
 from redis_cache import RedisCache
 from runtime_app import AppRuntime
@@ -76,6 +77,7 @@ def build_router(db: Any, source: Any, tmdb: Any) -> Router:
 
 def build_app() -> AppContainer:
     log = configure_logging()
+    init_sentry(CFG, "worker", log)
     db = DB(CFG.database_url)
     cache = RedisCache(CFG.redis_url)
     tmdb = TMDBClient(CFG, db, cache, CFG.tmdb_token, CFG.language, log)

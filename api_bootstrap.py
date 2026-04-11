@@ -6,6 +6,7 @@ from typing import Any
 from config import CFG
 from db import DB
 from kinozal_source import KinozalSource
+from observability import init_sentry
 from redis_cache import RedisCache
 from services.admin_api_service import AdminApiService
 from services.kinozal_service import KinozalService
@@ -36,6 +37,7 @@ def configure_logging() -> logging.Logger:
 
 def build_api_container() -> ApiContainer:
     log = configure_logging()
+    init_sentry(CFG, "api", log)
     db = DB(CFG.database_url)
     cache = RedisCache(CFG.redis_url)
     tmdb = TMDBClient(CFG, db, cache, CFG.tmdb_token, CFG.language, log)
