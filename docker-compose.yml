@@ -147,6 +147,8 @@ services:
     depends_on:
       api:
         condition: service_healthy
+      alertmanager:
+        condition: service_started
     command:
       - "--config.file=/etc/prometheus/prometheus.yml"
       - "--storage.tsdb.path=/prometheus"
@@ -180,11 +182,52 @@ services:
     networks:
       - kinozal_net
 
+  alert-webhook:
+    build: .
+    command: ["uvicorn", "alert_webhook:app", "--host", "0.0.0.0", "--port", "8010"]
+    restart: unless-stopped
+    profiles: ["monitoring"]
+    volumes:
+      - .:/app
+    environment:
+      BOT_TOKEN: "${BOT_TOKEN}"
+      ADMIN_IDS: "${ADMIN_IDS}"
+      ALLOW_MODE: "${ALLOW_MODE}"
+      DATABASE_URL: "${DATABASE_URL}"
+      DISABLE_WEB_PAGE_PREVIEW: "${DISABLE_WEB_PAGE_PREVIEW}"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:8010/health >/dev/null || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    networks:
+      - kinozal_net
+
+  alertmanager:
+    image: prom/alertmanager:v0.27.0
+    restart: unless-stopped
+    profiles: ["monitoring"]
+    depends_on:
+      alert-webhook:
+        condition: service_healthy
+    command:
+      - "--config.file=/etc/alertmanager/alertmanager.yml"
+      - "--storage.path=/alertmanager"
+    ports:
+      - "${ALERTMANAGER_PORT:-9093}:9093"
+    volumes:
+      - ./monitoring/alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+      - alertmanager_data:/alertmanager
+    networks:
+      - kinozal_net
+
 volumes:
   caddy_data:
   caddy_config:
   prometheus_data:
   grafana_data:
+  alertmanager_data:
 
   postgres_data:
     name: "${POSTGRES_VOLUME_NAME:-kinozal_bot_postgres_data}"

@@ -117,6 +117,7 @@ make monitoring-up
 | `SENTRY_TRACES_SAMPLE_RATE` | Trace sampling rate для Sentry, по умолчанию `0.0` | — |
 | `SENTRY_RELEASE` | Release tag для Sentry, если хочешь привязку ошибок к commit/release | — |
 | `PROMETHEUS_PORT` | Порт optional Prometheus (по умолчанию `9090`) | — |
+| `ALERTMANAGER_PORT` | Порт optional Alertmanager (по умолчанию `9093`) | — |
 | `GRAFANA_PORT` | Порт optional Grafana (по умолчанию `3000`) | — |
 | `GRAFANA_ADMIN_USER` | Admin user для Grafana | — |
 | `GRAFANA_ADMIN_PASSWORD` | Admin password для Grafana | — |
@@ -238,6 +239,7 @@ make monitoring-up
 После старта доступны:
 
 - `Prometheus` — `http://localhost:${PROMETHEUS_PORT:-9090}`
+- `Alertmanager` — `http://localhost:${ALERTMANAGER_PORT:-9093}`
 - `Grafana` — `http://localhost:${GRAFANA_PORT:-3000}`
 
 В `Grafana` datasource и dashboard провиженятся автоматически:
@@ -253,7 +255,7 @@ make monitoring-up
 - `KinozalWorkerCycleStalled`
 - `KinozalWorkerCycleFailures`
 
-Сейчас это именно rule files в `Prometheus`. Если захочешь реальные уведомления, следующим шагом можно добавить `Alertmanager`.
+`Alertmanager` тоже поднимается этим profile и отправляет firing/resolved alerts администраторам в Telegram через внутренний сервис `alert-webhook`. Этот webhook не публикуется наружу и доступен только внутри compose-сети.
 
 ---
 
@@ -268,6 +270,8 @@ make monitoring-up
 | `magnet-web` | python:3.12-slim | HTTP-редирект для магнет-ссылок |
 | `caddy` | caddy:2 | Обратный прокси с TLS |
 | `prometheus` | prom/prometheus:v2.54.1 | Optional metrics scraping и alert rules |
+| `alertmanager` | prom/alertmanager:v0.27.0 | Optional alert routing |
+| `alert-webhook` | python:3.12-slim | Internal Telegram forwarder для Alertmanager alerts |
 | `grafana` | grafana/grafana:11.1.0 | Optional dashboards |
 
 ### Диагностика

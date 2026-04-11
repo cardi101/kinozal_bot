@@ -39,7 +39,7 @@ smoke:
 	docker compose exec -T postgres psql -U postgres -d kinozal_news -c "select version, name from schema_migrations order by version;"
 
 monitoring-up:
-	docker compose --profile monitoring up -d prometheus grafana
+	docker compose --profile monitoring up -d alert-webhook alertmanager prometheus grafana
 
 monitoring-down:
-	docker compose --profile monitoring stop grafana prometheus
+	docker compose --profile monitoring stop grafana prometheus alertmanager alert-webhook
