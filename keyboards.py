@@ -210,3 +210,19 @@ def match_review_kb(kinozal_id: str, has_tmdb_match: bool) -> InlineKeyboardMark
     kb.button(text="🧭 Explain", callback_data=f"matchreview:explain:{kinozal_id}")
     kb.adjust(2, 2)
     return kb.as_markup()
+
+
+def match_candidates_kb(kinozal_id: str, candidates: List[Dict[str, Any]]) -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    for row in candidates[:8]:
+        tmdb_id = row.get("tmdb_id")
+        media_type = str(row.get("media_type") or "movie")
+        if not tmdb_id:
+            continue
+        title = str(row.get("title") or row.get("original_title") or "TMDB")
+        kb.button(
+            text=f"Use {int(tmdb_id)} {media_type} · {title[:20]}",
+            callback_data=f"matchpick:{kinozal_id}:{int(tmdb_id)}:{media_type}",
+        )
+    kb.adjust(1)
+    return kb.as_markup()

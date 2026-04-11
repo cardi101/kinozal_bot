@@ -12,6 +12,7 @@ from admin_helpers import is_admin, extract_kinozal_id_from_text, parse_admin_ro
 from config import CFG
 from country_helpers import COUNTRY_NAMES_RU, parse_country_codes
 from delivery_sender import send_item_to_user
+from keyboards import match_candidates_kb
 from match_debug_helpers import build_match_explanation, rematch_item_live, _strip_existing_match_fields
 from release_versioning import describe_variant_change, extract_kinozal_id, format_variant_summary
 from subscription_matching import match_subscription
@@ -82,7 +83,56 @@ def register_admin_match_handlers(router: Router, db: Any, tmdb: Any) -> None:
 
         lines.append("")
         lines.append(f"Override: <code>/overridematch {html.escape(str(kinozal_id))} &lt;tmdb_id&gt; &lt;movie|tv&gt;</code>")
-        await message.answer("\n".join(lines), parse_mode=ParseMode.HTML, disable_web_page_preview=True)
+        await message.answer(
+            "\n".join(lines),
+            parse_mode=ParseMode.HTML,
+            disable_web_page_preview=True,
+            reply_markup=match_candidates_kb(kinozal_id, candidates),
+        )
+
+    async def _override_match(
+        message: Message,
+        admin_user_id: int,
+        kinozal_id: str,
+        tmdb_id_raw: str,
+        media_type: str,
+    ) -> None:
+        item = db.find_item_by_kinozal_id(kinozal_id)
+        if not item:
+            await message.answer(f"Не нашёл релиз в базе по Kinozal ID {kinozal_id}.")
+            return
+
+        try:
+            details = await tmdb.get_details(media_type, int(tmdb_id_raw))
+        except Exception:
+            log.exception("Admin override match failed kinozal_id=%s tmdb_id=%s", kinozal_id, tmdb_id_raw)
+            await message.answer("Не удалось получить details из TMDB. Смотри лог app.")
+            return
+
+        updated_item = dict(item)
+        updated_item.update(details)
+        updated_item["tmdb_match_path"] = "admin_override"
+        updated_item["tmdb_match_confidence"] = "verified"
+        updated_item["tmdb_match_evidence"] = f"admin override by {admin_user_id}"
+        item_id, _, _ = db.save_item(updated_item)
+        refreshed = db.get_item(item_id) or updated_item
+        db.set_match_override(kinozal_id, int(tmdb_id_raw), media_type, source="admin_override")
+        review = db.get_pending_match_review(kinozal_id)
+        if review:
+            db.resolve_match_review(int(review["item_id"]), "overridden", admin_user_id, note=f"override to {tmdb_id_raw}/{media_type}")
+        matched_users, delivered_count = await deliver_item_to_matching_subscriptions(db, message.bot, refreshed)
+        title = compact_spaces(str(refreshed.get("tmdb_title") or refreshed.get("tmdb_original_title") or "")) or "—"
+        await message.answer(
+            "\n".join(
+                [
+                    f"✅ Override saved for Kinozal ID {kinozal_id}",
+                    f"TMDB: {title} (id={int(tmdb_id_raw)}, media={media_type})",
+                    f"Подходящих подписок: {matched_users}",
+                    f"Новых уведомлений отправлено: {delivered_count}",
+                ]
+            ),
+            disable_web_page_preview=True,
+        )
 
     async def _approve_match(message: Message, admin_user_id: int, kinozal_id: str) -> None:
         review = db.get_pending_match_review(kinozal_id)
@@ -212,6 +262,25 @@ def register_admin_match_handlers(router: Router, db: Any, tmdb: Any) -> None:
             return
         await callback.answer("Неизвестное действие", show_alert=True)
 
+    @router.callback_query(F.data.startswith("matchpick:"))
+    async def cb_matchpick(callback: CallbackQuery) -> None:
+        if not is_admin(callback.from_user.id):
+            await callback.answer("Только для администратора.", show_alert=True)
+            return
+        parts = (callback.data or "").split(":", 3)
+        if len(parts) != 4:
+            await callback.answer("Некорректное действие", show_alert=True)
+            return
+        _, kinozal_id, tmdb_id_raw, media_type = parts
+        kinozal_id = extract_kinozal_id(kinozal_id or "")
+        media_type = compact_spaces(media_type).lower()
+        if not kinozal_id or not tmdb_id_raw.isdigit() or media_type not in {"movie", "tv"}:
+            await callback.answer("Некорректный кандидат", show_alert=True)
+            return
+
+        await _override_match(callback.message, callback.from_user.id, kinozal_id, tmdb_id_raw, media_type)
+        await callback.answer("Override applied")
+
     @router.message(Command("approvematch"))
     async def cmd_approvematch(message: Message, command: CommandObject) -> None:
         if not is_admin(message.from_user.id):
@@ -255,42 +324,7 @@ def register_admin_match_handlers(router: Router, db: Any, tmdb: Any) -> None:
             await message.answer("Используй: /overridematch <kinozal_id> <tmdb_id> <movie|tv>")
             return
 
-        item = db.find_item_by_kinozal_id(kinozal_id)
-        if not item:
-            await message.answer(f"Не нашёл релиз в базе по Kinozal ID {kinozal_id}.")
-            return
-
-        try:
-            details = await tmdb.get_details(media_type, int(tmdb_id_raw))
-        except Exception:
-            log.exception("Admin override match failed kinozal_id=%s tmdb_id=%s", kinozal_id, tmdb_id_raw)
-            await message.answer("Не удалось получить details из TMDB. Смотри лог app.")
-            return
-
-        updated_item = dict(item)
-        updated_item.update(details)
-        updated_item["tmdb_match_path"] = "admin_override"
-        updated_item["tmdb_match_confidence"] = "verified"
-        updated_item["tmdb_match_evidence"] = f"admin override by {message.from_user.id}"
-        item_id, _, _ = db.save_item(updated_item)
-        refreshed = db.get_item(item_id) or updated_item
-        db.set_match_override(kinozal_id, int(tmdb_id_raw), media_type, source="admin_override")
-        review = db.get_pending_match_review(kinozal_id)
-        if review:
-            db.resolve_match_review(int(review["item_id"]), "overridden", message.from_user.id, note=f"override to {tmdb_id_raw}/{media_type}")
-        matched_users, delivered_count = await deliver_item_to_matching_subscriptions(db, message.bot, refreshed)
-        title = compact_spaces(str(refreshed.get("tmdb_title") or refreshed.get("tmdb_original_title") or "")) or "—"
-        await message.answer(
-            "\n".join(
-                [
-                    f"✅ Override saved for Kinozal ID {kinozal_id}",
-                    f"TMDB: {title} (id={int(tmdb_id_raw)}, media={media_type})",
-                    f"Подходящих подписок: {matched_users}",
-                    f"Новых уведомлений отправлено: {delivered_count}",
-                ]
-            ),
-            disable_web_page_preview=True,
-        )
+        await _override_match(message, message.from_user.id, kinozal_id, tmdb_id_raw, media_type)
 
     @router.message(Command("route"))
     async def cmd_route(message: Message) -> None:
