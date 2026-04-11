@@ -206,17 +206,49 @@ def _fallback_cleaned_title_from_source_title(source_title: str) -> str:
 
 
 def _title_variants_for_confidence(item: Dict[str, Any], details: Dict[str, Any]) -> tuple[list[str], list[str]]:
-    item_variants = [
-        compact_spaces(item.get("source_title") or ""),
-        compact_spaces(item.get("cleaned_title") or ""),
-    ]
-    detail_variants = [
-        compact_spaces(details.get("search_match_title") or ""),
-        compact_spaces(details.get("search_match_original_title") or ""),
-        compact_spaces(details.get("tmdb_title") or ""),
-        compact_spaces(details.get("tmdb_original_title") or ""),
-    ]
-    return [value for value in item_variants if value], [value for value in detail_variants if value]
+    def _expand_variants(values: list[str]) -> list[str]:
+        seen: set[str] = set()
+        expanded: list[str] = []
+
+        def _push(raw: str) -> None:
+            value = compact_spaces(raw)
+            if not value:
+                return
+            norm = normalize_match_text(value)
+            if not norm or norm in seen:
+                return
+            seen.add(norm)
+            expanded.append(value)
+
+        for value in values:
+            _push(value)
+            for part in [compact_spaces(part) for part in value.split(" / ") if compact_spaces(part)]:
+                _push(part)
+                cleaned_part = re.sub(r"\s*\([^)]*сезон[^)]*\)\s*$", "", part, flags=re.I)
+                cleaned_part = re.sub(r"\s*\([^)]*серии?[^)]*\)\s*$", "", cleaned_part, flags=re.I)
+                _push(cleaned_part)
+                for bracket in re.findall(r"\(([^)]+)\)", part):
+                    if re.search(r"сезон|серии?", bracket, flags=re.I):
+                        continue
+                    _push(bracket)
+
+        return expanded
+
+    item_variants = _expand_variants(
+        [
+            compact_spaces(item.get("source_title") or ""),
+            compact_spaces(item.get("cleaned_title") or ""),
+        ]
+    )
+    detail_variants = _expand_variants(
+        [
+            compact_spaces(details.get("search_match_title") or ""),
+            compact_spaces(details.get("search_match_original_title") or ""),
+            compact_spaces(details.get("tmdb_title") or ""),
+            compact_spaces(details.get("tmdb_original_title") or ""),
+        ]
+    )
+    return item_variants, detail_variants
 
 
 def _match_overlap(item: Dict[str, Any], details: Dict[str, Any]) -> tuple[float, float]:
@@ -256,9 +288,17 @@ def _search_match_confidence(item: Dict[str, Any], details: Dict[str, Any]) -> t
 
     if exact and (year_delta is None or year_delta <= 1):
         return "high", ", ".join(evidence_parts)
+    if exact and (year_delta is None or year_delta <= 2):
+        return "medium", ", ".join(evidence_parts)
     if best_similarity >= 0.93 and best_overlap >= 0.75 and (year_delta is None or year_delta <= 2):
         return "high", ", ".join(evidence_parts)
-    if best_similarity < 0.82 or best_overlap < 0.45 or (year_delta is not None and year_delta >= 4):
+    if best_similarity >= 0.86 and best_overlap >= 0.52 and (year_delta is None or year_delta <= 2):
+        return "medium", ", ".join(evidence_parts)
+    if year_delta is not None and year_delta >= 4:
+        return "low", ", ".join(evidence_parts)
+    if best_similarity < 0.62:
+        return "low", ", ".join(evidence_parts)
+    if best_similarity < 0.76 and best_overlap < 0.34:
         return "low", ", ".join(evidence_parts)
     return "medium", ", ".join(evidence_parts)
 
