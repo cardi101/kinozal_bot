@@ -1,0 +1,48 @@
+groups:
+  - name: kinozal_bot
+    interval: 30s
+    rules:
+      - alert: KinozalApiDown
+        expr: up{job="kinozal_api"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Kinozal API is down"
+          description: "Prometheus cannot scrape the FastAPI metrics endpoint for more than 2 minutes."
+
+      - alert: KinozalDatabaseDown
+        expr: kinozal_bot_database_up == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Kinozal database is down"
+          description: "The API reports database connectivity problems for more than 2 minutes."
+
+      - alert: KinozalSourceDown
+        expr: max(kinozal_bot_source_status{status!="ok"}) > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Kinozal source health is degraded"
+          description: "The worker reports non-ok source status for more than 5 minutes."
+
+      - alert: KinozalWorkerCycleStalled
+        expr: time() - kinozal_bot_worker_cycle_last_finished_at > 900
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Kinozal worker cycle looks stalled"
+          description: "No completed worker cycle has been recorded for more than 15 minutes."
+
+      - alert: KinozalWorkerCycleFailures
+        expr: increase(kinozal_bot_worker_cycle_failures_total[15m]) > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Kinozal worker cycle failures detected"
+          description: "The worker recorded at least one failed cycle within the last 15 minutes."

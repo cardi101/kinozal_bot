@@ -80,10 +80,12 @@ make lint
 make test
 make check
 make smoke
+make monitoring-up
 ```
 
 `make install` создаёт локальный `.venv` и ставит runtime-зависимости проекта вместе с `pytest` и `ruff`.
 `make smoke` поднимает `postgres + redis + api`, проверяет `/health`, `schema_migrations`, bootstrap-пути `app`/`api` и repository CRUD smoke внутри контейнера.
+`make monitoring-up` поднимает optional `Prometheus` и `Grafana`.
 
 ---
 
@@ -114,6 +116,10 @@ make smoke
 | `SENTRY_ENVIRONMENT` | Environment tag для Sentry (например `production`, `staging`) | — |
 | `SENTRY_TRACES_SAMPLE_RATE` | Trace sampling rate для Sentry, по умолчанию `0.0` | — |
 | `SENTRY_RELEASE` | Release tag для Sentry, если хочешь привязку ошибок к commit/release | — |
+| `PROMETHEUS_PORT` | Порт optional Prometheus (по умолчанию `9090`) | — |
+| `GRAFANA_PORT` | Порт optional Grafana (по умолчанию `3000`) | — |
+| `GRAFANA_ADMIN_USER` | Admin user для Grafana | — |
+| `GRAFANA_ADMIN_PASSWORD` | Admin password для Grafana | — |
 
 > **Магнет-ссылки** требуют публичного домена с HTTPS — Telegram не открывает `http://` ссылки в клиенте.
 > Нужно: купить домен, направить его A-запись на сервер, прописать в `Caddyfile` и задать `MAGNET_BASE_URL`.
@@ -221,6 +227,36 @@ curl -X POST -H "X-Admin-Token: $ADMIN_HTTP_TOKEN" http://localhost:8000/admin/r
 
 ---
 
+## Monitoring
+
+Monitoring stack опционален и поднимается отдельным compose profile:
+
+```bash
+make monitoring-up
+```
+
+После старта доступны:
+
+- `Prometheus` — `http://localhost:${PROMETHEUS_PORT:-9090}`
+- `Grafana` — `http://localhost:${GRAFANA_PORT:-3000}`
+
+В `Grafana` datasource и dashboard провиженятся автоматически:
+
+- datasource: `Prometheus`
+- dashboard: `Kinozal Bot Overview`
+
+В `Prometheus` уже загружаются alert rules:
+
+- `KinozalApiDown`
+- `KinozalDatabaseDown`
+- `KinozalSourceDown`
+- `KinozalWorkerCycleStalled`
+- `KinozalWorkerCycleFailures`
+
+Сейчас это именно rule files в `Prometheus`. Если захочешь реальные уведомления, следующим шагом можно добавить `Alertmanager`.
+
+---
+
 ## Инфраструктура
 
 | Сервис | Образ | Назначение |
@@ -231,6 +267,8 @@ curl -X POST -H "X-Admin-Token: $ADMIN_HTTP_TOKEN" http://localhost:8000/admin/r
 | `redis` | redis:7-alpine | Кеш TMDB |
 | `magnet-web` | python:3.12-slim | HTTP-редирект для магнет-ссылок |
 | `caddy` | caddy:2 | Обратный прокси с TLS |
+| `prometheus` | prom/prometheus:v2.54.1 | Optional metrics scraping и alert rules |
+| `grafana` | grafana/grafana:11.1.0 | Optional dashboards |
 
 ### Диагностика
 

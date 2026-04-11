@@ -3,7 +3,7 @@ VENV ?= .venv
 VENV_PYTHON := $(VENV)/bin/python
 PIP := $(VENV_PYTHON) -m pip
 
-.PHONY: install lint test check smoke
+.PHONY: install lint test check smoke monitoring-up monitoring-down
 
 $(VENV_PYTHON):
 	$(PYTHON) -m venv $(VENV)
@@ -37,3 +37,9 @@ smoke:
 	docker compose exec -T api python smoke_bootstrap.py app
 	docker compose exec -T api python smoke_repositories.py
 	docker compose exec -T postgres psql -U postgres -d kinozal_news -c "select version, name from schema_migrations order by version;"
+
+monitoring-up:
+	docker compose --profile monitoring up -d prometheus grafana
+
+monitoring-down:
+	docker compose --profile monitoring stop grafana prometheus
