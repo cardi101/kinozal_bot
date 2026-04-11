@@ -13,15 +13,12 @@ from utils import compact_spaces
 
 log = logging.getLogger(__name__)
 
-REVIEW_MATCH_CONFIDENCES = {"medium", "low", "unmatched"}
+REVIEW_MATCH_CONFIDENCES = {"low"}
 
 
 def item_requires_match_review(item: Dict[str, Any]) -> bool:
     confidence = compact_spaces(str(item.get("tmdb_match_confidence") or "")).lower()
-    kinozal_id = compact_spaces(str(item.get("kinozal_id") or ""))
-    if confidence in {"medium", "low"} and bool(item.get("tmdb_id")):
-        return True
-    return confidence == "unmatched" and bool(kinozal_id)
+    return confidence == "low" and bool(item.get("tmdb_id"))
 
 
 def build_match_review_alert(item: Dict[str, Any], affected_users: int) -> str:

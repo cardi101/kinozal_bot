@@ -1,6 +1,10 @@
 import asyncio
 
-from admin_match_review_helpers import build_match_review_alert, notify_admins_about_match_review
+from admin_match_review_helpers import (
+    build_match_review_alert,
+    item_requires_match_review,
+    notify_admins_about_match_review,
+)
 from config import CFG
 
 
@@ -99,3 +103,10 @@ def test_build_match_review_alert_escapes_override_placeholders() -> None:
     assert "&lt;tmdb_id&gt;" in text
     assert "&lt;movie|tv&gt;" in text
     assert "<tmdb_id>" not in text
+
+
+def test_item_requires_match_review_only_for_low_with_tmdb_id() -> None:
+    assert item_requires_match_review({"tmdb_match_confidence": "low", "tmdb_id": 123}) is True
+    assert item_requires_match_review({"tmdb_match_confidence": "medium", "tmdb_id": 123}) is False
+    assert item_requires_match_review({"tmdb_match_confidence": "unmatched", "kinozal_id": "123"}) is False
+    assert item_requires_match_review({"tmdb_match_confidence": "low"}) is False
