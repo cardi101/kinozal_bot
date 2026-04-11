@@ -141,6 +141,16 @@ class WorkerService:
                     if key.startswith("tmdb_") or key in ("imdb_id", "mal_id", "media_type", "cleaned_title"):
                         if value is not None and not enriched.get(key):
                             enriched.set(key, value)
+                if enriched.get("tmdb_id") and not compact_spaces(str(enriched.get("tmdb_match_confidence") or "")):
+                    enriched.set(
+                        "tmdb_match_path",
+                        compact_spaces(str(enriched.get("tmdb_match_path") or "")) or "cached_existing_match",
+                    )
+                    enriched.set("tmdb_match_confidence", "high")
+                    enriched.set(
+                        "tmdb_match_evidence",
+                        compact_spaces(str(enriched.get("tmdb_match_evidence") or "")) or "reused cached TMDB match",
+                    )
             else:
                 cycle_metrics["items_tmdb_enriched_total"] += 1
                 enriched = await self.tmdb_service.enrich_item(raw_item.clone())
@@ -295,6 +305,12 @@ class WorkerService:
                         )
                         if sent_count > 0:
                             self.repository.mark_match_review_notified(item_id)
+                            log.info(
+                                "Auto-sent match review item=%s kinozal_id=%s sent_count=%s",
+                                item_id,
+                                kinozal_id,
+                                sent_count,
+                            )
                         else:
                             log.warning(
                                 "Match review not marked notified item=%s kinozal_id=%s sent_count=0",
