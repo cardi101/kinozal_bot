@@ -44,11 +44,67 @@ def register_admin_match_handlers(router: Router, db: Any, tmdb: Any) -> None:
             item = db.get_item(int(review["item_id"]))
             if not item:
                 continue
+            confidence = compact_spaces(str(item.get("tmdb_match_confidence") or "unmatched")) or "unmatched"
             lines.append(
                 f"• <code>{html.escape(str(review.get('kinozal_id') or '—'))}</code> "
-                f"| <code>{html.escape(compact_spaces(str(item.get('tmdb_match_confidence') or '—')))}</code> "
+                f"| <code>{html.escape(confidence)}</code> "
                 f"| {html.escape(short(compact_spaces(str(item.get('source_title') or '—')), 80))}"
             )
+        await message.answer("\n".join(lines), parse_mode=ParseMode.HTML, disable_web_page_preview=True)
+
+    @router.message(Command("matchcandidates"))
+    async def cmd_matchcandidates(message: Message, command: CommandObject) -> None:
+        if not is_admin(message.from_user.id):
+            await message.answer("Только для администратора.")
+            return
+
+        kinozal_id = extract_kinozal_id(command.args or "")
+        if not kinozal_id and message.reply_to_message:
+            replied_text = message.reply_to_message.html_text or message.reply_to_message.text or message.reply_to_message.caption or ""
+            kinozal_id = extract_kinozal_id_from_text(replied_text)
+        if not kinozal_id:
+            await message.answer("Используй: /matchcandidates <kinozal_id>")
+            return
+
+        item = db.find_item_by_kinozal_id(kinozal_id)
+        if not item:
+            await message.answer(f"Не нашёл релиз в базе по Kinozal ID {kinozal_id}.")
+            return
+
+        candidates = await tmdb.search_candidates_for_item(_strip_existing_match_fields(item), limit=8)
+        if not candidates:
+            await message.answer(
+                "\n".join(
+                    [
+                        f"Кандидаты TMDB для {kinozal_id} не найдены.",
+                        f"Следующий шаг: /overridematch {kinozal_id} <tmdb_id> <movie|tv>",
+                    ]
+                ),
+                disable_web_page_preview=True,
+            )
+            return
+
+        lines = [
+            f"🔎 TMDB candidates for Kinozal ID {kinozal_id}",
+            f"Заголовок: {html.escape(compact_spaces(str(item.get('source_title') or '—')))}",
+            "",
+        ]
+        for row in candidates:
+            release_year = short(compact_spaces(str(row.get("release_date") or "")), 10) or "—"
+            original = compact_spaces(str(row.get("original_title") or ""))
+            line = (
+                f"• <code>{int(row['tmdb_id'])}</code> [{html.escape(str(row.get('media_type') or 'movie'))}] "
+                f"{html.escape(compact_spaces(str(row.get('title') or '—')))} | year={html.escape(release_year)} | "
+                f"confidence=<code>{html.escape(compact_spaces(str(row.get('confidence') or '—')))}</code>"
+            )
+            lines.append(line)
+            if original and original != row.get("title"):
+                lines.append(f"  original: {html.escape(original)}")
+            lines.append(f"  query: <code>{html.escape(compact_spaces(str(row.get('query') or '—')))}</code>")
+            lines.append(f"  evidence: {html.escape(compact_spaces(str(row.get('evidence') or '—')))}")
+
+        lines.append("")
+        lines.append(f"Override: <code>/overridematch {html.escape(str(kinozal_id))} &lt;tmdb_id&gt; &lt;movie|tv&gt;</code>")
         await message.answer("\n".join(lines), parse_mode=ParseMode.HTML, disable_web_page_preview=True)
 
     @router.message(Command("approvematch"))

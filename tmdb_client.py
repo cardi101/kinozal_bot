@@ -339,6 +339,90 @@ class TMDBClient:
         item["tmdb_match_confidence"] = compact_spaces(confidence)
         item["tmdb_match_evidence"] = compact_spaces(evidence)
 
+    async def search_candidates_for_item(self, item: Dict[str, Any], limit: int = 5) -> List[Dict[str, Any]]:
+        if not self.token:
+            return []
+
+        fallback_cleaned_title = compact_spaces(item.get("cleaned_title") or "")
+        if not fallback_cleaned_title:
+            fallback_cleaned_title = _fallback_cleaned_title_from_source_title(item.get("source_title") or "")
+
+        media_type = compact_spaces(str(item.get("media_type") or "movie")).lower() or "movie"
+        year = item.get("source_year")
+        candidates = title_search_candidates(
+            item.get("source_title") or "",
+            fallback_cleaned_title or "",
+        )
+        extra_slash_candidates = _extract_slash_title_candidates(item.get("source_title") or "")
+        if extra_slash_candidates:
+            candidates = extra_slash_candidates + [value for value in candidates if value not in extra_slash_candidates]
+
+        queries = [candidate for candidate in candidates if not _is_hard_blocked_generic_candidate(candidate)]
+        queries = queries[:6]
+
+        search_plan: List[tuple[str, str, Optional[int]]] = []
+        looks_like_series = bool(item.get("source_episode_progress")) or bool(extract_tv_season_hint(item))
+        for candidate in queries:
+            if media_type == "tv" or looks_like_series:
+                search_plan.extend([(candidate, "tv", year), (candidate, "tv", None), (candidate, "movie", year)])
+            else:
+                search_plan.extend([(candidate, "movie", year), (candidate, "movie", None), (candidate, "tv", year)])
+
+        results: List[Dict[str, Any]] = []
+        seen: set[tuple[str, int]] = set()
+        for candidate, target_media_type, candidate_year in search_plan:
+            params: Dict[str, Any] = {
+                "query": candidate,
+                "language": self.language,
+                "include_adult": "false",
+            }
+            if target_media_type == "movie" and candidate_year:
+                params["year"] = candidate_year
+            if target_media_type == "tv" and candidate_year:
+                params["first_air_date_year"] = candidate_year
+
+            try:
+                data = await self._get(f"/search/{target_media_type}", params)
+            except Exception:
+                continue
+
+            for row in data.get("results") or []:
+                tmdb_id = int(row.get("id") or 0)
+                if tmdb_id <= 0:
+                    continue
+                key = (target_media_type, tmdb_id)
+                if key in seen:
+                    continue
+                probe = {
+                    "tmdb_title": compact_spaces(row.get("title") or row.get("name") or ""),
+                    "tmdb_original_title": compact_spaces(row.get("original_title") or row.get("original_name") or ""),
+                    "search_match_title": compact_spaces(row.get("title") or row.get("name") or ""),
+                    "search_match_original_title": compact_spaces(row.get("original_title") or row.get("original_name") or ""),
+                    "tmdb_release_date": row.get("release_date") or row.get("first_air_date") or "",
+                    "tmdb_id": tmdb_id,
+                    "media_type": target_media_type,
+                }
+                if self._is_rejected_match(item, probe):
+                    continue
+                confidence, evidence = _search_match_confidence(item, probe)
+                results.append(
+                    {
+                        "tmdb_id": tmdb_id,
+                        "media_type": target_media_type,
+                        "title": probe["tmdb_title"] or probe["tmdb_original_title"] or "—",
+                        "original_title": probe["tmdb_original_title"] or "",
+                        "release_date": probe["tmdb_release_date"] or "",
+                        "query": candidate,
+                        "confidence": confidence,
+                        "evidence": evidence,
+                    }
+                )
+                seen.add(key)
+                if len(results) >= limit:
+                    return results
+
+        return results
+
     async def _get(self, path: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         params = params or {}
         cache_key = None

@@ -7,12 +7,15 @@ from subscription_matching import match_subscription
 from utils import compact_spaces
 
 
-REVIEW_MATCH_CONFIDENCES = {"medium", "low"}
+REVIEW_MATCH_CONFIDENCES = {"medium", "low", "unmatched"}
 
 
 def item_requires_match_review(item: Dict[str, Any]) -> bool:
     confidence = compact_spaces(str(item.get("tmdb_match_confidence") or "")).lower()
-    return bool(item.get("tmdb_id")) and confidence in REVIEW_MATCH_CONFIDENCES
+    kinozal_id = compact_spaces(str(item.get("kinozal_id") or ""))
+    if confidence in {"medium", "low"} and bool(item.get("tmdb_id")):
+        return True
+    return confidence == "unmatched" and bool(kinozal_id)
 
 
 def build_match_review_alert(item: Dict[str, Any], affected_users: int) -> str:
@@ -23,23 +26,24 @@ def build_match_review_alert(item: Dict[str, Any], affected_users: int) -> str:
     confidence = compact_spaces(str(item.get("tmdb_match_confidence") or "")) or "—"
     evidence = compact_spaces(str(item.get("tmdb_match_evidence") or "")) or "—"
     match_path = compact_spaces(str(item.get("tmdb_match_path") or "")) or "—"
-    return "\n".join(
-        [
-            "🧪 <b>Match review required</b>",
-            f"Kinozal ID: <code>{html.escape(str(kinozal_id))}</code>",
-            f"Заголовок: {html.escape(source_title)}",
-            f"TMDB: {html.escape(tmdb_title)} (id={html.escape(str(tmdb_id))})",
-            f"Confidence: <code>{html.escape(confidence)}</code>",
-            f"Path: <code>{html.escape(match_path)}</code>",
-            f"Evidence: {html.escape(evidence)}",
-            f"Затронет пользователей: {affected_users}",
-            "",
-            f"/approvematch {html.escape(str(kinozal_id))}",
-            f"/rejectmatch {html.escape(str(kinozal_id))}",
-            f"/overridematch {html.escape(str(kinozal_id))} <tmdb_id> <movie|tv>",
-            f"/explainmatch {html.escape(str(kinozal_id))}",
-        ]
-    )
+    lines = [
+        "🧪 <b>Match review required</b>",
+        f"Kinozal ID: <code>{html.escape(str(kinozal_id))}</code>",
+        f"Заголовок: {html.escape(source_title)}",
+        f"TMDB: {html.escape(tmdb_title)} (id={html.escape(str(tmdb_id))})",
+        f"Confidence: <code>{html.escape(confidence)}</code>",
+        f"Path: <code>{html.escape(match_path)}</code>",
+        f"Evidence: {html.escape(evidence)}",
+        f"Затронет пользователей: {affected_users}",
+        "",
+    ]
+    if item.get("tmdb_id"):
+        lines.append(f"/approvematch {html.escape(str(kinozal_id))}")
+        lines.append(f"/rejectmatch {html.escape(str(kinozal_id))}")
+    lines.append(f"/overridematch {html.escape(str(kinozal_id))} <tmdb_id> <movie|tv>")
+    lines.append(f"/matchcandidates {html.escape(str(kinozal_id))}")
+    lines.append(f"/explainmatch {html.escape(str(kinozal_id))}")
+    return "\n".join(lines)
 
 
 async def notify_admins_about_match_review(bot: Any, item: Dict[str, Any], affected_users: int) -> None:

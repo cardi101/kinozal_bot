@@ -269,7 +269,9 @@ class WorkerService:
                     continue
                 matches_by_user.setdefault(tg_user_id, []).append(sub)
 
-            if not matches_by_user:
+            needs_review = item_requires_match_review(item.to_dict())
+
+            if not matches_by_user and not needs_review:
                 continue
 
             try:
