@@ -3,6 +3,7 @@ from typing import Any, Dict
 from content_buckets import item_content_bucket
 from country_helpers import effective_item_countries, parse_country_codes
 from item_years import item_filter_years
+from subscription_presets import detect_subscription_preset_key
 from keyword_filters import build_keyword_haystacks, keyword_matches_item
 
 
@@ -28,6 +29,23 @@ def _is_globally_ignored_item(item) -> bool:
         )
     ).strip().lower()
     return source_category == "кино - концерт" or "концерт" in source_category
+
+
+def _excluded_country_blocks_item(sub: Dict[str, Any], item_countries: set[str], bucket: str) -> bool:
+    excluded_countries = set(parse_country_codes(sub.get("exclude_country_codes") or sub.get("exclude_country_codes_list")))
+    if not excluded_countries or not item_countries:
+        return False
+
+    matched_excluded = item_countries & excluded_countries
+    if not matched_excluded:
+        return False
+
+    # "World" is a fallback route for regular content. Co-productions like US+JP
+    # should stay in world as long as they also have a non-excluded country.
+    if detect_subscription_preset_key(sub) == "world" and bucket == "regular":
+        return item_countries <= excluded_countries
+
+    return True
 
 
 def explain_subscription_match(db: Any, sub: Dict[str, Any], item: Dict[str, Any]) -> str:
@@ -105,7 +123,7 @@ def explain_subscription_match(db: Any, sub: Dict[str, Any], item: Dict[str, Any
             return f"country_mismatch:{sorted(item_countries)}"
 
     excluded_countries = set(parse_country_codes(sub.get("exclude_country_codes") or sub.get("exclude_country_codes_list")))
-    if excluded_countries and item_countries and (item_countries & excluded_countries):
+    if _excluded_country_blocks_item(sub, item_countries, bucket):
         return f"excluded_country:{sorted(item_countries & excluded_countries)}"
 
     text_haystack, tech_haystack = build_keyword_haystacks(item)
