@@ -184,6 +184,50 @@ def register_admin_match_handlers(router: Router, db: Any, tmdb: Any) -> None:
             disable_web_page_preview=True,
         )
 
+    async def _no_match(message: Message, admin_user_id: int, kinozal_id: str) -> None:
+        review = db.get_pending_match_review(kinozal_id)
+        item = db.find_item_by_kinozal_id(kinozal_id)
+        if not review or not item:
+            await message.answer(f"Pending review для Kinozal ID {kinozal_id} не найден.")
+            return
+
+        rejected_tmdb_id = item.get("tmdb_id")
+        if rejected_tmdb_id:
+            db.add_match_rejection(kinozal_id, int(rejected_tmdb_id), note="admin marked no_match")
+        db.clear_item_match(int(item["id"]))
+        db.resolve_match_review(int(review["item_id"]), "no_match", admin_user_id, note="admin marked no good match")
+        await message.answer(
+            "\n".join(
+                [
+                    f"🚫 No Match for Kinozal ID {kinozal_id}",
+                    "Текущий TMDB очищен, доставка пользователям остановлена.",
+                    "Кейс сохранён как no_match и не будет повторно всплывать для этого item.",
+                ]
+            ),
+            disable_web_page_preview=True,
+        )
+
+    async def _force_deliver(message: Message, admin_user_id: int, kinozal_id: str) -> None:
+        review = db.get_pending_match_review(kinozal_id)
+        item = db.find_item_by_kinozal_id(kinozal_id)
+        if not review or not item:
+            await message.answer(f"Pending review для Kinozal ID {kinozal_id} не найден.")
+            return
+
+        matched_users, delivered_count = await deliver_item_to_matching_subscriptions(db, message.bot, item)
+        db.resolve_match_review(int(review["item_id"]), "forced", admin_user_id, note="forced delivery without verified match")
+        await message.answer(
+            "\n".join(
+                [
+                    f"📨 Force delivery for Kinozal ID {kinozal_id}",
+                    "Релиз отправлен по текущим полям item без подтверждённого TMDB-матча.",
+                    f"Подходящих подписок: {matched_users}",
+                    f"Новых уведомлений отправлено: {delivered_count}",
+                ]
+            ),
+            disable_web_page_preview=True,
+        )
+
     @router.message(Command("matchqueue"))
     async def cmd_matchqueue(message: Message, command: CommandObject) -> None:
         if not is_admin(message.from_user.id):
@@ -252,6 +296,14 @@ def register_admin_match_handlers(router: Router, db: Any, tmdb: Any) -> None:
             await _reject_match(callback.message, callback.from_user.id, kinozal_id)
             await callback.answer("Match rejected")
             return
+        if action == "no_match":
+            await _no_match(callback.message, callback.from_user.id, kinozal_id)
+            await callback.answer("Marked no match")
+            return
+        if action == "force":
+            await _force_deliver(callback.message, callback.from_user.id, kinozal_id)
+            await callback.answer("Force delivered")
+            return
         if action == "candidates":
             await _send_match_candidates(callback.message, kinozal_id)
             await callback.answer()
@@ -306,6 +358,32 @@ def register_admin_match_handlers(router: Router, db: Any, tmdb: Any) -> None:
             return
 
         await _reject_match(message, message.from_user.id, kinozal_id)
+
+    @router.message(Command("nomatch"))
+    async def cmd_nomatch(message: Message, command: CommandObject) -> None:
+        if not is_admin(message.from_user.id):
+            await message.answer("Только для администратора.")
+            return
+
+        kinozal_id = extract_kinozal_id(command.args or "")
+        if not kinozal_id:
+            await message.answer("Используй: /nomatch <kinozal_id>")
+            return
+
+        await _no_match(message, message.from_user.id, kinozal_id)
+
+    @router.message(Command("forcedeliver"))
+    async def cmd_forcedeliver(message: Message, command: CommandObject) -> None:
+        if not is_admin(message.from_user.id):
+            await message.answer("Только для администратора.")
+            return
+
+        kinozal_id = extract_kinozal_id(command.args or "")
+        if not kinozal_id:
+            await message.answer("Используй: /forcedeliver <kinozal_id>")
+            return
+
+        await _force_deliver(message, message.from_user.id, kinozal_id)
 
     @router.message(Command("overridematch"))
     async def cmd_overridematch(message: Message, command: CommandObject) -> None:

@@ -103,7 +103,7 @@ class MatchReviewRepository(BaseRepository):
         note: str = "",
     ) -> None:
         status_norm = compact_spaces(str(status or "")).lower()
-        if status_norm not in {"approved", "rejected", "overridden", "no_match"}:
+        if status_norm not in {"approved", "rejected", "overridden", "no_match", "forced"}:
             raise ValueError(f"Unsupported review status: {status}")
         ts = utc_ts()
         with self.lock:
