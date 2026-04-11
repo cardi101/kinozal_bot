@@ -2,6 +2,7 @@ from dataclasses import dataclass
 
 import httpx
 import pytest
+from prometheus_client import CONTENT_TYPE_LATEST
 
 from api_app import create_api_app
 
@@ -10,8 +11,8 @@ class FakeAdminApiService:
     def get_health(self):
         return {"status": "ok", "database_ok": True}
 
-    def get_metrics_text(self) -> str:
-        return "kinozal_bot_users_total 1\n"
+    def get_metrics_payload(self) -> bytes:
+        return b"# HELP kinozal_bot_users_total Total users in database\nkinozal_bot_users_total 1.0\n"
 
     def get_user_subscriptions(self, user_id: int):
         if user_id == 404:
@@ -68,7 +69,8 @@ async def test_metrics_endpoint() -> None:
     async with build_test_client() as client:
         response = await client.get("/metrics")
     assert response.status_code == 200
-    assert "kinozal_bot_users_total 1" in response.text
+    assert "kinozal_bot_users_total 1.0" in response.text
+    assert response.headers["content-type"] == CONTENT_TYPE_LATEST
 
 
 @pytest.mark.anyio

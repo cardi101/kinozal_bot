@@ -1,8 +1,8 @@
 from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING, Any, Optional
 
-from fastapi import Depends, FastAPI, Header, HTTPException, Query
-from fastapi.responses import PlainTextResponse
+from fastapi import Depends, FastAPI, Header, HTTPException, Query, Response
+from prometheus_client import CONTENT_TYPE_LATEST
 
 if TYPE_CHECKING:
     from api_bootstrap import ApiContainer
@@ -41,9 +41,12 @@ def create_api_app(container: Optional["ApiContainer"] = None) -> FastAPI:
     async def health() -> Any:
         return runtime_container.admin_api_service.get_health()
 
-    @app.get("/metrics", response_class=PlainTextResponse)
-    async def metrics() -> str:
-        return runtime_container.admin_api_service.get_metrics_text()
+    @app.get("/metrics")
+    async def metrics() -> Response:
+        return Response(
+            content=runtime_container.admin_api_service.get_metrics_payload(),
+            headers={"Content-Type": CONTENT_TYPE_LATEST},
+        )
 
     @app.get("/admin/subscriptions/{user_id}", dependencies=[Depends(require_admin_token)])
     async def get_user_subscriptions(user_id: int) -> Any:

@@ -2,6 +2,7 @@ from typing import Any, Dict
 
 from domain import ReleaseItem
 from match_debug_helpers import _strip_existing_match_fields, build_match_explanation
+from metrics_registry import build_metrics_payload
 
 
 class AdminApiService:
@@ -26,36 +27,28 @@ class AdminApiService:
             "source_last_failed_at": int(self.db.get_meta("source_last_failed_at") or 0),
         }
 
-    def get_metrics_text(self) -> str:
+    def get_metrics_payload(self) -> bytes:
+        db_ok = True
+        try:
+            self.db.conn.execute("SELECT 1").fetchone()
+        except Exception:
+            db_ok = False
+
         users_total = self.db.count_users()
         subscriptions_enabled = len(self.db.list_enabled_subscriptions())
         source_fail_streak = int(self.db.get_meta("source_fail_streak") or 0)
         source_last_success_at = int(self.db.get_meta("source_last_success_at") or 0)
         source_last_failed_at = int(self.db.get_meta("source_last_failed_at") or 0)
         source_status = self.db.get_meta("source_health_status") or "unknown"
-        source_status_value = 1 if source_status == "ok" else 0
-
-        lines = [
-            "# HELP kinozal_bot_users_total Total users in database",
-            "# TYPE kinozal_bot_users_total gauge",
-            f"kinozal_bot_users_total {users_total}",
-            "# HELP kinozal_bot_enabled_subscriptions_total Enabled subscriptions",
-            "# TYPE kinozal_bot_enabled_subscriptions_total gauge",
-            f"kinozal_bot_enabled_subscriptions_total {subscriptions_enabled}",
-            "# HELP kinozal_bot_source_fail_streak Consecutive source failures",
-            "# TYPE kinozal_bot_source_fail_streak gauge",
-            f"kinozal_bot_source_fail_streak {source_fail_streak}",
-            "# HELP kinozal_bot_source_status Source status as 1=ok 0=non-ok",
-            "# TYPE kinozal_bot_source_status gauge",
-            f'kinozal_bot_source_status{{status="{source_status}"}} {source_status_value}',
-            "# HELP kinozal_bot_source_last_success_at Last successful source cycle timestamp",
-            "# TYPE kinozal_bot_source_last_success_at gauge",
-            f"kinozal_bot_source_last_success_at {source_last_success_at}",
-            "# HELP kinozal_bot_source_last_failed_at Last failed source cycle timestamp",
-            "# TYPE kinozal_bot_source_last_failed_at gauge",
-            f"kinozal_bot_source_last_failed_at {source_last_failed_at}",
-        ]
-        return "\n".join(lines) + "\n"
+        return build_metrics_payload(
+            database_up=db_ok,
+            users_total=users_total,
+            subscriptions_enabled=subscriptions_enabled,
+            source_fail_streak=source_fail_streak,
+            source_last_success_at=source_last_success_at,
+            source_last_failed_at=source_last_failed_at,
+            source_status=source_status,
+        )
 
     def get_user_subscriptions(self, user_id: int) -> Dict[str, Any]:
         user = self.db.get_user_with_subscriptions(user_id)

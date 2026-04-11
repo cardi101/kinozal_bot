@@ -6,3 +6,4 @@ psycopg[binary]==3.3.3
 redis==7.4.0
 ftfy==6.3.1
 uvicorn==0.35.0
+prometheus-client==0.23.1

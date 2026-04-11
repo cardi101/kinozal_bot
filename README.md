@@ -200,6 +200,8 @@ keyboards.py            — inline-клавиатуры
 - `GET /admin/match-debug?kinozal_id=...&live=true`
 - `POST /admin/reparse/{kinozal_id}`
 
+`/metrics` отдаёт Prometheus text exposition format и подходит для обычного scrape Prometheus/Grafana Agent.
+
 `/admin/*` endpoints защищены заголовком `X-Admin-Token`. Если `ADMIN_HTTP_TOKEN` не задан, admin HTTP endpoints отключены и возвращают `503`.
 
 Примеры:
