@@ -59,6 +59,29 @@ def test_notify_admins_about_match_review_returns_zero_without_admins() -> None:
     assert bot.sent_to == []
 
 
+def test_notify_admins_about_match_review_skips_requested_admin_ids() -> None:
+    original_admin_ids = CFG.admin_ids
+    CFG.admin_ids = (101, 202)
+    bot = _DummyBot()
+    item = {
+        "kinozal_id": "1943921",
+        "source_title": "Zeder",
+        "tmdb_match_confidence": "low",
+        "tmdb_match_path": "search",
+        "tmdb_match_evidence": "weak overlap",
+    }
+
+    try:
+        sent_count = asyncio.run(
+            notify_admins_about_match_review(bot, item, affected_users=0, skip_admin_ids={101})
+        )
+    finally:
+        CFG.admin_ids = original_admin_ids
+
+    assert sent_count == 1
+    assert bot.sent_to == [202]
+
+
 def test_build_match_review_alert_escapes_override_placeholders() -> None:
     text = build_match_review_alert(
         {

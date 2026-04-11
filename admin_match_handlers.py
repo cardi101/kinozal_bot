@@ -28,6 +28,13 @@ log = logging.getLogger(__name__)
 
 
 def register_admin_match_handlers(router: Router, db: Any, tmdb: Any) -> None:
+    def _skip_current_admin_chat(message: Message) -> set[int]:
+        chat_type = str(getattr(message.chat, "type", ""))
+        chat_id = int(getattr(message.chat, "id", 0) or 0)
+        if chat_type == "private" and chat_id in {int(admin_id) for admin_id in CFG.admin_ids}:
+            return {chat_id}
+        return set()
+
     def _count_matching_users(item: dict) -> int:
         matched_users = 0
         item_tmdb_id = item.get("tmdb_id")
@@ -311,7 +318,12 @@ def register_admin_match_handlers(router: Router, db: Any, tmdb: Any) -> None:
             return
 
         await _send_match_review_card(message, item)
-        sent_count = await notify_admins_about_match_review(message.bot, item, affected_users=_count_matching_users(item))
+        sent_count = await notify_admins_about_match_review(
+            message.bot,
+            item,
+            affected_users=_count_matching_users(item),
+            skip_admin_ids=_skip_current_admin_chat(message),
+        )
         if sent_count > 0:
             db.mark_match_review_notified(int(review["item_id"]))
         await message.answer(
@@ -347,6 +359,7 @@ def register_admin_match_handlers(router: Router, db: Any, tmdb: Any) -> None:
                 message.bot,
                 item,
                 affected_users=_count_matching_users(item),
+                skip_admin_ids=_skip_current_admin_chat(message),
             )
             resent_admin += item_sent_count
             if item_sent_count > 0:

@@ -1,6 +1,6 @@
 import html
 import logging
-from typing import Any, Dict, Tuple
+from typing import Any, Dict, Iterable, Tuple
 
 from aiogram.enums import ParseMode
 
@@ -57,18 +57,27 @@ def build_match_review_alert(item: Dict[str, Any], affected_users: int) -> str:
     return "\n".join(lines)
 
 
-async def notify_admins_about_match_review(bot: Any, item: Dict[str, Any], affected_users: int) -> int:
+async def notify_admins_about_match_review(
+    bot: Any,
+    item: Dict[str, Any],
+    affected_users: int,
+    skip_admin_ids: Iterable[int] = (),
+) -> int:
     text = build_match_review_alert(item, affected_users)
     kinozal_id = compact_spaces(str(item.get("kinozal_id") or ""))
     reply_markup = match_review_kb(kinozal_id, has_tmdb_match=bool(item.get("tmdb_id"))) if kinozal_id else None
     if not CFG.admin_ids:
         log.warning("Match review notification skipped: no ADMIN_IDS configured kinozal_id=%s", kinozal_id or "—")
         return 0
+    skipped_admins = {int(admin_id) for admin_id in skip_admin_ids}
     sent_count = 0
     for admin_id in CFG.admin_ids:
+        admin_id_int = int(admin_id)
+        if admin_id_int in skipped_admins:
+            continue
         try:
             await bot.send_message(
-                int(admin_id),
+                admin_id_int,
                 text,
                 parse_mode=ParseMode.HTML,
                 disable_web_page_preview=True,
@@ -76,7 +85,7 @@ async def notify_admins_about_match_review(bot: Any, item: Dict[str, Any], affec
             )
             sent_count += 1
         except Exception:
-            log.exception("Admin review send failed admin_id=%s kinozal_id=%s", int(admin_id), kinozal_id or "—")
+            log.exception("Admin review send failed admin_id=%s kinozal_id=%s", admin_id_int, kinozal_id or "—")
     return sent_count
 
 
