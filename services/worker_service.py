@@ -291,6 +291,14 @@ class WorkerService:
                 self.repository.update_item_release_text(item_id, item.get("source_release_text"))
 
             if item_requires_match_review(item.to_dict()):
+                if not matches_by_user:
+                    log.info(
+                        "Skip match review without affected users item=%s kinozal_id=%s confidence=%s",
+                        item_id,
+                        kinozal_id,
+                        item.get("tmdb_match_confidence"),
+                    )
+                    continue
                 review_reason = compact_spaces(
                     str(item.get("tmdb_match_evidence") or item.get("tmdb_match_confidence") or "low_confidence")
                 )
