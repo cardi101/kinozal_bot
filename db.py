@@ -11,6 +11,7 @@ from config import CFG
 from repositories import (
     DeliveryRepository,
     ItemsRepository,
+    MatchReviewRepository,
     MetaRepository,
     SubscriptionsRepository,
     UsersRepository,
@@ -155,12 +156,14 @@ class DB:
         self.meta = MetaRepository(self)
         self.items = ItemsRepository(self)
         self.deliveries = DeliveryRepository(self)
+        self.match_reviews = MatchReviewRepository(self)
         self._repositories = (
             self.users,
             self.subscriptions,
             self.meta,
             self.items,
             self.deliveries,
+            self.match_reviews,
         )
 
     def __getattr__(self, name: str) -> Any:

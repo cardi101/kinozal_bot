@@ -44,6 +44,8 @@ def _strip_existing_match_fields(item: Dict[str, Any]) -> Dict[str, Any]:
         "tmdb_match_reason",
         "tmdb_match_debug",
         "tmdb_match_path",
+        "tmdb_match_confidence",
+        "tmdb_match_evidence",
         "imdb_id",
         "media_type",
     ]:
@@ -105,6 +107,8 @@ def build_match_explanation(db: Any, item: Dict[str, Any], live_item: Optional[D
     country_names = human_country_names(countries, limit=8)
     candidates = title_search_candidates(display_item.get("source_title") or "", display_item.get("cleaned_title") or "")
     match_path = compact_spaces(str(display_item.get("tmdb_match_path") or item.get("tmdb_match_path") or "")) or "—"
+    match_confidence = compact_spaces(str(display_item.get("tmdb_match_confidence") or item.get("tmdb_match_confidence") or "")) or "—"
+    match_evidence = compact_spaces(str(display_item.get("tmdb_match_evidence") or item.get("tmdb_match_evidence") or "")) or "—"
 
     matched_subs: List[Dict[str, Any]] = []
     rejected_subs: List[Tuple[Dict[str, Any], str]] = []
@@ -156,6 +160,8 @@ def build_match_explanation(db: Any, item: Dict[str, Any], live_item: Optional[D
         f"Manual route: bucket={html.escape(compact_spaces(str(display_item.get('manual_bucket') or '')) or '—')} | countries={html.escape(','.join(parse_jsonish_list(display_item.get('manual_country_codes')) or []) or '—')}",
         f"Кандидаты TMDB: {html.escape(', '.join(candidates[:8]) if candidates else 'не извлеклись')}",
         f"TMDB match path: {html.escape(match_path)}",
+        f"TMDB confidence: {html.escape(match_confidence)}",
+        f"TMDB evidence: {html.escape(match_evidence)}",
         f"Подходящих подписок сейчас: {len(matched_subs)}",
     ])
 
@@ -200,4 +206,3 @@ async def rematch_item_live(db: Any, tmdb: Any, item: Dict[str, Any]) -> Tuple[O
     except Exception:
         log.exception("Rematch failed for item_id=%s kinozal_id=%s", item.get("id"), item.get("kinozal_id"))
         return before, None, False
-

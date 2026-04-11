@@ -4,6 +4,7 @@ import time
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Set
 
+from admin_match_review_helpers import item_requires_match_review, notify_admins_about_match_review
 from config import CFG
 from content_buckets import item_content_bucket
 from domain import DeliveryCandidate, ReleaseItem, SubscriptionRecord
@@ -278,6 +279,27 @@ class WorkerService:
 
             if not is_release_text_change and item.get("source_release_text"):
                 self.repository.update_item_release_text(item_id, item.get("source_release_text"))
+
+            if item_requires_match_review(item.to_dict()):
+                review_reason = compact_spaces(
+                    str(item.get("tmdb_match_evidence") or item.get("tmdb_match_confidence") or "low_confidence")
+                )
+                self.repository.queue_match_review(item_id, kinozal_id or str(item_id), reason=review_reason)
+                review = self.repository.get_pending_match_review_by_item_id(item_id)
+                if review and not review.get("notified_at"):
+                    try:
+                        await notify_admins_about_match_review(self.bot, item.to_dict(), affected_users=len(matches_by_user))
+                        self.repository.mark_match_review_notified(item_id)
+                    except Exception:
+                        log.exception("Failed to notify admins about match review item=%s", item_id)
+                log.info(
+                    "Queued match review item=%s kinozal_id=%s confidence=%s users=%s",
+                    item_id,
+                    kinozal_id,
+                    item.get("tmdb_match_confidence"),
+                    len(matches_by_user),
+                )
+                continue
 
             for tg_user_id, matched_subs in matches_by_user.items():
                 if kinozal_id and not is_release_text_change:

@@ -97,3 +97,12 @@ class WorkerRepository:
 
     def get_latest_delivered_related_item(self, tg_user_id: int, item: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         return self.db.get_latest_delivered_related_item(tg_user_id, item)
+
+    def queue_match_review(self, item_id: int, kinozal_id: str, reason: str = "") -> None:
+        self.db.queue_match_review(item_id, kinozal_id, reason)
+
+    def get_pending_match_review_by_item_id(self, item_id: int) -> Optional[Dict[str, Any]]:
+        return self.db.get_pending_match_review_by_item_id(item_id)
+
+    def mark_match_review_notified(self, item_id: int) -> None:
+        self.db.mark_match_review_notified(item_id)

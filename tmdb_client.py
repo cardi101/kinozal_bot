@@ -19,6 +19,7 @@ from anime_mapping_store import AnimeMappingStore
 from anime_title_lexicon import AnimeTitleLexicon
 from anime_resolver import resolve_anime_tmdb, should_use_anime_resolver
 from utils import utc_ts, compact_spaces
+from release_versioning import resolve_item_kinozal_id
 
 
 _GENERIC_SINGLE_TOKEN_ANIME_ALIASES = {
@@ -204,6 +205,64 @@ def _fallback_cleaned_title_from_source_title(source_title: str) -> str:
     return " / ".join(title_parts[:2])
 
 
+def _title_variants_for_confidence(item: Dict[str, Any], details: Dict[str, Any]) -> tuple[list[str], list[str]]:
+    item_variants = [
+        compact_spaces(item.get("source_title") or ""),
+        compact_spaces(item.get("cleaned_title") or ""),
+    ]
+    detail_variants = [
+        compact_spaces(details.get("search_match_title") or ""),
+        compact_spaces(details.get("search_match_original_title") or ""),
+        compact_spaces(details.get("tmdb_title") or ""),
+        compact_spaces(details.get("tmdb_original_title") or ""),
+    ]
+    return [value for value in item_variants if value], [value for value in detail_variants if value]
+
+
+def _match_overlap(item: Dict[str, Any], details: Dict[str, Any]) -> tuple[float, float]:
+    item_variants, detail_variants = _title_variants_for_confidence(item, details)
+    best_similarity = 0.0
+    best_overlap = 0.0
+    for left in item_variants:
+        left_tokens = set(text_tokens(left))
+        left_norm = normalize_match_text(left)
+        for right in detail_variants:
+            right_tokens = set(text_tokens(right))
+            right_norm = normalize_match_text(right)
+            if left_norm and right_norm:
+                best_similarity = max(best_similarity, similarity(left_norm, right_norm))
+            if left_tokens and right_tokens:
+                best_overlap = max(best_overlap, len(left_tokens & right_tokens) / max(len(left_tokens), len(right_tokens), 1))
+    return best_similarity, best_overlap
+
+
+def _search_match_confidence(item: Dict[str, Any], details: Dict[str, Any]) -> tuple[str, str]:
+    best_similarity, best_overlap = _match_overlap(item, details)
+    source_year = parse_year(str(item.get("source_year") or ""))
+    tmdb_year = parse_year(str(details.get("tmdb_release_date") or ""))
+    year_delta = abs(source_year - tmdb_year) if source_year and tmdb_year else None
+    item_variants, detail_variants = _title_variants_for_confidence(item, details)
+    normalized_item = {normalize_match_text(value) for value in item_variants if value}
+    normalized_detail = {normalize_match_text(value) for value in detail_variants if value}
+    exact = bool(normalized_item & normalized_detail)
+
+    evidence_parts = [
+        f"exact={int(exact)}",
+        f"similarity={best_similarity:.3f}",
+        f"overlap={best_overlap:.3f}",
+    ]
+    if year_delta is not None:
+        evidence_parts.append(f"year_delta={year_delta}")
+
+    if exact and (year_delta is None or year_delta <= 1):
+        return "high", ", ".join(evidence_parts)
+    if best_similarity >= 0.93 and best_overlap >= 0.75 and (year_delta is None or year_delta <= 2):
+        return "high", ", ".join(evidence_parts)
+    if best_similarity < 0.82 or best_overlap < 0.45 or (year_delta is not None and year_delta >= 4):
+        return "low", ", ".join(evidence_parts)
+    return "medium", ", ".join(evidence_parts)
+
+
 
 
 class TMDBClient:
@@ -253,6 +312,32 @@ class TMDBClient:
 
     async def close(self) -> None:
         await self.client.aclose()
+
+    def _kinozal_override(self, item: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        return self.db.get_match_override(resolve_item_kinozal_id(item) or "")
+
+    def _is_rejected_match(self, item: Dict[str, Any], details: Optional[Dict[str, Any]]) -> bool:
+        if not details or not details.get("tmdb_id"):
+            return False
+        kinozal_id = resolve_item_kinozal_id(item) or ""
+        if not kinozal_id:
+            return False
+        try:
+            return self.db.is_match_rejected(kinozal_id, int(details["tmdb_id"]))
+        except Exception:
+            return False
+
+    def _apply_match_metadata(
+        self,
+        item: Dict[str, Any],
+        details: Dict[str, Any],
+        path: str,
+        confidence: str,
+        evidence: str,
+    ) -> None:
+        item["tmdb_match_path"] = compact_spaces(path)
+        item["tmdb_match_confidence"] = compact_spaces(confidence)
+        item["tmdb_match_evidence"] = compact_spaces(evidence)
 
     async def _get(self, path: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         params = params or {}
@@ -636,6 +721,8 @@ class TMDBClient:
             if fallback_cleaned_title:
                 item["cleaned_title"] = fallback_cleaned_title
         item["tmdb_match_path"] = None
+        item["tmdb_match_confidence"] = compact_spaces(str(item.get("tmdb_match_confidence") or ""))
+        item["tmdb_match_evidence"] = compact_spaces(str(item.get("tmdb_match_evidence") or ""))
         if not item.get("media_type"):
             forced = source_category_forced_media_type(
                 item.get("source_category_id"), item.get("source_category_name"),
@@ -738,8 +825,31 @@ class TMDBClient:
         try:
             source_imdb_id = item.get("source_imdb_id")
             details = None
+            stored_override = self._kinozal_override(item)
+            if stored_override:
+                try:
+                    details = await self.get_details(
+                        str(stored_override.get("media_type") or "movie"),
+                        int(stored_override["tmdb_id"]),
+                    )
+                    if details:
+                        self._apply_match_metadata(
+                            item,
+                            details,
+                            path="stored_override",
+                            confidence="verified",
+                            evidence=f"kinozal_id override source={compact_spaces(str(stored_override.get('source') or 'admin'))}",
+                        )
+                except Exception:
+                    self.log.warning(
+                        "TMDB stored override failed for %s -> %s",
+                        item.get("source_title"),
+                        stored_override,
+                        exc_info=True,
+                    )
+
             override = manual_tmdb_override_for_item(item)
-            if override:
+            if override and not details:
                 override_media_type, override_tmdb_id, override_key = override
                 try:
                     override_details = await self.get_details(override_media_type, int(override_tmdb_id))
@@ -748,7 +858,13 @@ class TMDBClient:
                         override_details["search_match_original_title"] = override_key
                         details = override_details
                         tmdb_match_path = "manual_override"
-                        item["tmdb_match_path"] = tmdb_match_path
+                        self._apply_match_metadata(
+                            item,
+                            details,
+                            path=tmdb_match_path,
+                            confidence="verified",
+                            evidence=f"static override key={override_key}",
+                        )
                         self.log.info(
                             "TMDB manual override matched %s -> %s [%s:%s]",
                             item.get("source_title"),
@@ -769,7 +885,21 @@ class TMDBClient:
                 details = await self.find_by_imdb(source_imdb_id)
                 if details:
                     tmdb_match_path = "imdb_lookup"
-                    item["tmdb_match_path"] = tmdb_match_path
+                    if self._is_rejected_match(item, details):
+                        self.log.info(
+                            "TMDB skipped rejected IMDb lookup for %s -> tmdb_id=%s",
+                            item.get("source_title"),
+                            details.get("tmdb_id"),
+                        )
+                        details = None
+                    else:
+                        self._apply_match_metadata(
+                            item,
+                            details,
+                            path=tmdb_match_path,
+                            confidence="verified",
+                            evidence=f"source_imdb_id={source_imdb_id}",
+                        )
 
             if (
                 self.cfg.anime_resolver_enabled
@@ -809,17 +939,35 @@ class TMDBClient:
                             matched_title = resolver_result.get("resolver_matched_title") or ""
                             resolved_details["search_match_title"] = matched_title or None
                             resolved_details["search_match_original_title"] = matched_title or None
-                            details = resolved_details
-                            tmdb_match_path = "anime_resolver_direct"
-                            item["tmdb_match_path"] = tmdb_match_path
-                            self.log.info(
-                                "Anime resolver adopted %s -> tmdb_id=%s [%s] source=%s confidence=%s",
-                                item.get("source_title"),
-                                resolver_result.get("tmdb_id"),
-                                resolver_media_type,
-                                resolver_result.get("resolver_source"),
-                                resolver_result.get("resolver_confidence"),
-                            )
+                            if self._is_rejected_match(item, resolved_details):
+                                self.log.info(
+                                    "Anime resolver rejected by memory for %s -> tmdb_id=%s",
+                                    item.get("source_title"),
+                                    resolved_details.get("tmdb_id"),
+                                )
+                                details = None
+                            else:
+                                tmdb_match_path = "anime_resolver_direct"
+                                self._apply_match_metadata(
+                                    item,
+                                    resolved_details,
+                                    path=tmdb_match_path,
+                                    confidence="high",
+                                    evidence=(
+                                        "anime resolver "
+                                        f"source={resolver_result.get('resolver_source')} "
+                                        f"confidence={resolver_result.get('resolver_confidence')}"
+                                    ),
+                                )
+                                details = resolved_details
+                                self.log.info(
+                                    "Anime resolver adopted %s -> tmdb_id=%s [%s] source=%s confidence=%s",
+                                    item.get("source_title"),
+                                    resolver_result.get("tmdb_id"),
+                                    resolver_media_type,
+                                    resolver_result.get("resolver_source"),
+                                    resolver_result.get("resolver_confidence"),
+                                )
                 except Exception:
                     self.log.warning(
                         "Anime resolver direct lookup failed for %s -> tmdb_id=%s",
@@ -942,6 +1090,15 @@ class TMDBClient:
                         )
                         details = None
 
+                    if details and self._is_rejected_match(item, details):
+                        self.log.info(
+                            "TMDB search match rejected by memory for %s -> %s [tmdb_id=%s]",
+                            item.get("source_title"),
+                            candidate,
+                            details.get("tmdb_id"),
+                        )
+                        details = None
+
                     if details and (details.get("media_type") or mt) == "movie" and not item.get("source_imdb_id"):
                         source_year = parse_year(str(item.get("source_year") or ""))
                         matched_year = parse_year(str(details.get("tmdb_release_date") or ""))
@@ -959,7 +1116,14 @@ class TMDBClient:
                         matched_media_type = details.get("media_type") or mt
                         matched_year = parse_year(str(details.get("tmdb_release_date") or ""))
                         tmdb_match_path = "search"
-                        item["tmdb_match_path"] = tmdb_match_path
+                        confidence, evidence = _search_match_confidence(item, details)
+                        self._apply_match_metadata(
+                            item,
+                            details,
+                            path=tmdb_match_path,
+                            confidence=confidence,
+                            evidence=f"query={candidate}; media={matched_media_type}; {evidence}",
+                        )
                         self.log.info("TMDB matched %s -> %s [%s, tmdb_year=%s]", item.get("source_title"), candidate, matched_media_type, matched_year)
                         break
 
@@ -974,6 +1138,10 @@ class TMDBClient:
                     item["media_type"] = details.get("media_type")
                 if not item.get("imdb_id"):
                     item["imdb_id"] = details.get("imdb_id")
+            elif item.get("tmdb_id") is None:
+                item["tmdb_match_confidence"] = "unmatched"
+                if not compact_spaces(str(item.get("tmdb_match_evidence") or "")):
+                    item["tmdb_match_evidence"] = "no valid TMDB candidate"
             return item
         except Exception:
             self.log.exception("TMDB enrichment failed for %s", item.get("source_title"))

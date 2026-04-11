@@ -154,6 +154,9 @@ class ItemsRepository(BaseRepository):
             "tmdb_status": item.get("tmdb_status"),
             "tmdb_age_rating": item.get("tmdb_age_rating"),
             "tmdb_countries": json.dumps(parse_country_codes(item.get("tmdb_countries", [])), ensure_ascii=False),
+            "tmdb_match_path": item.get("tmdb_match_path"),
+            "tmdb_match_confidence": item.get("tmdb_match_confidence") or "",
+            "tmdb_match_evidence": item.get("tmdb_match_evidence") or "",
             "tmdb_number_of_seasons": item.get("tmdb_number_of_seasons"),
             "tmdb_number_of_episodes": item.get("tmdb_number_of_episodes"),
             "tmdb_next_episode_name": item.get("tmdb_next_episode_name"),
@@ -222,6 +225,9 @@ class ItemsRepository(BaseRepository):
                     "tmdb_status",
                     "tmdb_age_rating",
                     "tmdb_countries",
+                    "tmdb_match_path",
+                    "tmdb_match_confidence",
+                    "tmdb_match_evidence",
                     "tmdb_number_of_seasons",
                     "tmdb_number_of_episodes",
                     "tmdb_next_episode_name",
@@ -310,6 +316,46 @@ class ItemsRepository(BaseRepository):
             if not compact_spaces(str(data.get("kinozal_id") or "")):
                 data["kinozal_id"] = resolve_item_kinozal_id(data)
             return data
+
+    def clear_item_match(self, item_id: int) -> None:
+        with self.lock:
+            self.conn.execute(
+                """
+                UPDATE items
+                SET imdb_id = NULL,
+                    mal_id = NULL,
+                    media_type = NULL,
+                    tmdb_id = NULL,
+                    tmdb_title = NULL,
+                    tmdb_original_title = NULL,
+                    tmdb_original_language = NULL,
+                    tmdb_rating = NULL,
+                    tmdb_vote_count = NULL,
+                    tmdb_release_date = NULL,
+                    tmdb_overview = NULL,
+                    tmdb_poster_url = NULL,
+                    tmdb_status = NULL,
+                    tmdb_age_rating = NULL,
+                    tmdb_countries = NULL,
+                    tmdb_match_path = NULL,
+                    tmdb_match_confidence = '',
+                    tmdb_match_evidence = '',
+                    tmdb_number_of_seasons = NULL,
+                    tmdb_number_of_episodes = NULL,
+                    tmdb_next_episode_name = NULL,
+                    tmdb_next_episode_air_date = NULL,
+                    tmdb_next_episode_season_number = NULL,
+                    tmdb_next_episode_episode_number = NULL,
+                    tmdb_last_episode_name = NULL,
+                    tmdb_last_episode_air_date = NULL,
+                    tmdb_last_episode_season_number = NULL,
+                    tmdb_last_episode_episode_number = NULL
+                WHERE id = ?
+                """,
+                (int(item_id),),
+            )
+            self.conn.execute("DELETE FROM item_genres WHERE item_id = ?", (int(item_id),))
+            self.conn.commit()
 
     def find_item_by_kinozal_id(self, kinozal_id: str) -> Optional[Dict[str, Any]]:
         kinozal_id = compact_spaces(str(kinozal_id or ""))
