@@ -7,12 +7,12 @@ from aiogram.enums import ParseMode
 from aiogram.filters import Command, CommandObject
 from aiogram.types import CallbackQuery, Message
 
-from admin_match_review_helpers import deliver_item_to_matching_subscriptions
+from admin_match_review_helpers import build_match_review_alert, deliver_item_to_matching_subscriptions
 from admin_helpers import is_admin, extract_kinozal_id_from_text, parse_admin_route_target
 from config import CFG
 from country_helpers import COUNTRY_NAMES_RU, parse_country_codes
 from delivery_sender import send_item_to_user
-from keyboards import match_candidates_kb
+from keyboards import match_candidates_kb, match_review_kb
 from match_debug_helpers import build_match_explanation, rematch_item_live, _strip_existing_match_fields
 from release_versioning import describe_variant_change, extract_kinozal_id, format_variant_summary
 from subscription_matching import match_subscription
@@ -24,6 +24,31 @@ log = logging.getLogger(__name__)
 
 
 def register_admin_match_handlers(router: Router, db: Any, tmdb: Any) -> None:
+    def _count_matching_users(item: dict) -> int:
+        matched_users = 0
+        item_tmdb_id = item.get("tmdb_id")
+        for sub in db.list_enabled_subscriptions():
+            sub_full = db.get_subscription(int(sub["id"]))
+            if not sub_full:
+                continue
+            tg_user_id = int(sub_full["tg_user_id"])
+            if item_tmdb_id and db.is_title_muted(tg_user_id, int(item_tmdb_id)):
+                continue
+            if match_subscription(db, sub_full, item):
+                matched_users += 1
+        return matched_users
+
+    async def _send_match_review_card(message: Message, item: dict) -> None:
+        kinozal_id = compact_spaces(str(item.get("kinozal_id") or ""))
+        text = build_match_review_alert(item, affected_users=_count_matching_users(item))
+        reply_markup = match_review_kb(kinozal_id, has_tmdb_match=bool(item.get("tmdb_id"))) if kinozal_id else None
+        await message.answer(
+            text,
+            parse_mode=ParseMode.HTML,
+            disable_web_page_preview=True,
+            reply_markup=reply_markup,
+        )
+
     async def _send_match_explanation(message: Message, kinozal_id: str) -> None:
         item = db.find_item_by_kinozal_id(kinozal_id)
         if not item:
@@ -256,6 +281,10 @@ def register_admin_match_handlers(router: Router, db: Any, tmdb: Any) -> None:
                 f"| {html.escape(short(compact_spaces(str(item.get('source_title') or '—')), 80))}"
             )
         await message.answer("\n".join(lines), parse_mode=ParseMode.HTML, disable_web_page_preview=True)
+        for review in reviews:
+            item = db.get_item(int(review["item_id"]))
+            if item:
+                await _send_match_review_card(message, item)
 
     @router.message(Command("matchcandidates"))
     async def cmd_matchcandidates(message: Message, command: CommandObject) -> None:
