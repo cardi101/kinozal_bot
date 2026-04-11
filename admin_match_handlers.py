@@ -2,10 +2,10 @@ import html
 import logging
 from typing import Any, List
 
-from aiogram import Router
+from aiogram import F, Router
 from aiogram.enums import ParseMode
 from aiogram.filters import Command, CommandObject
-from aiogram.types import Message
+from aiogram.types import CallbackQuery, Message
 
 from admin_match_review_helpers import deliver_item_to_matching_subscriptions
 from admin_helpers import is_admin, extract_kinozal_id_from_text, parse_admin_route_target
@@ -23,6 +23,117 @@ log = logging.getLogger(__name__)
 
 
 def register_admin_match_handlers(router: Router, db: Any, tmdb: Any) -> None:
+    async def _send_match_explanation(message: Message, kinozal_id: str) -> None:
+        item = db.find_item_by_kinozal_id(kinozal_id)
+        if not item:
+            await message.answer(f"Не нашёл релиз в базе по Kinozal ID {kinozal_id}.")
+            return
+
+        live_item = dict(item)
+        try:
+            live_item = await tmdb.enrich_item(_strip_existing_match_fields(item))
+        except Exception:
+            log.exception("Live explain TMDB recompute failed for kinozal_id=%s", kinozal_id)
+            live_item = dict(item)
+
+        await message.answer(
+            build_match_explanation(db, item, live_item),
+            parse_mode=ParseMode.HTML,
+            disable_web_page_preview=CFG.disable_preview,
+        )
+
+    async def _send_match_candidates(message: Message, kinozal_id: str) -> None:
+        item = db.find_item_by_kinozal_id(kinozal_id)
+        if not item:
+            await message.answer(f"Не нашёл релиз в базе по Kinozal ID {kinozal_id}.")
+            return
+
+        candidates = await tmdb.search_candidates_for_item(_strip_existing_match_fields(item), limit=8)
+        if not candidates:
+            await message.answer(
+                "\n".join(
+                    [
+                        f"Кандидаты TMDB для {kinozal_id} не найдены.",
+                        f"Следующий шаг: /overridematch {kinozal_id} <tmdb_id> <movie|tv>",
+                    ]
+                ),
+                disable_web_page_preview=True,
+            )
+            return
+
+        lines = [
+            f"🔎 TMDB candidates for Kinozal ID {kinozal_id}",
+            f"Заголовок: {html.escape(compact_spaces(str(item.get('source_title') or '—')))}",
+            "",
+        ]
+        for row in candidates:
+            release_year = short(compact_spaces(str(row.get("release_date") or "")), 10) or "—"
+            original = compact_spaces(str(row.get("original_title") or ""))
+            line = (
+                f"• <code>{int(row['tmdb_id'])}</code> [{html.escape(str(row.get('media_type') or 'movie'))}] "
+                f"{html.escape(compact_spaces(str(row.get('title') or '—')))} | year={html.escape(release_year)} | "
+                f"confidence=<code>{html.escape(compact_spaces(str(row.get('confidence') or '—')))}</code>"
+            )
+            lines.append(line)
+            if original and original != row.get("title"):
+                lines.append(f"  original: {html.escape(original)}")
+            lines.append(f"  query: <code>{html.escape(compact_spaces(str(row.get('query') or '—')))}</code>")
+            lines.append(f"  evidence: {html.escape(compact_spaces(str(row.get('evidence') or '—')))}")
+
+        lines.append("")
+        lines.append(f"Override: <code>/overridematch {html.escape(str(kinozal_id))} &lt;tmdb_id&gt; &lt;movie|tv&gt;</code>")
+        await message.answer("\n".join(lines), parse_mode=ParseMode.HTML, disable_web_page_preview=True)
+
+    async def _approve_match(message: Message, admin_user_id: int, kinozal_id: str) -> None:
+        review = db.get_pending_match_review(kinozal_id)
+        item = db.find_item_by_kinozal_id(kinozal_id)
+        if not review or not item:
+            await message.answer(f"Pending review для Kinozal ID {kinozal_id} не найден.")
+            return
+        if not item.get("tmdb_id"):
+            await message.answer(f"У релиза {kinozal_id} сейчас нет TMDB-матча. Используй /overridematch.")
+            return
+
+        db.set_match_override(kinozal_id, int(item["tmdb_id"]), str(item.get("media_type") or "movie"), source="admin_approve")
+        db.resolve_match_review(int(review["item_id"]), "approved", admin_user_id, note="approved current match")
+        matched_users, delivered_count = await deliver_item_to_matching_subscriptions(db, message.bot, item)
+        await message.answer(
+            "\n".join(
+                [
+                    f"✅ Match approved for Kinozal ID {kinozal_id}",
+                    f"TMDB: {compact_spaces(str(item.get('tmdb_title') or item.get('tmdb_original_title') or '—'))} (id={int(item['tmdb_id'])})",
+                    f"Подходящих подписок: {matched_users}",
+                    f"Новых уведомлений отправлено: {delivered_count}",
+                ]
+            ),
+            disable_web_page_preview=True,
+        )
+
+    async def _reject_match(message: Message, admin_user_id: int, kinozal_id: str) -> None:
+        review = db.get_pending_match_review(kinozal_id)
+        item = db.find_item_by_kinozal_id(kinozal_id)
+        if not review or not item:
+            await message.answer(f"Pending review для Kinozal ID {kinozal_id} не найден.")
+            return
+
+        rejected_tmdb_id = item.get("tmdb_id")
+        rejected_title = compact_spaces(str(item.get("tmdb_title") or item.get("tmdb_original_title") or "")) or "—"
+        if rejected_tmdb_id:
+            db.add_match_rejection(kinozal_id, int(rejected_tmdb_id), note="admin rejected current match")
+        db.clear_item_match(int(item["id"]))
+        db.resolve_match_review(int(review["item_id"]), "rejected", admin_user_id, note="rejected current match")
+        await message.answer(
+            "\n".join(
+                [
+                    f"⛔ Match rejected for Kinozal ID {kinozal_id}",
+                    f"TMDB было: {rejected_title}" + (f" (id={int(rejected_tmdb_id)})" if rejected_tmdb_id else ""),
+                    "Текущий матч очищен, доставка пользователям не будет выполнена.",
+                    f"Следующий шаг: /overridematch {kinozal_id} <tmdb_id> <movie|tv>",
+                ]
+            ),
+            disable_web_page_preview=True,
+        )
+
     @router.message(Command("matchqueue"))
     async def cmd_matchqueue(message: Message, command: CommandObject) -> None:
         if not is_admin(message.from_user.id):
@@ -66,46 +177,40 @@ def register_admin_match_handlers(router: Router, db: Any, tmdb: Any) -> None:
             await message.answer("Используй: /matchcandidates <kinozal_id>")
             return
 
-        item = db.find_item_by_kinozal_id(kinozal_id)
-        if not item:
-            await message.answer(f"Не нашёл релиз в базе по Kinozal ID {kinozal_id}.")
+        await _send_match_candidates(message, kinozal_id)
+
+    @router.callback_query(F.data.startswith("matchreview:"))
+    async def cb_matchreview(callback: CallbackQuery) -> None:
+        if not is_admin(callback.from_user.id):
+            await callback.answer("Только для администратора.", show_alert=True)
+            return
+        parts = (callback.data or "").split(":", 2)
+        if len(parts) != 3:
+            await callback.answer("Некорректное действие", show_alert=True)
+            return
+        _, action, kinozal_id = parts
+        kinozal_id = extract_kinozal_id(kinozal_id or "")
+        if not kinozal_id:
+            await callback.answer("Некорректный Kinozal ID", show_alert=True)
             return
 
-        candidates = await tmdb.search_candidates_for_item(_strip_existing_match_fields(item), limit=8)
-        if not candidates:
-            await message.answer(
-                "\n".join(
-                    [
-                        f"Кандидаты TMDB для {kinozal_id} не найдены.",
-                        f"Следующий шаг: /overridematch {kinozal_id} <tmdb_id> <movie|tv>",
-                    ]
-                ),
-                disable_web_page_preview=True,
-            )
+        if action == "approve":
+            await _approve_match(callback.message, callback.from_user.id, kinozal_id)
+            await callback.answer("Match approved")
             return
-
-        lines = [
-            f"🔎 TMDB candidates for Kinozal ID {kinozal_id}",
-            f"Заголовок: {html.escape(compact_spaces(str(item.get('source_title') or '—')))}",
-            "",
-        ]
-        for row in candidates:
-            release_year = short(compact_spaces(str(row.get("release_date") or "")), 10) or "—"
-            original = compact_spaces(str(row.get("original_title") or ""))
-            line = (
-                f"• <code>{int(row['tmdb_id'])}</code> [{html.escape(str(row.get('media_type') or 'movie'))}] "
-                f"{html.escape(compact_spaces(str(row.get('title') or '—')))} | year={html.escape(release_year)} | "
-                f"confidence=<code>{html.escape(compact_spaces(str(row.get('confidence') or '—')))}</code>"
-            )
-            lines.append(line)
-            if original and original != row.get("title"):
-                lines.append(f"  original: {html.escape(original)}")
-            lines.append(f"  query: <code>{html.escape(compact_spaces(str(row.get('query') or '—')))}</code>")
-            lines.append(f"  evidence: {html.escape(compact_spaces(str(row.get('evidence') or '—')))}")
-
-        lines.append("")
-        lines.append(f"Override: <code>/overridematch {html.escape(str(kinozal_id))} &lt;tmdb_id&gt; &lt;movie|tv&gt;</code>")
-        await message.answer("\n".join(lines), parse_mode=ParseMode.HTML, disable_web_page_preview=True)
+        if action == "reject":
+            await _reject_match(callback.message, callback.from_user.id, kinozal_id)
+            await callback.answer("Match rejected")
+            return
+        if action == "candidates":
+            await _send_match_candidates(callback.message, kinozal_id)
+            await callback.answer()
+            return
+        if action == "explain":
+            await _send_match_explanation(callback.message, kinozal_id)
+            await callback.answer()
+            return
+        await callback.answer("Неизвестное действие", show_alert=True)
 
     @router.message(Command("approvematch"))
     async def cmd_approvematch(message: Message, command: CommandObject) -> None:
@@ -118,29 +223,7 @@ def register_admin_match_handlers(router: Router, db: Any, tmdb: Any) -> None:
             await message.answer("Используй: /approvematch <kinozal_id>")
             return
 
-        review = db.get_pending_match_review(kinozal_id)
-        item = db.find_item_by_kinozal_id(kinozal_id)
-        if not review or not item:
-            await message.answer(f"Pending review для Kinozal ID {kinozal_id} не найден.")
-            return
-        if not item.get("tmdb_id"):
-            await message.answer(f"У релиза {kinozal_id} сейчас нет TMDB-матча. Используй /overridematch.")
-            return
-
-        db.set_match_override(kinozal_id, int(item["tmdb_id"]), str(item.get("media_type") or "movie"), source="admin_approve")
-        db.resolve_match_review(int(review["item_id"]), "approved", message.from_user.id, note="approved current match")
-        matched_users, delivered_count = await deliver_item_to_matching_subscriptions(db, message.bot, item)
-        await message.answer(
-            "\n".join(
-                [
-                    f"✅ Match approved for Kinozal ID {kinozal_id}",
-                    f"TMDB: {compact_spaces(str(item.get('tmdb_title') or item.get('tmdb_original_title') or '—'))} (id={int(item['tmdb_id'])})",
-                    f"Подходящих подписок: {matched_users}",
-                    f"Новых уведомлений отправлено: {delivered_count}",
-                ]
-            ),
-            disable_web_page_preview=True,
-        )
+        await _approve_match(message, message.from_user.id, kinozal_id)
 
     @router.message(Command("rejectmatch"))
     async def cmd_rejectmatch(message: Message, command: CommandObject) -> None:
@@ -153,29 +236,7 @@ def register_admin_match_handlers(router: Router, db: Any, tmdb: Any) -> None:
             await message.answer("Используй: /rejectmatch <kinozal_id>")
             return
 
-        review = db.get_pending_match_review(kinozal_id)
-        item = db.find_item_by_kinozal_id(kinozal_id)
-        if not review or not item:
-            await message.answer(f"Pending review для Kinozal ID {kinozal_id} не найден.")
-            return
-
-        rejected_tmdb_id = item.get("tmdb_id")
-        rejected_title = compact_spaces(str(item.get("tmdb_title") or item.get("tmdb_original_title") or "")) or "—"
-        if rejected_tmdb_id:
-            db.add_match_rejection(kinozal_id, int(rejected_tmdb_id), note="admin rejected current match")
-        db.clear_item_match(int(item["id"]))
-        db.resolve_match_review(int(review["item_id"]), "rejected", message.from_user.id, note="rejected current match")
-        await message.answer(
-            "\n".join(
-                [
-                    f"⛔ Match rejected for Kinozal ID {kinozal_id}",
-                    f"TMDB было: {rejected_title}" + (f" (id={int(rejected_tmdb_id)})" if rejected_tmdb_id else ""),
-                    "Текущий матч очищен, доставка пользователям не будет выполнена.",
-                    f"Следующий шаг: /overridematch {kinozal_id} <tmdb_id> <movie|tv>",
-                ]
-            ),
-            disable_web_page_preview=True,
-        )
+        await _reject_match(message, message.from_user.id, kinozal_id)
 
     @router.message(Command("overridematch"))
     async def cmd_overridematch(message: Message, command: CommandObject) -> None:
@@ -314,19 +375,7 @@ def register_admin_match_handlers(router: Router, db: Any, tmdb: Any) -> None:
             await message.answer("Используй: /explainmatch <kinozal_id> или ответь этой командой на уведомление бота.")
             return
 
-        item = db.find_item_by_kinozal_id(kinozal_id)
-        if not item:
-            await message.answer(f"Не нашёл релиз в базе по Kinozal ID {kinozal_id}.")
-            return
-
-        live_item = dict(item)
-        try:
-            live_item = await tmdb.enrich_item(_strip_existing_match_fields(item))
-        except Exception:
-            log.exception("Live explain TMDB recompute failed for kinozal_id=%s", kinozal_id)
-            live_item = dict(item)
-
-        await message.answer(build_match_explanation(db, item, live_item), parse_mode=ParseMode.HTML, disable_web_page_preview=CFG.disable_preview)
+        await _send_match_explanation(message, kinozal_id)
 
     @router.message(Command("rematch"))
     async def cmd_rematch(message: Message, command: CommandObject) -> None:

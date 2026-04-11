@@ -1,7 +1,7 @@
 import logging
 from typing import Any, Dict, List
 
-from media_detection import is_non_video_release
+from media_detection import is_non_video_release, is_russian_release
 from subscription_matching import match_subscription
 from kinozal_details import enrich_kinozal_item_with_details
 
@@ -23,9 +23,7 @@ async def get_live_test_items_for_subscription(db: Any, source: Any, tmdb: Any, 
     matched: List[Dict[str, Any]] = []
 
     for raw_item in fresh_items:
-        category = str(raw_item.get("source_category_name") or "")
-        title = str(raw_item.get("source_title") or "")
-        if any(kw in category for kw in ("Русский", "Русская", "Русское", "Наше Кино")) or "/ РУ /" in title:
+        if is_russian_release(raw_item):
             continue
         source_text = f"{raw_item.get('source_title') or ''} {raw_item.get('source_description') or ''}"
         if raw_item.get("media_type") == "other" or is_non_video_release(source_text):

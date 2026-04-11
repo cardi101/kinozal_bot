@@ -1,8 +1,11 @@
 import html
 from typing import Any, Dict, Tuple
 
+from aiogram.enums import ParseMode
+
+from config import CFG
 from delivery_sender import send_item_to_user
-from service_helpers import send_admins_text
+from keyboards import match_review_kb
 from subscription_matching import match_subscription
 from utils import compact_spaces
 
@@ -47,7 +50,22 @@ def build_match_review_alert(item: Dict[str, Any], affected_users: int) -> str:
 
 
 async def notify_admins_about_match_review(bot: Any, item: Dict[str, Any], affected_users: int) -> None:
-    await send_admins_text(bot, build_match_review_alert(item, affected_users))
+    text = build_match_review_alert(item, affected_users)
+    kinozal_id = compact_spaces(str(item.get("kinozal_id") or ""))
+    reply_markup = match_review_kb(kinozal_id, has_tmdb_match=bool(item.get("tmdb_id"))) if kinozal_id else None
+    if not CFG.admin_ids:
+        return
+    for admin_id in CFG.admin_ids:
+        try:
+            await bot.send_message(
+                int(admin_id),
+                text,
+                parse_mode=ParseMode.HTML,
+                disable_web_page_preview=True,
+                reply_markup=reply_markup,
+            )
+        except Exception:
+            continue
 
 
 async def deliver_item_to_matching_subscriptions(db: Any, bot: Any, item: Dict[str, Any]) -> Tuple[int, int]:

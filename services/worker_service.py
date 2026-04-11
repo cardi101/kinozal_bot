@@ -8,7 +8,7 @@ from admin_match_review_helpers import item_requires_match_review, notify_admins
 from config import CFG
 from content_buckets import item_content_bucket
 from domain import DeliveryCandidate, ReleaseItem, SubscriptionRecord
-from media_detection import is_non_video_release
+from media_detection import is_non_video_release, is_russian_release
 from release_versioning import extract_kinozal_id, parse_episode_progress
 from source_health import note_source_cycle_failure, note_source_cycle_success
 from utils import compact_spaces, utc_ts
@@ -129,11 +129,9 @@ class WorkerService:
                 log.info("Skip non-video item: %s", raw_item.get("source_title"))
                 continue
 
-            category = str(raw_item.get("source_category_name") or "")
-            title = str(raw_item.get("source_title") or "")
-            if any(kw in category for kw in ("Русский", "Русская", "Русское", "Наше Кино")) or "/ РУ /" in title:
+            if is_russian_release(raw_item.to_dict()):
                 cycle_metrics["items_filtered_russian_total"] += 1
-                log.info("Skip Russian item: %s [%s]", title, category)
+                log.info("Skip Russian item: %s [%s]", raw_item.get("source_title"), raw_item.get("source_category_name"))
                 continue
 
             cached = self.repository.find_existing_enriched(raw_item.get("source_uid"), raw_item.get("source_title"))

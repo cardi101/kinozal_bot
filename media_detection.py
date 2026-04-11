@@ -3,6 +3,28 @@ import re
 from utils import compact_spaces
 
 
+_RUSSIAN_AUDIO_LABEL_RE = re.compile(r"(?<!\w)(?:ру|rus|russian)(?!\w)", flags=re.I)
+_RUSSIAN_TITLE_BLOCK_RE = re.compile(
+    r"(?:^|[ /,;|])(?:ру|rus|russian)(?:[ /,;|]|$)",
+    flags=re.I,
+)
+
+
+def is_russian_release(item: dict | None) -> bool:
+    item = item or {}
+    category = compact_spaces(str(item.get("source_category_name") or ""))
+    title = compact_spaces(str(item.get("source_title") or ""))
+    if any(keyword in category for keyword in ("Русский", "Русская", "Русское", "Наше Кино")):
+        return True
+    if _RUSSIAN_TITLE_BLOCK_RE.search(title):
+        return True
+
+    for track in item.get("source_audio_tracks") or []:
+        if _RUSSIAN_AUDIO_LABEL_RE.search(compact_spaces(str(track or ""))):
+            return True
+    return False
+
+
 def is_non_video_release(text: str) -> bool:
     text = compact_spaces((text or "").lower())
 

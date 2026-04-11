@@ -199,3 +199,14 @@ def quiet_hours_kb(current_start, current_end) -> InlineKeyboardMarkup:
     kb.button(text="◀️ В меню", callback_data="menu:root")
     kb.adjust(2, 2, 1, 1)
     return kb.as_markup()
+
+
+def match_review_kb(kinozal_id: str, has_tmdb_match: bool) -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    if has_tmdb_match:
+        kb.button(text="✅ Approve", callback_data=f"matchreview:approve:{kinozal_id}")
+        kb.button(text="⛔ Reject", callback_data=f"matchreview:reject:{kinozal_id}")
+    kb.button(text="🔎 Candidates", callback_data=f"matchreview:candidates:{kinozal_id}")
+    kb.button(text="🧭 Explain", callback_data=f"matchreview:explain:{kinozal_id}")
+    kb.adjust(2, 2)
+    return kb.as_markup()
