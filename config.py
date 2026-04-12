@@ -48,6 +48,7 @@ class Config:
     database_url: str = _env_str("DATABASE_URL")
     redis_url: str = _env_str("REDIS_URL")
     disable_preview: bool = os.getenv("DISABLE_WEB_PAGE_PREVIEW", "1").lower() not in {"0", "false", "no"}
+    match_review_enabled: bool = _env_str("MATCH_REVIEW_ENABLED", "0").lower() in {"1", "true", "yes", "on"}
     start_fetch_as_read: bool = os.getenv("BOOTSTRAP_AS_READ", "1").lower() not in {"0", "false", "no"}
     source_fetch_limit: int = _env_int("SOURCE_FETCH_LIMIT", 50)
     cleanup_duplicates_preview_limit: int = _env_int("CLEANUP_DUPLICATES_PREVIEW_LIMIT", 15)

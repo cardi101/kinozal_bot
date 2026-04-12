@@ -106,7 +106,21 @@ def test_build_match_review_alert_escapes_override_placeholders() -> None:
 
 
 def test_item_requires_match_review_only_for_low_with_tmdb_id() -> None:
-    assert item_requires_match_review({"tmdb_match_confidence": "low", "tmdb_id": 123}) is True
-    assert item_requires_match_review({"tmdb_match_confidence": "medium", "tmdb_id": 123}) is False
-    assert item_requires_match_review({"tmdb_match_confidence": "unmatched", "kinozal_id": "123"}) is False
-    assert item_requires_match_review({"tmdb_match_confidence": "low"}) is False
+    original_enabled = CFG.match_review_enabled
+    CFG.match_review_enabled = True
+    try:
+        assert item_requires_match_review({"tmdb_match_confidence": "low", "tmdb_id": 123}) is True
+        assert item_requires_match_review({"tmdb_match_confidence": "medium", "tmdb_id": 123}) is False
+        assert item_requires_match_review({"tmdb_match_confidence": "unmatched", "kinozal_id": "123"}) is False
+        assert item_requires_match_review({"tmdb_match_confidence": "low"}) is False
+    finally:
+        CFG.match_review_enabled = original_enabled
+
+
+def test_item_requires_match_review_disabled_by_default_flag() -> None:
+    original_enabled = CFG.match_review_enabled
+    CFG.match_review_enabled = False
+    try:
+        assert item_requires_match_review({"tmdb_match_confidence": "low", "tmdb_id": 123}) is False
+    finally:
+        CFG.match_review_enabled = original_enabled

@@ -17,6 +17,8 @@ REVIEW_MATCH_CONFIDENCES = {"low"}
 
 
 def item_requires_match_review(item: Dict[str, Any]) -> bool:
+    if not CFG.match_review_enabled:
+        return False
     confidence = compact_spaces(str(item.get("tmdb_match_confidence") or "")).lower()
     return confidence == "low" and bool(item.get("tmdb_id"))
 
