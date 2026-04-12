@@ -2,6 +2,7 @@ import asyncio
 import logging
 from typing import Any, List, Optional, Sequence
 
+from delivery_audit import build_delivery_audit
 from delivery_sender import send_grouped_items_to_user, send_item_to_user
 from domain import DeliveryCandidate, ReleaseItem, SubscriptionRecord
 from release_versioning import describe_variant_change
@@ -48,10 +49,23 @@ class DeliveryService:
             [sub.to_dict() for sub in subs] if subs else None,
         )
 
-    def record_delivery(self, tg_user_id: int, item_id: int, subs: Sequence[SubscriptionRecord]) -> None:
+    def record_delivery(self, tg_user_id: int, item: ReleaseItem, subs: Sequence[SubscriptionRecord], context: str = "worker") -> None:
+        item_id = item.id
         primary_sub_id = subs[0].id if subs else 0
         matched_sub_ids = [sub.id for sub in subs]
-        self.repository.record_delivery(tg_user_id, item_id, primary_sub_id, matched_sub_ids)
+        delivery_audit = build_delivery_audit(
+            self.repository.db,
+            item.to_dict(),
+            [sub.to_dict() for sub in subs],
+            context=context,
+        )
+        self.repository.record_delivery(
+            tg_user_id,
+            item_id,
+            primary_sub_id,
+            matched_sub_ids,
+            delivery_audit=delivery_audit,
+        )
 
     async def send_single(self, tg_user_id: int, delivery: DeliveryCandidate) -> None:
         item = delivery.item
@@ -81,5 +95,5 @@ class DeliveryService:
             matched_subs,
             old_release_text=delivery.old_release_text,
         )
-        self.record_delivery(tg_user_id, item_id, matched_subs)
+        self.record_delivery(tg_user_id, item, matched_subs)
         await asyncio.sleep(0.12)

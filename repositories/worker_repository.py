@@ -92,8 +92,15 @@ class WorkerRepository:
             is_release_text_change,
         )
 
-    def record_delivery(self, tg_user_id: int, item_id: int, primary_sub_id: int, matched_sub_ids: List[int]) -> None:
-        self.db.record_delivery(tg_user_id, item_id, primary_sub_id, matched_sub_ids)
+    def record_delivery(
+        self,
+        tg_user_id: int,
+        item_id: int,
+        primary_sub_id: int,
+        matched_sub_ids: List[int],
+        delivery_audit: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        self.db.record_delivery(tg_user_id, item_id, primary_sub_id, matched_sub_ids, delivery_audit=delivery_audit)
 
     def get_latest_delivered_related_item(self, tg_user_id: int, item: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         return self.db.get_latest_delivered_related_item(tg_user_id, item)

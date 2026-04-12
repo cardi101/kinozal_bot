@@ -5,6 +5,7 @@ from typing import Any, Dict, Iterable, Tuple
 from aiogram.enums import ParseMode
 
 from config import CFG
+from delivery_audit import build_delivery_audit
 from delivery_sender import send_item_to_user
 from keyboards import match_review_kb
 from subscription_matching import match_subscription
@@ -107,7 +108,13 @@ async def deliver_item_to_matching_subscriptions(db: Any, bot: Any, item: Dict[s
         if db.delivered(tg_user_id, item_id) or db.delivered_equivalent(tg_user_id, item):
             continue
         await send_item_to_user(db, bot, tg_user_id, item, [sub_full])
-        db.record_delivery(tg_user_id, item_id, int(sub_full["id"]), [int(sub_full["id"])])
+        db.record_delivery(
+            tg_user_id,
+            item_id,
+            int(sub_full["id"]),
+            [int(sub_full["id"])],
+            delivery_audit=build_delivery_audit(db, item, [sub_full], context="match_review"),
+        )
         delivered_count += 1
 
     return matched_users, delivered_count

@@ -15,6 +15,7 @@ from admin_match_review_helpers import (
 from admin_helpers import is_admin, extract_kinozal_id_from_text, parse_admin_route_target
 from config import CFG
 from country_helpers import COUNTRY_NAMES_RU, parse_country_codes
+from delivery_audit import build_delivery_audit
 from delivery_sender import send_item_to_user
 from keyboards import match_candidates_kb, match_review_kb
 from match_debug_helpers import build_match_explanation, rematch_item_live, _strip_existing_match_fields
@@ -124,6 +125,51 @@ def register_admin_match_handlers(router: Router, db: Any, tmdb: Any) -> None:
             parse_mode=ParseMode.HTML,
             disable_web_page_preview=True,
             reply_markup=match_candidates_kb(kinozal_id, candidates),
+        )
+
+    async def _send_delivery_audit(message: Message, kinozal_id: str, tg_user_id: int | None = None) -> None:
+        audits = db.get_delivery_audits(kinozal_id, tg_user_id=tg_user_id, limit=10)
+        if not audits:
+            await message.answer(f"История delivery audit для Kinozal ID {kinozal_id} не найдена.")
+            return
+
+        lines = [f"📨 Delivery audit for Kinozal ID <code>{html.escape(kinozal_id)}</code>", ""]
+        for row in audits:
+            audit = row.get("delivery_audit") or {}
+            if not audit and compact_spaces(str(row.get("delivery_source") or "")) == "live":
+                item = db.get_item(int(row.get("item_id") or 0))
+                sub = db.get_subscription(int(row.get("subscription_id") or 0)) if row.get("subscription_id") else None
+                if item and sub:
+                    audit = build_delivery_audit(db, item, [sub], context="deliveryaudit_backfill")
+            sub_name = compact_spaces(str(row.get("subscription_name") or "—")) or "—"
+            matched_subs = audit.get("matched_subscriptions") or []
+            matched_summary = "; ".join(
+                f"{compact_spaces(str(sub.get('name') or '—'))}: {compact_spaces(str(sub.get('reason') or '—'))}"
+                for sub in matched_subs[:3]
+            ) or "—"
+            lines.extend(
+                [
+                    (
+                        f"• user=<code>{int(row.get('tg_user_id') or 0)}</code> | "
+                        f"sub={html.escape(sub_name)} | "
+                        f"at=<code>{html.escape(format_dt(row.get('delivered_at')))}</code> | "
+                        f"src=<code>{html.escape(compact_spaces(str(row.get('delivery_source') or 'live')))}</code>"
+                    ),
+                    (
+                        f"  context=<code>{html.escape(compact_spaces(str(audit.get('context') or '—')))}</code> | "
+                        f"bucket=<code>{html.escape(compact_spaces(str(audit.get('bucket') or '—')))}</code> | "
+                        f"confidence=<code>{html.escape(compact_spaces(str(audit.get('tmdb_match_confidence') or '—')))}</code> | "
+                        f"path=<code>{html.escape(compact_spaces(str(audit.get('tmdb_match_path') or '—')))}</code>"
+                    ),
+                    f"  matched: {html.escape(matched_summary)}",
+                    "",
+                ]
+            )
+
+        await message.answer(
+            "\n".join(lines).rstrip(),
+            parse_mode=ParseMode.HTML,
+            disable_web_page_preview=True,
         )
 
     async def _override_match(
@@ -386,6 +432,25 @@ def register_admin_match_handlers(router: Router, db: Any, tmdb: Any) -> None:
 
         await _send_match_candidates(message, kinozal_id)
 
+    @router.message(Command("deliveryaudit"))
+    async def cmd_deliveryaudit(message: Message, command: CommandObject) -> None:
+        if not is_admin(message.from_user.id):
+            await message.answer("Только для администратора.")
+            return
+
+        parts = compact_spaces(str(command.args or "")).split()
+        if not parts:
+            await message.answer("Используй: /deliveryaudit <kinozal_id> [tg_user_id]")
+            return
+
+        kinozal_id = extract_kinozal_id(parts[0] or "")
+        tg_user_id = int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else None
+        if not kinozal_id:
+            await message.answer("Используй: /deliveryaudit <kinozal_id> [tg_user_id]")
+            return
+
+        await _send_delivery_audit(message, kinozal_id, tg_user_id=tg_user_id)
+
     @router.callback_query(F.data.startswith("matchreview:"))
     async def cb_matchreview(callback: CallbackQuery) -> None:
         if not is_admin(callback.from_user.id):
@@ -574,7 +639,13 @@ def register_admin_match_handlers(router: Router, db: Any, tmdb: Any) -> None:
                         item.get("source_uid"),
                     )
                 await send_item_to_user(db, message.bot, tg_user_id, item, [sub_full])
-                db.record_delivery(tg_user_id, int(item["id"]), int(sub_full["id"]), [int(sub_full["id"])])
+                db.record_delivery(
+                    tg_user_id,
+                    int(item["id"]),
+                    int(sub_full["id"]),
+                    [int(sub_full["id"])],
+                    delivery_audit=build_delivery_audit(db, item, [sub_full], context="admin_route"),
+                )
                 delivered_count += 1
             except Exception:
                 log.exception("Admin route delivery failed item=%s user=%s", item.get("id"), tg_user_id)

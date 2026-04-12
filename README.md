@@ -216,6 +216,12 @@ keyboards.py            — inline-клавиатуры
 `/admin/*` endpoints защищены заголовком `X-Admin-Token`. Если `ADMIN_HTTP_TOKEN` не задан, admin HTTP endpoints отключены и возвращают `503`.
 `SENTRY_DSN` опционален: если он задан, и worker, и `api` будут отправлять unhandled exceptions и `ERROR`-логи в Sentry.
 
+Полезные admin-команды в Telegram:
+
+- `/explainmatch <kinozal_id>`: показать, как сработал TMDB/match routing
+- `/deliveryaudit <kinozal_id> [tg_user_id]`: показать, почему релиз реально ушёл в подписки
+- `/route anime|dorama|turkey|world`: вручную перекинуть релиз, ответив на сообщение бота
+
 Примеры:
 
 ```bash

@@ -230,8 +230,10 @@ class WorkerService:
         if not first_run_seen and CFG.start_fetch_as_read:
             for item_id in new_item_ids:
                 for sub in enabled_subs:
-                    self.delivery_service.record_delivery(sub.tg_user_id, item_id, [sub])
-                    cycle_metrics["bootstrap_marked_read_total"] += 1
+                    item = live_items_by_id.get(item_id)
+                    if item:
+                        self.delivery_service.record_delivery(sub.tg_user_id, item, [sub], context="bootstrap")
+                        cycle_metrics["bootstrap_marked_read_total"] += 1
             self.repository.set_meta("bootstrap_done", "1")
             log.info("Bootstrap complete: %s items marked as delivered", len(new_item_ids))
             return
@@ -405,7 +407,7 @@ class WorkerService:
                         pending_subs,
                         old_release_text=str(pending_delivery.get("old_release_text") or ""),
                     )
-                    self.delivery_service.record_delivery(flush_uid, pending_item_id, pending_subs)
+                    self.delivery_service.record_delivery(flush_uid, pending_item, pending_subs, context="pending_flush")
                     cycle_metrics["deliveries_sent_total"] += 1
                     self.repository.delete_pending_delivery(flush_uid, pending_item_id)
                     await asyncio.sleep(0.12)
@@ -516,7 +518,7 @@ class WorkerService:
                             delivery.subs,
                             old_release_text=delivery.old_release_text,
                         )
-                        self.delivery_service.record_delivery(tg_user_id, delivery.item_id, delivery.subs)
+                        self.delivery_service.record_delivery(tg_user_id, delivery.item, delivery.subs, context="release_text_update")
                         cycle_metrics["deliveries_sent_total"] += 1
                         await asyncio.sleep(0.12)
                     except Exception:
@@ -546,7 +548,7 @@ class WorkerService:
                             )
                             cycle_metrics["grouped_messages_total"] += 1
                             for delivery in group:
-                                self.delivery_service.record_delivery(tg_user_id, delivery.item_id, delivery.subs)
+                                self.delivery_service.record_delivery(tg_user_id, delivery.item, delivery.subs, context="grouped")
                                 cycle_metrics["deliveries_sent_total"] += 1
                                 await asyncio.sleep(0.12)
                         else:

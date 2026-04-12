@@ -511,7 +511,7 @@ class ItemsRepository(BaseRepository):
             ),
         )
         delivery_rows = self.conn.execute(
-            "SELECT id, tg_user_id, item_id, subscription_id, matched_subscription_ids, delivered_at FROM deliveries WHERE item_id = ? ORDER BY delivered_at ASC, id ASC",
+            "SELECT id, tg_user_id, item_id, subscription_id, matched_subscription_ids, delivery_audit_json, delivered_at FROM deliveries WHERE item_id = ? ORDER BY delivered_at ASC, id ASC",
             (item_id,),
         ).fetchall()
         for row in delivery_rows:
@@ -520,9 +520,9 @@ class ItemsRepository(BaseRepository):
                 """
                 INSERT INTO deliveries_archive(
                     original_delivery_id, tg_user_id, original_item_id, kinozal_id, source_uid, media_type, version_signature,
-                    source_title, subscription_id, matched_subscription_ids, delivered_at, archived_at, archive_reason, merged_into_item_id
+                    source_title, subscription_id, matched_subscription_ids, delivery_audit_json, delivered_at, archived_at, archive_reason, merged_into_item_id
                 )
-                VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     delivery.get("id"),
@@ -535,6 +535,7 @@ class ItemsRepository(BaseRepository):
                     full_item.get("source_title"),
                     delivery.get("subscription_id"),
                     delivery.get("matched_subscription_ids"),
+                    delivery.get("delivery_audit_json") or "",
                     delivery.get("delivered_at"),
                     archived_at,
                     compact_spaces(reason or "archive"),
@@ -846,8 +847,8 @@ class ItemsRepository(BaseRepository):
                         loser_id = int(loser["id"])
                         self.conn.execute(
                             """
-                            INSERT INTO deliveries(tg_user_id, item_id, subscription_id, matched_subscription_ids, delivered_at)
-                            SELECT tg_user_id, ?, subscription_id, matched_subscription_ids, delivered_at
+                            INSERT INTO deliveries(tg_user_id, item_id, subscription_id, matched_subscription_ids, delivery_audit_json, delivered_at)
+                            SELECT tg_user_id, ?, subscription_id, matched_subscription_ids, delivery_audit_json, delivered_at
                             FROM deliveries
                             WHERE item_id = ?
                             ON CONFLICT(tg_user_id, item_id) DO NOTHING

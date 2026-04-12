@@ -166,21 +166,76 @@ class DeliveryRepository(BaseRepository):
         item_id: int,
         sub_id: Optional[int],
         matched_sub_ids: Optional[Iterable[int]] = None,
+        delivery_audit: Optional[Dict[str, Any]] = None,
     ) -> None:
         matched_ids_csv = None
         if matched_sub_ids:
             normalized_ids = sorted({int(x) for x in matched_sub_ids})
             matched_ids_csv = ",".join(str(x) for x in normalized_ids) if normalized_ids else None
+        delivery_audit_json = json.dumps(delivery_audit, ensure_ascii=False, sort_keys=True) if delivery_audit else ""
         with self.lock:
             self.conn.execute(
                 """
-                INSERT INTO deliveries(tg_user_id, item_id, subscription_id, matched_subscription_ids, delivered_at)
-                VALUES(?, ?, ?, ?, ?)
+                INSERT INTO deliveries(tg_user_id, item_id, subscription_id, matched_subscription_ids, delivery_audit_json, delivered_at)
+                VALUES(?, ?, ?, ?, ?, ?)
                 ON CONFLICT(tg_user_id, item_id) DO NOTHING
                 """,
-                (tg_user_id, item_id, sub_id, matched_ids_csv, utc_ts()),
+                (tg_user_id, item_id, sub_id, matched_ids_csv, delivery_audit_json, utc_ts()),
             )
             self.conn.commit()
+
+    def get_delivery_audits(
+        self,
+        kinozal_id: str,
+        tg_user_id: Optional[int] = None,
+        limit: int = 10,
+    ) -> List[Dict[str, Any]]:
+        kinozal_id = compact_spaces(str(kinozal_id or ""))
+        if not kinozal_id:
+            return []
+        params: List[Any] = [kinozal_id, kinozal_id]
+        sql = """
+            SELECT *
+            FROM (
+                SELECT d.tg_user_id, d.item_id, d.subscription_id, d.matched_subscription_ids,
+                       d.delivery_audit_json, d.delivered_at, s.name AS subscription_name,
+                       'live' AS delivery_source
+                FROM deliveries d
+                JOIN items i ON i.id = d.item_id
+                LEFT JOIN subscriptions s ON s.id = d.subscription_id
+                WHERE i.kinozal_id = ?
+
+                UNION ALL
+
+                SELECT da.tg_user_id, da.original_item_id AS item_id, da.subscription_id, da.matched_subscription_ids,
+                       da.delivery_audit_json, da.delivered_at, s.name AS subscription_name,
+                       'archive' AS delivery_source
+                FROM deliveries_archive da
+                LEFT JOIN subscriptions s ON s.id = da.subscription_id
+                WHERE da.kinozal_id = ?
+            ) audit_rows
+            WHERE 1 = 1
+        """
+        if tg_user_id is not None:
+            sql += " AND tg_user_id = ?"
+            params.append(int(tg_user_id))
+        sql += " ORDER BY delivered_at DESC, item_id DESC LIMIT ?"
+        params.append(max(1, min(int(limit or 10), 20)))
+        with self.lock:
+            rows = self.conn.execute(sql, tuple(params)).fetchall()
+        result: List[Dict[str, Any]] = []
+        for row in rows:
+            data = dict(row)
+            audit_json = compact_spaces(str(data.get("delivery_audit_json") or ""))
+            if audit_json:
+                try:
+                    data["delivery_audit"] = json.loads(audit_json)
+                except Exception:
+                    data["delivery_audit"] = {}
+            else:
+                data["delivery_audit"] = {}
+            result.append(data)
+        return result
 
     def recently_delivered(self, tg_user_id: int, item_id: int, cooldown_seconds: int) -> bool:
         with self.lock:
