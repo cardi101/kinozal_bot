@@ -1,4 +1,8 @@
+import os
 import asyncio
+
+os.environ.setdefault("BOT_TOKEN", "test-token")
+os.environ.setdefault("DATABASE_URL", "postgresql://test:test@localhost/test")
 
 from admin_match_review_helpers import (
     build_match_review_alert,
