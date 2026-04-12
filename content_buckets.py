@@ -8,7 +8,7 @@ from country_helpers import (
     normalize_tmdb_language,
     parse_jsonish_list,
 )
-from source_categories import source_category_bucket_hint
+from source_categories import normalize_source_category_id, source_category_bucket_hint
 from title_prep import split_title_parts
 from tmdb_aliases import ANIME_TITLE_MARKER_RE, anime_alias_candidates_from_text
 from utils import compact_spaces
@@ -60,9 +60,12 @@ def item_content_bucket(item: Dict[str, Any]) -> str:
     if category_bucket in {"anime", "dorama"}:
         return category_bucket
     media_type = str(item.get("media_type") or "movie")
+    category_id = normalize_source_category_id(item.get("source_category_id") or item.get("source_category_name"))
+    category_name = compact_spaces(str(item.get("source_category_name") or ""))
+    source_is_animation = category_id in {"20", "21", "22", "1003"} or "мульт" in category_name.casefold()
     countries = set(effective_item_countries(item))
     genres = {int(g) for g in parse_jsonish_list(item.get("genre_ids")) if str(g).isdigit()}
-    is_animation = 16 in genres
+    is_animation = 16 in genres or source_is_animation
     anime_score = anime_fallback_signal_score(item)
 
     source_title = compact_spaces(str(item.get("source_title") or ""))
@@ -78,6 +81,8 @@ def item_content_bucket(item: Dict[str, Any]) -> str:
     strong_anime_signal = has_anime_country or has_anime_language or has_anime_script or has_anime_marker
 
     if is_animation and strong_anime_signal and anime_score >= 3:
+        return "anime"
+    if source_is_animation and strong_anime_signal and anime_score >= 2:
         return "anime"
     if media_type in {"tv", "movie"} and not is_animation:
         if not item.get("tmdb_id") and strong_anime_signal and anime_score >= 3:
