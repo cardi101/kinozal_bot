@@ -52,13 +52,12 @@ def anime_fallback_signal_score(item: Dict[str, Any]) -> int:
     return score
 
 
-def item_content_bucket(item: Dict[str, Any]) -> str:
+def resolve_item_content_bucket(item: Dict[str, Any]) -> Dict[str, str]:
     manual_bucket = str(item.get("manual_bucket") or "").strip().lower()
     if manual_bucket in {"anime", "dorama", "regular"}:
-        return manual_bucket
+        return {"bucket": manual_bucket, "reason": "manual_bucket_override"}
+
     category_bucket = source_category_bucket_hint(item.get("source_category_id"), item.get("source_category_name"))
-    if category_bucket in {"anime", "dorama"}:
-        return category_bucket
     media_type = str(item.get("media_type") or "movie")
     category_id = normalize_source_category_id(item.get("source_category_id") or item.get("source_category_name"))
     category_name = compact_spaces(str(item.get("source_category_name") or ""))
@@ -79,14 +78,27 @@ def item_content_bucket(item: Dict[str, Any]) -> str:
     has_anime_script = any(has_asian_script(text) for text in texts if text)
     has_anime_marker = any(ANIME_TITLE_MARKER_RE.search(text) for text in texts if text)
     strong_anime_signal = has_anime_country or has_anime_language or has_anime_script or has_anime_marker
+    dorama_score = asian_dorama_signal_score(item)
 
-    if is_animation and strong_anime_signal and anime_score >= 3:
-        return "anime"
+    if category_bucket == "anime":
+        return {"bucket": "anime", "reason": "source_category_anime_hint"}
     if source_is_animation and strong_anime_signal and anime_score >= 2:
-        return "anime"
+        if category_bucket == "dorama":
+            return {"bucket": "anime", "reason": "asian_animation_overrides_dorama_hint"}
+        return {"bucket": "anime", "reason": "asian_animation_invariant"}
+    if is_animation and strong_anime_signal and anime_score >= 3:
+        if category_bucket == "dorama":
+            return {"bucket": "anime", "reason": "asian_animation_overrides_dorama_hint"}
+        return {"bucket": "anime", "reason": "asian_animation_genre_invariant"}
+    if category_bucket == "dorama" and not is_animation and media_type in {"tv", "movie"}:
+        return {"bucket": "dorama", "reason": "source_category_dorama_hint"}
     if media_type in {"tv", "movie"} and not is_animation:
         if not item.get("tmdb_id") and strong_anime_signal and anime_score >= 3:
-            return "anime"
-        if asian_dorama_signal_score(item) >= 2:
-            return "dorama"
-    return "regular"
+            return {"bucket": "anime", "reason": "anime_fallback_without_tmdb"}
+        if dorama_score >= 2:
+            return {"bucket": "dorama", "reason": "asian_dorama_signal"}
+    return {"bucket": "regular", "reason": "default_regular"}
+
+
+def item_content_bucket(item: Dict[str, Any]) -> str:
+    return resolve_item_content_bucket(item)["bucket"]

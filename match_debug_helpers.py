@@ -2,7 +2,7 @@ import html
 import logging
 from typing import Any, Dict, List, Optional, Tuple
 
-from content_buckets import item_content_bucket
+from content_buckets import resolve_item_content_bucket
 from country_helpers import effective_item_countries, human_country_names, parse_jsonish_list
 from parsing_basic import parse_year
 from release_versioning import resolve_item_kinozal_id
@@ -100,7 +100,9 @@ def build_match_explanation(db: Any, item: Dict[str, Any], live_item: Optional[D
     display_item = live_item or item
     kinozal_id = compact_spaces(str(item.get("kinozal_id") or "")) or resolve_item_kinozal_id(item) or "—"
     media = str(display_item.get("media_type") or "movie")
-    bucket = item_content_bucket(display_item)
+    bucket_decision = resolve_item_content_bucket(display_item)
+    bucket = bucket_decision["bucket"]
+    bucket_reason = bucket_decision["reason"]
     category_name = compact_spaces(str(display_item.get("source_category_name") or "")) or "—"
     category_id = compact_spaces(str(display_item.get("source_category_id") or "")) or "—"
     countries = effective_item_countries(display_item)
@@ -155,6 +157,7 @@ def build_match_explanation(db: Any, item: Dict[str, Any], live_item: Optional[D
     lines.extend([
         f"Media: {html.escape(human_media_type(media))}",
         f"Bucket: {html.escape(bucket)}",
+        f"Bucket reason: {html.escape(bucket_reason)}",
         f"Категория API: {html.escape(category_name)} ({html.escape(category_id)})",
         f"Страны: {html.escape(', '.join(country_names or countries or ['—']))}",
         f"Manual route: bucket={html.escape(compact_spaces(str(display_item.get('manual_bucket') or '')) or '—')} | countries={html.escape(','.join(parse_jsonish_list(display_item.get('manual_country_codes')) or []) or '—')}",
