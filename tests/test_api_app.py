@@ -29,6 +29,26 @@ class FakeAdminApiService:
             raise LookupError("not found")
         return {"kinozal_id": kinozal_id, "release_text_changed": True}
 
+    def get_release_timeline(self, kinozal_id: str, **kwargs):
+        if kinozal_id == "404":
+            raise LookupError("not found")
+        return {"kinozal_id": kinozal_id, "version_timeline": {"versions": []}}
+
+    def explain_delivery(self, kinozal_id: str, tg_user_id: int, cooldown_seconds: int = 420):
+        if kinozal_id == "404":
+            raise LookupError("not found")
+        return {
+            "status": "ready",
+            "kinozal_id": kinozal_id,
+            "tg_user_id": tg_user_id,
+            "cooldown_seconds": cooldown_seconds,
+        }
+
+    async def replay_delivery(self, kinozal_id: str, tg_user_id: int, force: bool = False):
+        if kinozal_id == "404":
+            raise LookupError("not found")
+        return {"status": "sent", "kinozal_id": kinozal_id, "tg_user_id": tg_user_id, "force": force}
+
 
 class FakeAsyncCloser:
     async def close(self):
@@ -116,3 +136,41 @@ async def test_admin_reparse_success() -> None:
         )
     assert response.status_code == 200
     assert response.json()["release_text_changed"] is True
+
+
+@pytest.mark.anyio
+async def test_admin_release_timeline_success() -> None:
+    async with build_test_client() as client:
+        response = await client.get(
+            "/admin/release-timeline",
+            params={"kinozal_id": "12345"},
+            headers={"X-Admin-Token": "secret"},
+        )
+    assert response.status_code == 200
+    assert response.json()["kinozal_id"] == "12345"
+
+
+@pytest.mark.anyio
+async def test_admin_explain_delivery_success() -> None:
+    async with build_test_client() as client:
+        response = await client.get(
+            "/admin/explain-delivery",
+            params={"kinozal_id": "12345", "tg_user_id": "77"},
+            headers={"X-Admin-Token": "secret"},
+        )
+    assert response.status_code == 200
+    assert response.json()["status"] == "ready"
+    assert response.json()["tg_user_id"] == 77
+
+
+@pytest.mark.anyio
+async def test_admin_replay_delivery_success() -> None:
+    async with build_test_client() as client:
+        response = await client.post(
+            "/admin/replay-delivery",
+            params={"kinozal_id": "12345", "tg_user_id": "77", "force": "true"},
+            headers={"X-Admin-Token": "secret"},
+        )
+    assert response.status_code == 200
+    assert response.json()["status"] == "sent"
+    assert response.json()["force"] is True

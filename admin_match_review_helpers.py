@@ -6,6 +6,7 @@ from aiogram.enums import ParseMode
 
 from delivery_audit import build_delivery_audit
 from keyboards import match_review_kb
+from service_helpers import ops_alert_chat_ids
 from subscription_matching import match_subscription
 from utils import compact_spaces
 
@@ -45,6 +46,8 @@ def build_match_review_alert(item: Dict[str, Any], affected_users: int) -> str:
         f"Path: <code>{html.escape(match_path)}</code>",
         f"Evidence: {html.escape(evidence)}",
         f"Затронет пользователей: {affected_users}",
+        "Статус: <code>delivery held</code>",
+        "Автодоставка удержана до ручного решения.",
         "",
     ]
     if item.get("tmdb_id"):
@@ -70,19 +73,19 @@ async def notify_admins_about_match_review(
     text = build_match_review_alert(item, affected_users)
     kinozal_id = compact_spaces(str(item.get("kinozal_id") or ""))
     reply_markup = match_review_kb(kinozal_id, has_tmdb_match=bool(item.get("tmdb_id"))) if kinozal_id else None
-    cfg = _cfg()
-    if not cfg.admin_ids:
-        log.warning("Match review notification skipped: no ADMIN_IDS configured kinozal_id=%s", kinozal_id or "—")
+    targets = ops_alert_chat_ids()
+    if not targets:
+        log.warning("Match review notification skipped: no ops/admin targets configured kinozal_id=%s", kinozal_id or "—")
         return 0
     skipped_admins = {int(admin_id) for admin_id in skip_admin_ids}
     sent_count = 0
-    for admin_id in cfg.admin_ids:
-        admin_id_int = int(admin_id)
-        if admin_id_int in skipped_admins:
+    for target_chat_id in targets:
+        target_chat_id = int(target_chat_id)
+        if target_chat_id in skipped_admins:
             continue
         try:
             await bot.send_message(
-                admin_id_int,
+                target_chat_id,
                 text,
                 parse_mode=ParseMode.HTML,
                 disable_web_page_preview=True,
@@ -90,7 +93,7 @@ async def notify_admins_about_match_review(
             )
             sent_count += 1
         except Exception:
-            log.exception("Admin review send failed admin_id=%s kinozal_id=%s", admin_id_int, kinozal_id or "—")
+            log.exception("Match review send failed chat_id=%s kinozal_id=%s", target_chat_id, kinozal_id or "—")
     return sent_count
 
 

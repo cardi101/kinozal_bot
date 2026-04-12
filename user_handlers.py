@@ -64,6 +64,21 @@ def register_user_handlers(router: Router, db: Any, source: Any, tmdb: Any) -> N
             parse_mode=ParseMode.HTML,
         )
 
+    @router.message(Command("chatid"))
+    async def cmd_chatid(message: Message) -> None:
+        chat = message.chat
+        title = html.escape(chat.title or chat.full_name or "")
+        username = html.escape(chat.username or "")
+        lines = [
+            f"Текущий chat_id: <code>{chat.id}</code>",
+            f"Тип чата: <code>{html.escape(str(chat.type))}</code>",
+        ]
+        if title:
+            lines.append(f"Название: {title}")
+        if username:
+            lines.append(f"Username: @{username}")
+        await message.answer("\n".join(lines), parse_mode=ParseMode.HTML)
+
     @router.message(Command("latest"))
     async def cmd_latest(message: Message) -> None:
         if not await ensure_access_for_message(db, message):

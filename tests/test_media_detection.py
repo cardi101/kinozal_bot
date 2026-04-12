@@ -1,4 +1,5 @@
 from media_detection import is_non_video_release, detect_media_type
+from source_categories import source_category_is_non_video
 
 
 def test_non_video_music():
@@ -16,6 +17,11 @@ def test_non_video_games():
 
 def test_non_video_books():
     assert is_non_video_release("Книга - Автор / PDF / FB2") is True
+    assert is_non_video_release("Терри Гудкайнд - Цикл Меч Истины / M4B") is True
+
+
+def test_non_video_clips():
+    assert is_non_video_release("Artist - Track / Видеоклипы / WEBRip (1080p)") is True
 
 
 def test_non_video_sports():
@@ -38,3 +44,8 @@ def test_detect_media_type_movie():
 
 def test_detect_media_type_other():
     assert detect_media_type("Artist - Album / Pop / MP3") == "other"
+
+
+def test_source_category_is_non_video_for_non_target_buckets():
+    assert source_category_is_non_video("1", "Другое - Видеоклипы") is True
+    assert source_category_is_non_video("2", "Другое - АудиоКниги") is True

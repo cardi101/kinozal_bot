@@ -32,6 +32,7 @@ services:
     environment:
       BOT_TOKEN: "${BOT_TOKEN}"
       ADMIN_IDS: "${ADMIN_IDS}"
+      OPS_ALERT_CHAT_IDS: "${OPS_ALERT_CHAT_IDS}"
       ALLOW_MODE: "${ALLOW_MODE}"
       TMDB_TOKEN: "${TMDB_TOKEN}"
       MAGNET_BASE_URL: "${MAGNET_BASE_URL}"
@@ -78,6 +79,7 @@ services:
     environment:
       BOT_TOKEN: "${BOT_TOKEN}"
       ADMIN_IDS: "${ADMIN_IDS}"
+      OPS_ALERT_CHAT_IDS: "${OPS_ALERT_CHAT_IDS}"
       ALLOW_MODE: "${ALLOW_MODE}"
       TMDB_TOKEN: "${TMDB_TOKEN}"
       KINOZAL_USERNAME: "${KINOZAL_USERNAME}"
@@ -192,6 +194,7 @@ services:
     environment:
       BOT_TOKEN: "${BOT_TOKEN}"
       ADMIN_IDS: "${ADMIN_IDS}"
+      OPS_ALERT_CHAT_IDS: "${OPS_ALERT_CHAT_IDS}"
       ALLOW_MODE: "${ALLOW_MODE}"
       DATABASE_URL: "${DATABASE_URL}"
       DISABLE_WEB_PAGE_PREVIEW: "${DISABLE_WEB_PAGE_PREVIEW}"

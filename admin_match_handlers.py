@@ -1,5 +1,6 @@
 import html
 import logging
+from datetime import datetime, timezone
 from typing import Any, List
 
 from aiogram import F, Router
@@ -169,6 +170,197 @@ def register_admin_match_handlers(router: Router, db: Any, tmdb: Any) -> None:
                     "",
                 ]
             )
+
+        await message.answer(
+            "\n".join(lines).rstrip(),
+            parse_mode=ParseMode.HTML,
+            disable_web_page_preview=True,
+        )
+
+    async def _send_delivery_explanation(message: Message, kinozal_id: str, tg_user_id: int) -> None:
+        user = db.get_user(int(tg_user_id))
+        if not user:
+            await message.answer(f"Не нашёл пользователя {tg_user_id}.")
+            return
+
+        item = db.find_item_by_kinozal_id(kinozal_id)
+        if not item:
+            await message.answer(f"Не нашёл релиз в базе по Kinozal ID {kinozal_id}.")
+            return
+
+        matched_subscriptions: List[dict] = []
+        mismatched_subscriptions: List[dict] = []
+        for sub in db.list_user_subscriptions(int(tg_user_id)):
+            sub_full = db.get_subscription(int(sub["id"]))
+            if not sub_full:
+                continue
+            if not int(sub_full.get("is_enabled") or 0):
+                mismatched_subscriptions.append(
+                    {
+                        "id": int(sub_full["id"]),
+                        "name": str(sub_full.get("name") or ""),
+                        "reason": "disabled",
+                    }
+                )
+                continue
+            reason = db.explain_subscription_match(sub_full, item) if hasattr(db, "explain_subscription_match") else None
+            if reason is None:
+                from subscription_matching import explain_subscription_match
+
+                reason = explain_subscription_match(db, sub_full, item)
+            payload = {
+                "id": int(sub_full["id"]),
+                "name": str(sub_full.get("name") or ""),
+                "reason": str(reason or ""),
+            }
+            if payload["reason"] == "passed":
+                matched_subscriptions.append(payload)
+            else:
+                mismatched_subscriptions.append(payload)
+
+        item_tmdb_id = int(item["tmdb_id"]) if item.get("tmdb_id") not in (None, "") else None
+        muted_title = bool(item_tmdb_id and db.is_title_muted(int(tg_user_id), item_tmdb_id))
+        delivered_exact = db.delivered(int(tg_user_id), int(item["id"]))
+        delivered_equivalent = db.delivered_equivalent(int(tg_user_id), item)
+        cooldown_active = db.recently_delivered_kinozal_id(int(tg_user_id), kinozal_id, cooldown_seconds=420)
+        quiet_start, quiet_end = db.get_user_quiet_hours(int(tg_user_id))
+        current_hour = datetime.now(timezone.utc).hour
+        quiet_active = False
+        if quiet_start is not None and quiet_end is not None:
+            if quiet_start < quiet_end:
+                quiet_active = quiet_start <= current_hour < quiet_end
+            else:
+                quiet_active = current_hour >= quiet_start or current_hour < quiet_end
+
+        with db.lock:
+            pending_delivery = db.conn.execute(
+                """
+                SELECT item_id, matched_sub_ids, old_release_text, is_release_text_change, queued_at
+                FROM pending_deliveries
+                WHERE tg_user_id = ? AND item_id = ?
+                LIMIT 1
+                """,
+                (int(tg_user_id), int(item["id"])),
+            ).fetchone()
+            debounce_entry = db.conn.execute(
+                """
+                SELECT tg_user_id, kinozal_id, item_id, matched_sub_ids, deliver_after_ts, reset_count
+                FROM debounce_queue
+                WHERE tg_user_id = ? AND kinozal_id = ?
+                LIMIT 1
+                """,
+                (int(tg_user_id), kinozal_id),
+            ).fetchone()
+
+        pending_match_review = db.get_pending_match_review_by_item_id(int(item["id"]))
+        anomalies = [
+            anomaly
+            for anomaly in db.list_release_anomalies(kinozal_id, limit=10)
+            if int(anomaly.get("item_id") or 0) == int(item["id"]) and str(anomaly.get("status") or "") == "open"
+        ]
+
+        status = "ready"
+        blockers: List[str] = []
+        if muted_title:
+            status = "skipped"
+            blockers.append("muted_title")
+        if not matched_subscriptions:
+            status = "skipped"
+            blockers.append("no_matching_enabled_subscriptions")
+        if delivered_exact:
+            status = "delivered"
+            blockers.append("delivered_exact")
+        elif delivered_equivalent:
+            status = "skipped"
+            blockers.append("delivered_equivalent")
+        elif cooldown_active:
+            status = "waiting"
+            blockers.append("cooldown")
+        if pending_delivery:
+            status = "waiting"
+            blockers.append("pending_delivery")
+        if debounce_entry:
+            status = "waiting"
+            blockers.append("debounce")
+        if pending_match_review:
+            status = "waiting"
+            blockers.append("match_review")
+        if anomalies:
+            status = "held"
+            blockers.append("anomaly_hold")
+
+        lines = [
+            f"🧭 Delivery explain for Kinozal ID <code>{html.escape(kinozal_id)}</code>",
+            f"user=<code>{int(tg_user_id)}</code> | item=<code>{int(item['id'])}</code> | status=<code>{html.escape(status)}</code>",
+            f"blockers: <code>{html.escape(', '.join(blockers) if blockers else 'none')}</code>",
+            f"title: {html.escape(compact_spaces(str(item.get('source_title') or '—')))}",
+            f"variant: <code>{html.escape(format_variant_summary(item))}</code>",
+            "",
+            f"muted_title=<code>{str(muted_title).lower()}</code> | delivered_exact=<code>{str(delivered_exact).lower()}</code> | delivered_equivalent=<code>{str(delivered_equivalent).lower()}</code>",
+            f"cooldown_active=<code>{str(bool(cooldown_active)).lower()}</code> | quiet_active=<code>{str(bool(quiet_active)).lower()}</code>",
+            "",
+            "✅ Matching subscriptions:",
+        ]
+        if matched_subscriptions:
+            for sub in matched_subscriptions:
+                lines.append(
+                    f"• <code>{sub['id']}</code> {html.escape(sub['name'])} | <code>{html.escape(sub['reason'])}</code>"
+                )
+        else:
+            lines.append("• none")
+
+        lines.append("")
+        lines.append("⛔ Mismatched subscriptions:")
+        if mismatched_subscriptions:
+            for sub in mismatched_subscriptions[:10]:
+                lines.append(
+                    f"• <code>{sub['id']}</code> {html.escape(sub['name'])} | <code>{html.escape(sub['reason'])}</code>"
+                )
+        else:
+            lines.append("• none")
+
+        if pending_delivery:
+            lines.extend(
+                [
+                    "",
+                    (
+                        "pending_delivery: "
+                        f"queued_at=<code>{html.escape(format_dt(pending_delivery.get('queued_at')))}</code> "
+                        f"matched_sub_ids=<code>{html.escape(str(pending_delivery.get('matched_sub_ids') or ''))}</code>"
+                    ),
+                ]
+            )
+        if debounce_entry:
+            lines.extend(
+                [
+                    "",
+                    (
+                        "debounce: "
+                        f"deliver_after=<code>{html.escape(format_dt(debounce_entry.get('deliver_after_ts')))}</code> "
+                        f"reset_count=<code>{html.escape(str(debounce_entry.get('reset_count') or 0))}</code>"
+                    ),
+                ]
+            )
+        if pending_match_review:
+            lines.extend(
+                [
+                    "",
+                    (
+                        "match_review: "
+                        f"reason=<code>{html.escape(compact_spaces(str(pending_match_review.get('reason') or 'pending')))}</code>"
+                    ),
+                ]
+            )
+        if anomalies:
+            lines.append("")
+            lines.append("🚨 Open anomalies:")
+            for anomaly in anomalies:
+                lines.append(
+                    "• "
+                    f"{html.escape(str(anomaly.get('anomaly_type') or 'unknown'))} | "
+                    f"<code>{html.escape(str(anomaly.get('old_value') or ''))}</code> -> "
+                    f"<code>{html.escape(str(anomaly.get('new_value') or ''))}</code>"
+                )
 
         await message.answer(
             "\n".join(lines).rstrip(),
@@ -455,6 +647,25 @@ def register_admin_match_handlers(router: Router, db: Any, tmdb: Any) -> None:
 
         await _send_delivery_audit(message, kinozal_id, tg_user_id=tg_user_id)
 
+    @router.message(Command("explaindelivery"))
+    async def cmd_explaindelivery(message: Message, command: CommandObject) -> None:
+        if not is_admin(message.from_user.id):
+            await message.answer("Только для администратора.")
+            return
+
+        parts = compact_spaces(str(command.args or "")).split()
+        if len(parts) < 2:
+            await message.answer("Используй: /explaindelivery <kinozal_id> <tg_user_id>")
+            return
+
+        kinozal_id = extract_kinozal_id(parts[0] or "")
+        tg_user_id = int(parts[1]) if parts[1].isdigit() else None
+        if not kinozal_id or tg_user_id is None:
+            await message.answer("Используй: /explaindelivery <kinozal_id> <tg_user_id>")
+            return
+
+        await _send_delivery_explanation(message, kinozal_id, tg_user_id)
+
     @router.callback_query(F.data.startswith("matchreview:"))
     async def cb_matchreview(callback: CallbackQuery) -> None:
         if not is_admin(callback.from_user.id):
@@ -613,16 +824,23 @@ def register_admin_match_handlers(router: Router, db: Any, tmdb: Any) -> None:
         item = db.get_item(int(item["id"])) or item
 
         delivered_count = 0
-        matched_users = 0
+        matched_subscription_count = 0
+        matched_user_ids: set[int] = set()
+        skipped_existing_user_ids: set[int] = set()
+        sent_user_ids: set[int] = set()
         for sub in db.list_enabled_subscriptions():
             sub_full = db.get_subscription(int(sub["id"]))
             if not sub_full:
                 continue
             if not match_subscription(db, sub_full, item):
                 continue
-            matched_users += 1
+            matched_subscription_count += 1
             tg_user_id = int(sub_full["tg_user_id"])
+            matched_user_ids.add(tg_user_id)
+            if tg_user_id in sent_user_ids:
+                continue
             if db.delivered(tg_user_id, int(item["id"])) or db.delivered_equivalent(tg_user_id, item):
+                skipped_existing_user_ids.add(tg_user_id)
                 continue
             try:
                 previous_item = db.get_latest_delivered_related_item(tg_user_id, item)
@@ -651,14 +869,25 @@ def register_admin_match_handlers(router: Router, db: Any, tmdb: Any) -> None:
                     delivery_audit=build_delivery_audit(db, item, [sub_full], context="admin_route"),
                 )
                 delivered_count += 1
+                sent_user_ids.add(tg_user_id)
             except Exception:
                 log.exception("Admin route delivery failed item=%s user=%s", item.get("id"), tg_user_id)
 
+        summary_lines = [
+            f"✅ Релиз перенаправлен как: {label}.",
+            f"Kinozal ID: {kinozal_id}",
+            f"Подходящих подписок: {matched_subscription_count}",
+            f"Подходящих пользователей: {len(matched_user_ids)}",
+            f"Уже получали релиз: {len(skipped_existing_user_ids)}",
+            f"Новых уведомлений отправлено: {delivered_count}",
+        ]
+        if delivered_count == 0 and skipped_existing_user_ids:
+            summary_lines.append("Причина: все подходящие пользователи уже получали этот релиз или его эквивалент.")
+        elif delivered_count == 0 and not matched_user_ids:
+            summary_lines.append("Причина: после ручного маршрута не нашлось ни одной подходящей подписки.")
+
         await message.answer(
-            f"✅ Релиз перенаправлен как: {label}.\n"
-            f"Kinozal ID: {kinozal_id}\n"
-            f"Подходящих подписок: {matched_users}\n"
-            f"Новых уведомлений отправлено: {delivered_count}"
+            "\n".join(summary_lines)
         )
 
     @router.message(Command("explainmatch"))

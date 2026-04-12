@@ -1,15 +1,20 @@
 import asyncio
+import html
 import logging
 import time
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Set
+
+from aiogram.enums import ParseMode
 
 from admin_match_review_helpers import item_requires_match_review, notify_admins_about_match_review
 from config import CFG
 from content_buckets import item_content_bucket
 from domain import DeliveryCandidate, ReleaseItem, SubscriptionRecord
 from media_detection import is_non_video_release, is_russian_release
-from release_versioning import extract_kinozal_id, parse_episode_progress
+from release_versioning import extract_kinozal_id, format_variant_summary, parse_episode_progress
+from service_helpers import ops_alert_chat_ids
+from source_categories import source_category_is_non_video
 from source_health import note_source_cycle_failure, note_source_cycle_success
 from utils import compact_spaces, utc_ts
 
@@ -38,11 +43,15 @@ class WorkerService:
         return {
             "items_fetched_total": 0,
             "items_filtered_non_video_total": 0,
+            "items_filtered_non_video_by_category_total": 0,
             "items_filtered_russian_total": 0,
             "items_tmdb_enriched_total": 0,
             "items_saved_new_total": 0,
             "items_saved_updated_total": 0,
             "release_text_changes_total": 0,
+            "observations_recorded_total": 0,
+            "progress_regressions_total": 0,
+            "anomaly_holds_total": 0,
             "debounce_queued_total": 0,
             "pending_queued_total": 0,
             "deliveries_sent_total": 0,
@@ -87,11 +96,15 @@ class WorkerService:
         for metric_name in (
             "items_fetched_total",
             "items_filtered_non_video_total",
+            "items_filtered_non_video_by_category_total",
             "items_filtered_russian_total",
             "items_tmdb_enriched_total",
             "items_saved_new_total",
             "items_saved_updated_total",
             "release_text_changes_total",
+            "observations_recorded_total",
+            "progress_regressions_total",
+            "anomaly_holds_total",
             "debounce_queued_total",
             "pending_queued_total",
             "deliveries_sent_total",
@@ -99,6 +112,78 @@ class WorkerService:
             "bootstrap_marked_read_total",
         ):
             self._increment_metric(f"metrics_worker_{metric_name}", cycle_metrics[metric_name])
+
+    async def _notify_admins_about_anomaly(
+        self,
+        kinozal_id: str,
+        item: ReleaseItem,
+        anomaly_type: str,
+        previous_value: str,
+        current_value: str,
+        details: str = "",
+    ) -> int:
+        targets = ops_alert_chat_ids()
+        if not targets:
+            return 0
+        lines = [
+            "🚨 <b>Release anomaly detected</b>",
+            f"Kinozal ID: <code>{html.escape(kinozal_id)}</code>",
+            f"Type: <code>{html.escape(anomaly_type)}</code>",
+            f"Title: {html.escape(item.source_title)}",
+            f"Old: <code>{html.escape(previous_value)}</code>",
+            f"New: <code>{html.escape(current_value)}</code>",
+            f"Variant: <code>{html.escape(format_variant_summary(item.to_dict()))}</code>",
+        ]
+        if details:
+            lines.append(f"Details: {html.escape(details)}")
+        lines.extend(
+            [
+                f"Route: <code>{html.escape(','.join(str(target) for target in targets))}</code>",
+                "Action: проверь timeline/explain и реши, нужен ли ручной replay.",
+            ]
+        )
+        text = "\n".join(lines)
+        sent_count = 0
+        for admin_id in targets:
+            try:
+                await self.bot.send_message(
+                    int(admin_id),
+                    text,
+                    parse_mode=ParseMode.HTML,
+                    disable_web_page_preview=True,
+                )
+                sent_count += 1
+            except Exception:
+                log.exception("Failed to send anomaly alert chat_id=%s kinozal_id=%s", admin_id, kinozal_id)
+        return sent_count
+
+    def _record_observation(
+        self,
+        item: ReleaseItem,
+        cycle_metrics: Dict[str, int],
+        source_kind: str,
+        poll_ts: int,
+        item_id: int | None = None,
+        details_title: str = "",
+    ) -> None:
+        kinozal_id = item.kinozal_id or extract_kinozal_id(item.source_uid) or extract_kinozal_id(item.get("source_link"))
+        if not kinozal_id:
+            return
+        observation_id = self.repository.record_source_observation(
+            kinozal_id=kinozal_id,
+            source_kind=source_kind,
+            poll_ts=poll_ts,
+            item_id=item_id,
+            source_title=str(item.get("source_title") or ""),
+            details_title=details_title or str(item.get("details_title") or ""),
+            episode_progress=str(item.get("source_episode_progress") or ""),
+            release_text=str(item.get("source_release_text") or ""),
+            source_format=str(item.get("source_format") or ""),
+            source_audio_tracks=item.get("source_audio_tracks"),
+            raw_payload=item.to_dict(),
+        )
+        if observation_id:
+            cycle_metrics["observations_recorded_total"] += 1
 
     @staticmethod
     def _quiet_active(start_h: int, end_h: int, current_h: int) -> bool:
@@ -121,12 +206,28 @@ class WorkerService:
         live_items_by_id: Dict[int, ReleaseItem] = {}
         release_text_changed_ids: Set[int] = set()
         old_release_texts: Dict[int, str] = {}
+        poll_ts = utc_ts()
 
         for raw_item in items:
+            self._record_observation(raw_item, cycle_metrics, source_kind="browse", poll_ts=poll_ts)
             source_text = f"{raw_item.get('source_title') or ''} {raw_item.get('source_description') or ''}"
-            if raw_item.get("media_type") == "other" or is_non_video_release(source_text):
+            category_non_video = source_category_is_non_video(
+                raw_item.get("source_category_id"),
+                raw_item.get("source_category_name"),
+            )
+            text_non_video = is_non_video_release(source_text)
+            if raw_item.get("media_type") == "other" or category_non_video or text_non_video:
                 cycle_metrics["items_filtered_non_video_total"] += 1
-                log.info("Skip non-video item: %s", raw_item.get("source_title"))
+                if category_non_video:
+                    cycle_metrics["items_filtered_non_video_by_category_total"] += 1
+                log.debug(
+                    "Skip non-video item: %s [%s] media=%s category_non_video=%s text_non_video=%s",
+                    raw_item.get("source_title"),
+                    raw_item.get("source_category_name"),
+                    raw_item.get("media_type"),
+                    category_non_video,
+                    text_non_video,
+                )
                 continue
 
             if is_russian_release(raw_item.to_dict()):
@@ -222,6 +323,14 @@ class WorkerService:
                                 new_item_ids.append(new_item_id)
                                 if new_item_id not in touched_item_ids:
                                     touched_item_ids.append(new_item_id)
+                    self._record_observation(
+                        detail_enriched,
+                        cycle_metrics,
+                        source_kind="details",
+                        poll_ts=poll_ts,
+                        item_id=item_id,
+                        details_title=str(detail_enriched.get("details_title") or ""),
+                    )
                 except Exception:
                     log.warning("Failed to check release text for item=%s", item_id, exc_info=True)
 
@@ -256,6 +365,46 @@ class WorkerService:
             is_release_text_change = item_id in release_text_changed_ids
             item_tmdb_id = item.tmdb_id
             kinozal_id = item.kinozal_id or extract_kinozal_id(item.source_uid)
+            progress = compact_spaces(str(item.get("source_episode_progress") or ""))
+            if kinozal_id and not is_release_text_change and progress:
+                higher_progress_item = self.repository.find_higher_progress_reference(
+                    kinozal_id,
+                    progress,
+                    item_id=item_id,
+                )
+                if higher_progress_item:
+                    previous_progress = compact_spaces(str(higher_progress_item.get("source_episode_progress") or ""))
+                    item.set("anomaly_flags", ["progress_regression"])
+                    anomaly_details = (
+                        f"higher={previous_progress} state={higher_progress_item.get('state')} "
+                        f"item_id={higher_progress_item.get('item_id')}"
+                    )
+                    self.repository.record_release_anomaly(
+                        kinozal_id,
+                        "progress_regression",
+                        item_id=item_id,
+                        old_value=previous_progress,
+                        new_value=progress,
+                        details=anomaly_details,
+                    )
+                    cycle_metrics["progress_regressions_total"] += 1
+                    cycle_metrics["anomaly_holds_total"] += 1
+                    log.warning(
+                        "Held delivery for item=%s kinozal_id=%s due to progress regression old=%s new=%s",
+                        item_id,
+                        kinozal_id,
+                        previous_progress,
+                        progress,
+                    )
+                    await self._notify_admins_about_anomaly(
+                        kinozal_id,
+                        item,
+                        "progress_regression",
+                        previous_progress,
+                        progress,
+                        details=anomaly_details,
+                    )
+                    continue
             matches_by_user: Dict[int, List[SubscriptionRecord]] = {}
             for sub in enabled_subs:
                 tg_user_id = sub.tg_user_id
@@ -286,6 +435,14 @@ class WorkerService:
 
             try:
                 item = await self.kinozal_service.enrich_item_with_details(item.clone())
+                self._record_observation(
+                    item,
+                    cycle_metrics,
+                    source_kind="details",
+                    poll_ts=utc_ts(),
+                    item_id=item_id,
+                    details_title=str(item.get("details_title") or ""),
+                )
             except Exception:
                 log.warning("Failed to enrich item with kinozal details item_id=%s", item_id, exc_info=True)
 

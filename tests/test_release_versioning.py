@@ -1,4 +1,9 @@
-from release_versioning import parse_episode_progress, extract_kinozal_id
+from release_versioning import (
+    classify_episode_progress_change,
+    compare_episode_progress,
+    extract_kinozal_id,
+    parse_episode_progress,
+)
 
 
 def test_parse_episode_progress_series():
@@ -44,3 +49,18 @@ def test_extract_kinozal_id():
     assert extract_kinozal_id("https://kinozal.tv/details.php?id=12345") == "12345"
     assert extract_kinozal_id("no id here") is None
     assert extract_kinozal_id("") is None
+
+
+def test_compare_episode_progress_range_growth():
+    assert compare_episode_progress("2 сезон: 1-10 серии из 12", "2 сезон: 1-9 серии из 12") == 1
+    assert classify_episode_progress_change("2 сезон: 1-9 серии из 12", "2 сезон: 1-10 серии из 12") == "up"
+
+
+def test_compare_episode_progress_regression():
+    assert compare_episode_progress("2 сезон: 1-8 серии из 12", "2 сезон: 1-9 серии из 12") == -1
+    assert classify_episode_progress_change("2 сезон: 1-9 серии из 12", "2 сезон: 1-8 серии из 12") == "down"
+
+
+def test_compare_episode_progress_unknown():
+    assert compare_episode_progress("Just a movie title", "2 сезон: 1-9 серии из 12") is None
+    assert classify_episode_progress_change("2 сезон: 1-9 серии из 12", "Just a movie title") == "unknown"

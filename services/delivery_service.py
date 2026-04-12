@@ -73,6 +73,8 @@ class DeliveryService:
         matched_subs = delivery.subs
         previous_item = self.get_latest_delivered_related_item(tg_user_id, item)
         if previous_item:
+            item.set("previous_related_item_id", previous_item.id)
+            item.set("previous_progress", previous_item.get("source_episode_progress") or "")
             log.info(
                 "Delivering updated release item=%s to user=%s source_uid=%s reason=%s prev_item_id=%s",
                 item_id,
@@ -82,6 +84,8 @@ class DeliveryService:
                 previous_item.id,
             )
         else:
+            item.set("previous_related_item_id", None)
+            item.set("previous_progress", "")
             log.info(
                 "Delivering new release item=%s to user=%s source_uid=%s",
                 item_id,

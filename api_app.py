@@ -20,6 +20,9 @@ def create_api_app(container: Optional["ApiContainer"] = None) -> FastAPI:
         try:
             yield
         finally:
+            bot = getattr(runtime_container, "bot", None)
+            if bot is not None:
+                await bot.session.close()
             await runtime_container.tmdb.close()
             await runtime_container.cache.close()
             await runtime_container.source.close()
@@ -69,6 +72,55 @@ def create_api_app(container: Optional["ApiContainer"] = None) -> FastAPI:
     async def reparse_release(kinozal_id: str) -> Any:
         try:
             return await runtime_container.admin_api_service.reparse_release(kinozal_id)
+        except LookupError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @app.get("/admin/release-timeline", dependencies=[Depends(require_admin_token)])
+    async def release_timeline(
+        kinozal_id: str = Query(..., min_length=1),
+        versions_limit: int = Query(20, ge=1, le=100),
+        observations_limit: int = Query(50, ge=1, le=200),
+        anomalies_limit: int = Query(20, ge=1, le=100),
+        deliveries_limit: int = Query(20, ge=1, le=100),
+    ) -> Any:
+        try:
+            return runtime_container.admin_api_service.get_release_timeline(
+                kinozal_id,
+                versions_limit=versions_limit,
+                observations_limit=observations_limit,
+                anomalies_limit=anomalies_limit,
+                deliveries_limit=deliveries_limit,
+            )
+        except LookupError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @app.get("/admin/explain-delivery", dependencies=[Depends(require_admin_token)])
+    async def explain_delivery(
+        kinozal_id: str = Query(..., min_length=1),
+        tg_user_id: int = Query(...),
+        cooldown_seconds: int = Query(420, ge=0, le=86400),
+    ) -> Any:
+        try:
+            return runtime_container.admin_api_service.explain_delivery(
+                kinozal_id,
+                tg_user_id=tg_user_id,
+                cooldown_seconds=cooldown_seconds,
+            )
+        except LookupError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @app.post("/admin/replay-delivery", dependencies=[Depends(require_admin_token)])
+    async def replay_delivery(
+        kinozal_id: str = Query(..., min_length=1),
+        tg_user_id: int = Query(...),
+        force: bool = Query(False),
+    ) -> Any:
+        try:
+            return await runtime_container.admin_api_service.replay_delivery(
+                kinozal_id,
+                tg_user_id=tg_user_id,
+                force=force,
+            )
         except LookupError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
 

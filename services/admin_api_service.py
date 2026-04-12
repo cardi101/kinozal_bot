@@ -1,15 +1,20 @@
-from typing import Any, Dict
+from datetime import datetime, timezone
+from typing import Any, Dict, List
 
+from delivery_audit import build_delivery_audit
+from delivery_sender import send_item_to_user
 from domain import ReleaseItem
 from match_debug_helpers import _strip_existing_match_fields, build_match_explanation
 from metrics_registry import build_metrics_payload
+from subscription_matching import explain_subscription_match, match_subscription
 
 
 class AdminApiService:
-    def __init__(self, db: Any, tmdb_service: Any, kinozal_service: Any) -> None:
+    def __init__(self, db: Any, tmdb_service: Any, kinozal_service: Any, bot: Any = None) -> None:
         self.db = db
         self.tmdb_service = tmdb_service
         self.kinozal_service = kinozal_service
+        self.bot = bot
 
     def get_health(self) -> Dict[str, Any]:
         db_ok = True
@@ -79,6 +84,10 @@ class AdminApiService:
                     "Total source items skipped as non-video",
                     self._meta_int("metrics_worker_items_filtered_non_video_total"),
                 ),
+                "kinozal_bot_worker_items_filtered_non_video_by_category_total": (
+                    "Total source items skipped as non-video by source category",
+                    self._meta_int("metrics_worker_items_filtered_non_video_by_category_total"),
+                ),
                 "kinozal_bot_worker_items_filtered_russian_total": (
                     "Total source items skipped as Russian content",
                     self._meta_int("metrics_worker_items_filtered_russian_total"),
@@ -118,6 +127,22 @@ class AdminApiService:
                 "kinozal_bot_worker_bootstrap_marked_read_total": (
                     "Total deliveries marked as read during bootstrap",
                     self._meta_int("metrics_worker_bootstrap_marked_read_total"),
+                ),
+                "kinozal_bot_worker_observations_recorded_total": (
+                    "Total stored source observations",
+                    self._meta_int("metrics_worker_observations_recorded_total"),
+                ),
+                "kinozal_bot_worker_progress_regressions_total": (
+                    "Total detected progress regressions",
+                    self._meta_int("metrics_worker_progress_regressions_total"),
+                ),
+                "kinozal_bot_worker_anomaly_holds_total": (
+                    "Total deliveries held by anomaly detection",
+                    self._meta_int("metrics_worker_anomaly_holds_total"),
+                ),
+                "kinozal_bot_admin_replayed_deliveries_total": (
+                    "Total deliveries replayed manually from admin API",
+                    self._meta_int("metrics_admin_replayed_deliveries_total"),
                 ),
             },
             extra_gauges={
@@ -200,3 +225,259 @@ class AdminApiService:
             "release_text_length_after": len(after_release_text),
             "item": refreshed.to_dict(),
         }
+
+    def get_release_timeline(
+        self,
+        kinozal_id: str,
+        versions_limit: int = 20,
+        observations_limit: int = 50,
+        anomalies_limit: int = 20,
+        deliveries_limit: int = 20,
+    ) -> Dict[str, Any]:
+        version_timeline = self.db.get_version_timeline(kinozal_id, limit=versions_limit)
+        observations = self.db.list_source_observations(kinozal_id, limit=observations_limit)
+        anomalies = self.db.list_release_anomalies(kinozal_id, limit=anomalies_limit)
+        deliveries = self.db.get_delivery_audits(kinozal_id, limit=deliveries_limit)
+        current_item = self.db.find_item_by_kinozal_id(kinozal_id)
+        if not current_item and not observations and not anomalies and not deliveries:
+            raise LookupError(f"kinozal_id {kinozal_id} not found")
+        return {
+            "kinozal_id": str(kinozal_id),
+            "current_item": current_item,
+            "version_timeline": version_timeline,
+            "source_observations": observations,
+            "release_anomalies": anomalies,
+            "delivery_audits": deliveries,
+        }
+
+    def explain_delivery(
+        self,
+        kinozal_id: str,
+        tg_user_id: int,
+        cooldown_seconds: int = 420,
+    ) -> Dict[str, Any]:
+        user = self.db.get_user(int(tg_user_id))
+        if not user:
+            raise LookupError(f"user {tg_user_id} not found")
+        item = self.db.find_item_by_kinozal_id(kinozal_id)
+        if not item:
+            raise LookupError(f"kinozal_id {kinozal_id} not found")
+
+        matched_subscriptions: List[Dict[str, Any]] = []
+        mismatched_subscriptions: List[Dict[str, Any]] = []
+        for sub in self.db.list_user_subscriptions(int(tg_user_id)):
+            sub_full = self.db.get_subscription(int(sub["id"]))
+            if not sub_full:
+                continue
+            if not int(sub_full.get("is_enabled") or 0):
+                mismatched_subscriptions.append(
+                    {
+                        "id": int(sub_full["id"]),
+                        "name": str(sub_full.get("name") or ""),
+                        "reason": "disabled",
+                    }
+                )
+                continue
+            reason = explain_subscription_match(self.db, sub_full, item)
+            payload = {
+                "id": int(sub_full["id"]),
+                "name": str(sub_full.get("name") or ""),
+                "reason": reason,
+            }
+            if reason == "passed":
+                matched_subscriptions.append(payload)
+            else:
+                mismatched_subscriptions.append(payload)
+
+        item_tmdb_id = int(item["tmdb_id"]) if item.get("tmdb_id") not in (None, "") else None
+        muted = bool(item_tmdb_id and self.db.is_title_muted(int(tg_user_id), item_tmdb_id))
+        delivered_exact = self.db.delivered(int(tg_user_id), int(item["id"]))
+        delivered_equivalent = self.db.delivered_equivalent(int(tg_user_id), item)
+        cooldown_active = bool(
+            kinozal_id and self.db.recently_delivered_kinozal_id(int(tg_user_id), str(kinozal_id), cooldown_seconds)
+        )
+
+        quiet_start, quiet_end = self.db.get_user_quiet_hours(int(tg_user_id))
+        current_hour = datetime.now(timezone.utc).hour
+        quiet_active = False
+        if quiet_start is not None and quiet_end is not None:
+            if quiet_start < quiet_end:
+                quiet_active = quiet_start <= current_hour < quiet_end
+            else:
+                quiet_active = current_hour >= quiet_start or current_hour < quiet_end
+
+        pending_delivery = self.db.conn.execute(
+            """
+            SELECT item_id, matched_sub_ids, old_release_text, is_release_text_change, queued_at
+            FROM pending_deliveries
+            WHERE tg_user_id = ? AND item_id = ?
+            LIMIT 1
+            """,
+            (int(tg_user_id), int(item["id"])),
+        ).fetchone()
+        debounce_entry = self.db.conn.execute(
+            """
+            SELECT tg_user_id, kinozal_id, item_id, matched_sub_ids, deliver_after_ts, reset_count
+            FROM debounce_queue
+            WHERE tg_user_id = ? AND kinozal_id = ?
+            LIMIT 1
+            """,
+            (int(tg_user_id), str(kinozal_id)),
+        ).fetchone()
+
+        anomalies = [
+            anomaly
+            for anomaly in self.db.list_release_anomalies(str(kinozal_id), limit=10)
+            if int(anomaly.get("item_id") or 0) == int(item["id"]) and str(anomaly.get("status") or "") == "open"
+        ]
+        pending_match_review = self.db.get_pending_match_review_by_item_id(int(item["id"]))
+
+        status = "ready"
+        blockers: List[str] = []
+        if muted:
+            status = "skipped"
+            blockers.append("muted_title")
+        if not matched_subscriptions:
+            status = "skipped"
+            blockers.append("no_matching_enabled_subscriptions")
+        if delivered_exact:
+            status = "delivered"
+            blockers.append("delivered_exact")
+        elif delivered_equivalent:
+            status = "skipped"
+            blockers.append("delivered_equivalent")
+        elif cooldown_active:
+            status = "waiting"
+            blockers.append("cooldown")
+        if pending_delivery:
+            status = "waiting"
+            blockers.append("pending_delivery")
+        if debounce_entry:
+            status = "waiting"
+            blockers.append("debounce")
+        if pending_match_review:
+            status = "waiting"
+            blockers.append("match_review")
+        if anomalies:
+            status = "held"
+            blockers.append("anomaly_hold")
+
+        return {
+            "kinozal_id": str(kinozal_id),
+            "tg_user_id": int(tg_user_id),
+            "item_id": int(item["id"]),
+            "status": status,
+            "blockers": blockers,
+            "current_item": item,
+            "matched_subscriptions": matched_subscriptions,
+            "mismatched_subscriptions": mismatched_subscriptions,
+            "muted_title": muted,
+            "delivered_exact": delivered_exact,
+            "delivered_equivalent": delivered_equivalent,
+            "cooldown_active": cooldown_active,
+            "cooldown_seconds": int(cooldown_seconds),
+            "quiet_hours": {
+                "start_hour_utc": quiet_start,
+                "end_hour_utc": quiet_end,
+                "active_now": quiet_active,
+                "current_hour_utc": current_hour,
+            },
+            "pending_delivery": dict(pending_delivery) if pending_delivery else None,
+            "debounce_entry": dict(debounce_entry) if debounce_entry else None,
+            "pending_match_review": pending_match_review,
+            "open_anomalies": anomalies,
+        }
+
+    async def replay_delivery(
+        self,
+        kinozal_id: str,
+        tg_user_id: int,
+        force: bool = False,
+    ) -> Dict[str, Any]:
+        if self.bot is None:
+            raise RuntimeError("admin replay is unavailable without bot context")
+
+        user = self.db.get_user(int(tg_user_id))
+        if not user:
+            raise LookupError(f"user {tg_user_id} not found")
+        item = self.db.find_item_by_kinozal_id(kinozal_id)
+        if not item:
+            raise LookupError(f"kinozal_id {kinozal_id} not found")
+
+        enabled_subs: List[Dict[str, Any]] = []
+        mismatches: List[Dict[str, Any]] = []
+        for sub in self.db.list_user_subscriptions(int(tg_user_id)):
+            sub_full = self.db.get_subscription(int(sub["id"]))
+            if not sub_full or not int(sub_full.get("is_enabled") or 0):
+                continue
+            if match_subscription(self.db, sub_full, item):
+                enabled_subs.append(sub_full)
+            else:
+                mismatches.append(
+                    {
+                        "id": int(sub_full["id"]),
+                        "name": str(sub_full.get("name") or ""),
+                        "reason": explain_subscription_match(self.db, sub_full, item),
+                    }
+                )
+
+        if not enabled_subs and not force:
+            return {
+                "status": "skipped",
+                "reason": "no_matching_enabled_subscriptions",
+                "kinozal_id": str(kinozal_id),
+                "tg_user_id": int(tg_user_id),
+                "matched_subscriptions": [],
+                "mismatches": mismatches,
+            }
+
+        if self.db.delivered_equivalent(int(tg_user_id), item) and not force:
+            return {
+                "status": "skipped",
+                "reason": "delivered_equivalent",
+                "kinozal_id": str(kinozal_id),
+                "tg_user_id": int(tg_user_id),
+                "item_id": int(item["id"]),
+                "matched_subscriptions": [
+                    {"id": int(sub["id"]), "name": str(sub.get("name") or "")}
+                    for sub in enabled_subs
+                ],
+                "mismatches": mismatches,
+            }
+
+        await send_item_to_user(
+            self.db,
+            self.bot,
+            int(tg_user_id),
+            item,
+            enabled_subs or None,
+        )
+        if not self.db.delivered(int(tg_user_id), int(item["id"])):
+            primary_sub_id = int(enabled_subs[0]["id"]) if enabled_subs else None
+            matched_ids = [int(sub["id"]) for sub in enabled_subs]
+            self.db.record_delivery(
+                int(tg_user_id),
+                int(item["id"]),
+                primary_sub_id,
+                matched_ids,
+                delivery_audit=build_delivery_audit(self.db, item, enabled_subs, context="admin_replay"),
+            )
+        self._increment_admin_metric("metrics_admin_replayed_deliveries_total", 1)
+        return {
+            "status": "sent",
+            "reason": "forced" if force else "matched",
+            "kinozal_id": str(kinozal_id),
+            "tg_user_id": int(tg_user_id),
+            "item_id": int(item["id"]),
+            "matched_subscriptions": [
+                {"id": int(sub["id"]), "name": str(sub.get("name") or "")}
+                for sub in enabled_subs
+            ],
+            "mismatches": mismatches,
+        }
+
+    def _increment_admin_metric(self, key: str, delta: int) -> None:
+        if delta <= 0:
+            return
+        current = self._meta_int(key)
+        self.db.set_meta(key, str(current + delta))

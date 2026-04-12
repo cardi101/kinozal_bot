@@ -8,16 +8,21 @@ from app_bootstrap import build_app
 
 async def _close_container(container: Any) -> None:
     try:
-        await container.tmdb.close()
+        bot = getattr(container, "bot", None)
+        if bot is not None:
+            await bot.session.close()
     finally:
         try:
-            await container.cache.close()
+            await container.tmdb.close()
         finally:
             try:
-                await container.source.close()
+                await container.cache.close()
             finally:
-                if hasattr(container.db, "close"):
-                    container.db.close()
+                try:
+                    await container.source.close()
+                finally:
+                    if hasattr(container.db, "close"):
+                        container.db.close()
 
 
 async def _run(target: str) -> None:

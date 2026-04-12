@@ -3,6 +3,8 @@ import os
 from dataclasses import dataclass
 from typing import Any
 
+from aiogram import Bot
+
 from config import CFG
 from db import DB
 from kinozal_source import KinozalSource
@@ -20,6 +22,7 @@ class ApiContainer:
     cache: Any
     tmdb: Any
     source: Any
+    bot: Any
     tmdb_service: TMDBService
     kinozal_service: KinozalService
     admin_api_service: AdminApiService
@@ -42,14 +45,16 @@ def build_api_container() -> ApiContainer:
     cache = RedisCache(CFG.redis_url)
     tmdb = TMDBClient(CFG, db, cache, CFG.tmdb_token, CFG.language, log)
     source = KinozalSource()
+    bot = Bot(CFG.bot_token)
     tmdb_service = TMDBService(tmdb)
     kinozal_service = KinozalService(source)
-    admin_api_service = AdminApiService(db, tmdb_service, kinozal_service)
+    admin_api_service = AdminApiService(db, tmdb_service, kinozal_service, bot=bot)
     return ApiContainer(
         db=db,
         cache=cache,
         tmdb=tmdb,
         source=source,
+        bot=bot,
         tmdb_service=tmdb_service,
         kinozal_service=kinozal_service,
         admin_api_service=admin_api_service,

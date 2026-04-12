@@ -41,6 +41,9 @@ class Config:
     admin_ids: Sequence[int] = tuple(
         int(x.strip()) for x in os.getenv("ADMIN_IDS", "").split(",") if x.strip()
     )
+    ops_alert_chat_ids: Sequence[int] = tuple(
+        int(x.strip()) for x in os.getenv("OPS_ALERT_CHAT_IDS", "").split(",") if x.strip()
+    )
     allow_mode: str = _env_str("ALLOW_MODE", "invite").lower()
     tmdb_token: str = _env_str("TMDB_TOKEN")
     poll_seconds: int = _env_int("POLL_SECONDS", 60)

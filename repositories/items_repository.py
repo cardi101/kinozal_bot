@@ -6,13 +6,15 @@ from country_helpers import parse_country_codes
 from release_versioning import (
     build_item_variant_signature,
     build_version_signature,
+    compare_episode_progress,
     extract_kinozal_id,
     format_variant_summary,
     get_item_variant_components,
+    normalize_audio_tracks_signature,
     resolve_item_kinozal_id,
 )
 from subscription_matching import match_subscription
-from utils import compact_spaces, utc_ts
+from utils import compact_spaces, sha1_text, utc_ts
 
 from .base import BaseRepository
 
@@ -372,6 +374,200 @@ class ItemsRepository(BaseRepository):
                 (kinozal_id, f"kinozal:{kinozal_id}", f"%details.php?id={kinozal_id}%", f"%id={kinozal_id}%"),
             ).fetchone()
             return self.db.get_item(int(row["id"])) if row else None
+
+    def record_source_observation(
+        self,
+        kinozal_id: str,
+        source_kind: str,
+        poll_ts: Optional[int] = None,
+        item_id: Optional[int] = None,
+        source_title: str = "",
+        details_title: str = "",
+        episode_progress: str = "",
+        release_text: str = "",
+        source_format: str = "",
+        source_audio_tracks: Any = None,
+        raw_payload: Optional[Dict[str, Any]] = None,
+    ) -> int:
+        kinozal_id = compact_spaces(str(kinozal_id or ""))
+        if not kinozal_id:
+            return 0
+        ts = int(poll_ts or utc_ts())
+        with self.lock:
+            row = self.conn.execute(
+                """
+                INSERT INTO source_observations(
+                    kinozal_id, item_id, poll_ts, source_kind, source_title, details_title,
+                    episode_progress, release_text_hash, source_format, audio_sig, raw_payload_json, created_at
+                )
+                VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?::jsonb, ?)
+                RETURNING id
+                """,
+                (
+                    kinozal_id,
+                    int(item_id) if item_id else None,
+                    ts,
+                    compact_spaces(source_kind) or "unknown",
+                    source_title or "",
+                    details_title or "",
+                    episode_progress or "",
+                    sha1_text(release_text or "") if compact_spaces(release_text) else "",
+                    compact_spaces(source_format) or "",
+                    normalize_audio_tracks_signature(source_audio_tracks),
+                    json.dumps(raw_payload or {}, ensure_ascii=False, sort_keys=True),
+                    utc_ts(),
+                ),
+            ).fetchone()
+            self.conn.commit()
+        return int((row or {}).get("id") or 0)
+
+    def list_source_observations(self, kinozal_id: str, limit: int = 50) -> List[Dict[str, Any]]:
+        kinozal_id = compact_spaces(str(kinozal_id or ""))
+        if not kinozal_id:
+            return []
+        with self.lock:
+            rows = self.conn.execute(
+                """
+                SELECT *
+                FROM source_observations
+                WHERE kinozal_id = ?
+                ORDER BY poll_ts DESC, id DESC
+                LIMIT ?
+                """,
+                (kinozal_id, max(1, min(int(limit or 50), 200))),
+            ).fetchall()
+        result: List[Dict[str, Any]] = []
+        for row in rows:
+            data = dict(row)
+            try:
+                data["raw_payload"] = json.loads(data.get("raw_payload_json") or "{}")
+            except Exception:
+                data["raw_payload"] = {}
+            result.append(data)
+        return result
+
+    def record_release_anomaly(
+        self,
+        kinozal_id: str,
+        anomaly_type: str,
+        item_id: Optional[int] = None,
+        old_value: str = "",
+        new_value: str = "",
+        details: str = "",
+        status: str = "open",
+    ) -> int:
+        kinozal_id = compact_spaces(str(kinozal_id or ""))
+        if not kinozal_id:
+            return 0
+        ts = utc_ts()
+        with self.lock:
+            row = self.conn.execute(
+                """
+                INSERT INTO release_anomalies(
+                    kinozal_id, item_id, anomaly_type, old_value, new_value, details, status, created_at, updated_at
+                )
+                VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)
+                RETURNING id
+                """,
+                (
+                    kinozal_id,
+                    int(item_id) if item_id else None,
+                    compact_spaces(anomaly_type) or "unknown",
+                    old_value or "",
+                    new_value or "",
+                    details or "",
+                    compact_spaces(status) or "open",
+                    ts,
+                    ts,
+                ),
+            ).fetchone()
+            self.conn.commit()
+        return int((row or {}).get("id") or 0)
+
+    def list_release_anomalies(self, kinozal_id: str, limit: int = 20) -> List[Dict[str, Any]]:
+        kinozal_id = compact_spaces(str(kinozal_id or ""))
+        if not kinozal_id:
+            return []
+        with self.lock:
+            rows = self.conn.execute(
+                """
+                SELECT *
+                FROM release_anomalies
+                WHERE kinozal_id = ?
+                ORDER BY created_at DESC, id DESC
+                LIMIT ?
+                """,
+                (kinozal_id, max(1, min(int(limit or 20), 100))),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def find_higher_progress_reference(
+        self,
+        kinozal_id: str,
+        progress: str,
+        item_id: Optional[int] = None,
+    ) -> Optional[Dict[str, Any]]:
+        kinozal_id = compact_spaces(str(kinozal_id or ""))
+        progress = compact_spaces(str(progress or ""))
+        if not kinozal_id or not progress:
+            return None
+        with self.lock:
+            active_rows = [
+                dict(row)
+                for row in self.conn.execute(
+                    """
+                    SELECT
+                        id AS record_id,
+                        id AS item_id,
+                        source_title,
+                        source_episode_progress,
+                        created_at,
+                        'active' AS state
+                    FROM items
+                    WHERE kinozal_id = ?
+                    ORDER BY created_at DESC, id DESC
+                    """,
+                    (kinozal_id,),
+                ).fetchall()
+            ]
+            archived_rows = [
+                dict(row)
+                for row in self.conn.execute(
+                    """
+                    SELECT
+                        archive_id AS record_id,
+                        original_item_id AS item_id,
+                        source_title,
+                        source_episode_progress,
+                        COALESCE(original_created_at, archived_at) AS created_at,
+                        'archived' AS state
+                    FROM items_archive
+                    WHERE kinozal_id = ?
+                    ORDER BY COALESCE(original_created_at, archived_at) DESC, archive_id DESC
+                    """,
+                    (kinozal_id,),
+                ).fetchall()
+            ]
+
+        best: Optional[Dict[str, Any]] = None
+        for row in active_rows + archived_rows:
+            candidate_item_id = int(row.get("item_id") or 0)
+            if item_id is not None and candidate_item_id == int(item_id):
+                continue
+            candidate_progress = compact_spaces(str(row.get("source_episode_progress") or ""))
+            if compare_episode_progress(candidate_progress, progress) != 1:
+                continue
+            if best is None:
+                best = row
+                continue
+            current_best_progress = compact_spaces(str(best.get("source_episode_progress") or ""))
+            comparison = compare_episode_progress(candidate_progress, current_best_progress)
+            if comparison == 1:
+                best = row
+                continue
+            if comparison == 0 and int(row.get("created_at") or 0) > int(best.get("created_at") or 0):
+                best = row
+        return best
 
     def list_items_for_rematch(self, limit: int = 50, only_unmatched: bool = True) -> List[Dict[str, Any]]:
         fetch_limit = max(1, min(int(limit or 50), 500))

@@ -25,7 +25,9 @@ class _DummyBot:
 
 def test_notify_admins_about_match_review_returns_successful_send_count() -> None:
     original_admin_ids = CFG.admin_ids
+    original_ops_alert_chat_ids = CFG.ops_alert_chat_ids
     CFG.admin_ids = (101, 202)
+    CFG.ops_alert_chat_ids = ()
     bot = _DummyBot(fail_for=202)
     item = {
         "kinozal_id": "2130471",
@@ -41,6 +43,7 @@ def test_notify_admins_about_match_review_returns_successful_send_count() -> Non
         sent_count = asyncio.run(notify_admins_about_match_review(bot, item, affected_users=0))
     finally:
         CFG.admin_ids = original_admin_ids
+        CFG.ops_alert_chat_ids = original_ops_alert_chat_ids
 
     assert sent_count == 1
     assert bot.sent_to == [101]
@@ -48,7 +51,9 @@ def test_notify_admins_about_match_review_returns_successful_send_count() -> Non
 
 def test_notify_admins_about_match_review_returns_zero_without_admins() -> None:
     original_admin_ids = CFG.admin_ids
+    original_ops_alert_chat_ids = CFG.ops_alert_chat_ids
     CFG.admin_ids = ()
+    CFG.ops_alert_chat_ids = ()
     bot = _DummyBot()
     item = {
         "kinozal_id": "1943921",
@@ -62,6 +67,7 @@ def test_notify_admins_about_match_review_returns_zero_without_admins() -> None:
         sent_count = asyncio.run(notify_admins_about_match_review(bot, item, affected_users=0))
     finally:
         CFG.admin_ids = original_admin_ids
+        CFG.ops_alert_chat_ids = original_ops_alert_chat_ids
 
     assert sent_count == 0
     assert bot.sent_to == []
@@ -69,7 +75,9 @@ def test_notify_admins_about_match_review_returns_zero_without_admins() -> None:
 
 def test_notify_admins_about_match_review_skips_requested_admin_ids() -> None:
     original_admin_ids = CFG.admin_ids
+    original_ops_alert_chat_ids = CFG.ops_alert_chat_ids
     CFG.admin_ids = (101, 202)
+    CFG.ops_alert_chat_ids = ()
     bot = _DummyBot()
     item = {
         "kinozal_id": "1943921",
@@ -85,9 +93,34 @@ def test_notify_admins_about_match_review_skips_requested_admin_ids() -> None:
         )
     finally:
         CFG.admin_ids = original_admin_ids
+        CFG.ops_alert_chat_ids = original_ops_alert_chat_ids
 
     assert sent_count == 1
     assert bot.sent_to == [202]
+
+
+def test_notify_admins_about_match_review_prefers_ops_alert_chat_ids() -> None:
+    original_admin_ids = CFG.admin_ids
+    original_ops_alert_chat_ids = CFG.ops_alert_chat_ids
+    CFG.admin_ids = (101, 202)
+    CFG.ops_alert_chat_ids = (-1003930216844,)
+    bot = _DummyBot()
+    item = {
+        "kinozal_id": "1943921",
+        "source_title": "Zeder",
+        "tmdb_match_confidence": "low",
+        "tmdb_match_path": "search",
+        "tmdb_match_evidence": "weak overlap",
+    }
+
+    try:
+        sent_count = asyncio.run(notify_admins_about_match_review(bot, item, affected_users=3))
+    finally:
+        CFG.admin_ids = original_admin_ids
+        CFG.ops_alert_chat_ids = original_ops_alert_chat_ids
+
+    assert sent_count == 1
+    assert bot.sent_to == [-1003930216844]
 
 
 def test_build_match_review_alert_escapes_override_placeholders() -> None:
@@ -107,6 +140,7 @@ def test_build_match_review_alert_escapes_override_placeholders() -> None:
     assert "&lt;tmdb_id&gt;" in text
     assert "&lt;movie|tv&gt;" in text
     assert "<tmdb_id>" not in text
+    assert "delivery held" in text
 
 
 def test_item_requires_match_review_only_for_low_with_tmdb_id() -> None:

@@ -23,6 +23,62 @@ class WorkerRepository:
     def update_item_release_text(self, item_id: int, release_text: str) -> None:
         self.db.update_item_release_text(item_id, release_text)
 
+    def record_source_observation(
+        self,
+        kinozal_id: str,
+        source_kind: str,
+        poll_ts: Optional[int] = None,
+        item_id: Optional[int] = None,
+        source_title: str = "",
+        details_title: str = "",
+        episode_progress: str = "",
+        release_text: str = "",
+        source_format: str = "",
+        source_audio_tracks: Any = None,
+        raw_payload: Optional[Dict[str, Any]] = None,
+    ) -> int:
+        return self.db.record_source_observation(
+            kinozal_id=kinozal_id,
+            source_kind=source_kind,
+            poll_ts=poll_ts,
+            item_id=item_id,
+            source_title=source_title,
+            details_title=details_title,
+            episode_progress=episode_progress,
+            release_text=release_text,
+            source_format=source_format,
+            source_audio_tracks=source_audio_tracks,
+            raw_payload=raw_payload,
+        )
+
+    def record_release_anomaly(
+        self,
+        kinozal_id: str,
+        anomaly_type: str,
+        item_id: Optional[int] = None,
+        old_value: str = "",
+        new_value: str = "",
+        details: str = "",
+        status: str = "open",
+    ) -> int:
+        return self.db.record_release_anomaly(
+            kinozal_id=kinozal_id,
+            anomaly_type=anomaly_type,
+            item_id=item_id,
+            old_value=old_value,
+            new_value=new_value,
+            details=details,
+            status=status,
+        )
+
+    def find_higher_progress_reference(
+        self,
+        kinozal_id: str,
+        progress: str,
+        item_id: Optional[int] = None,
+    ) -> Optional[Dict[str, Any]]:
+        return self.db.find_higher_progress_reference(kinozal_id, progress, item_id=item_id)
+
     def was_delivered_to_anyone(self, item_id: int) -> bool:
         return self.db.was_delivered_to_anyone(item_id)
 

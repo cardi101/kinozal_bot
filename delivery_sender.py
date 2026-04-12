@@ -316,7 +316,7 @@ async def send_item_to_user(
             exc_info=True,
         )
 
-    text = item_message(db, primary_item, subs)
+    text = item_message(db, primary_item, subs, old_release_text=old_release_text)
     text = _inject_compact_magnet_html(text, primary_item)
 
     tmdb_id = item.get("tmdb_id") or primary_item.get("tmdb_id")

@@ -4,7 +4,7 @@ from typing import Any, Dict, List
 
 from aiogram import Bot
 
-from service_helpers import send_admins_text
+from service_helpers import send_ops_text
 
 log = logging.getLogger("kinozal-alert-webhook")
 
@@ -71,7 +71,7 @@ class AlertmanagerWebhookService:
         alerts = self._normalize_alerts(payload)
         message = self.build_message(payload)
         if alerts:
-            await send_admins_text(self.bot, message)
+            await send_ops_text(self.bot, message)
             log.info("Forwarded alertmanager payload alerts=%s status=%s", len(alerts), payload.get("status"))
         else:
             log.info("Received empty alertmanager payload")
