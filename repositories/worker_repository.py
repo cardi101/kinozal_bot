@@ -71,6 +71,20 @@ class WorkerRepository:
             status=status,
         )
 
+    def get_open_release_anomaly(
+        self,
+        kinozal_id: str,
+        anomaly_type: str,
+        old_value: str = "",
+        new_value: str = "",
+    ) -> Optional[Dict[str, Any]]:
+        return self.db.get_open_release_anomaly(
+            kinozal_id=kinozal_id,
+            anomaly_type=anomaly_type,
+            old_value=old_value,
+            new_value=new_value,
+        )
+
     def find_higher_progress_reference(
         self,
         kinozal_id: str,

@@ -484,6 +484,34 @@ class ItemsRepository(BaseRepository):
             self.conn.commit()
         return int((row or {}).get("id") or 0)
 
+    def get_open_release_anomaly(
+        self,
+        kinozal_id: str,
+        anomaly_type: str,
+        old_value: str = "",
+        new_value: str = "",
+    ) -> Optional[Dict[str, Any]]:
+        kinozal_id = compact_spaces(str(kinozal_id or ""))
+        anomaly_type = compact_spaces(str(anomaly_type or ""))
+        if not kinozal_id or not anomaly_type:
+            return None
+        with self.lock:
+            row = self.conn.execute(
+                """
+                SELECT *
+                FROM release_anomalies
+                WHERE kinozal_id = ?
+                  AND anomaly_type = ?
+                  AND old_value = ?
+                  AND new_value = ?
+                  AND status = 'open'
+                ORDER BY created_at DESC, id DESC
+                LIMIT 1
+                """,
+                (kinozal_id, anomaly_type, old_value or "", new_value or ""),
+            ).fetchone()
+        return dict(row) if row else None
+
     def list_release_anomalies(self, kinozal_id: str, limit: int = 20) -> List[Dict[str, Any]]:
         kinozal_id = compact_spaces(str(kinozal_id or ""))
         if not kinozal_id:

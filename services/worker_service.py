@@ -191,6 +191,13 @@ class WorkerService:
             return start_h <= current_h < end_h
         return current_h >= start_h or current_h < end_h
 
+    @staticmethod
+    def _should_emit_anomaly_alert(
+        matches_by_user: Dict[int, List[SubscriptionRecord]],
+        existing_anomaly: Dict[str, Any] | None,
+    ) -> bool:
+        return bool(matches_by_user) and not existing_anomaly
+
     async def process_new_items(self, cycle_metrics: Dict[str, int] | None = None) -> None:
         if cycle_metrics is None:
             cycle_metrics = self._new_cycle_metrics()
@@ -366,45 +373,6 @@ class WorkerService:
             item_tmdb_id = item.tmdb_id
             kinozal_id = item.kinozal_id or extract_kinozal_id(item.source_uid)
             progress = compact_spaces(str(item.get("source_episode_progress") or ""))
-            if kinozal_id and not is_release_text_change and progress:
-                higher_progress_item = self.repository.find_higher_progress_reference(
-                    kinozal_id,
-                    progress,
-                    item_id=item_id,
-                )
-                if higher_progress_item:
-                    previous_progress = compact_spaces(str(higher_progress_item.get("source_episode_progress") or ""))
-                    item.set("anomaly_flags", ["progress_regression"])
-                    anomaly_details = (
-                        f"higher={previous_progress} state={higher_progress_item.get('state')} "
-                        f"item_id={higher_progress_item.get('item_id')}"
-                    )
-                    self.repository.record_release_anomaly(
-                        kinozal_id,
-                        "progress_regression",
-                        item_id=item_id,
-                        old_value=previous_progress,
-                        new_value=progress,
-                        details=anomaly_details,
-                    )
-                    cycle_metrics["progress_regressions_total"] += 1
-                    cycle_metrics["anomaly_holds_total"] += 1
-                    log.warning(
-                        "Held delivery for item=%s kinozal_id=%s due to progress regression old=%s new=%s",
-                        item_id,
-                        kinozal_id,
-                        previous_progress,
-                        progress,
-                    )
-                    await self._notify_admins_about_anomaly(
-                        kinozal_id,
-                        item,
-                        "progress_regression",
-                        previous_progress,
-                        progress,
-                        details=anomaly_details,
-                    )
-                    continue
             matches_by_user: Dict[int, List[SubscriptionRecord]] = {}
             for sub in enabled_subs:
                 tg_user_id = sub.tg_user_id
@@ -427,6 +395,57 @@ class WorkerService:
                 if not self.subscription_service.matches(sub, item):
                     continue
                 matches_by_user.setdefault(tg_user_id, []).append(sub)
+
+            if kinozal_id and not is_release_text_change and progress:
+                higher_progress_item = self.repository.find_higher_progress_reference(
+                    kinozal_id,
+                    progress,
+                    item_id=item_id,
+                )
+                if higher_progress_item:
+                    previous_progress = compact_spaces(str(higher_progress_item.get("source_episode_progress") or ""))
+                    existing_anomaly = self.repository.get_open_release_anomaly(
+                        kinozal_id,
+                        "progress_regression",
+                        old_value=previous_progress,
+                        new_value=progress,
+                    )
+                    cycle_metrics["progress_regressions_total"] += 1
+                    if matches_by_user:
+                        item.set("anomaly_flags", ["progress_regression"])
+                        cycle_metrics["anomaly_holds_total"] += 1
+                        anomaly_details = (
+                            f"higher={previous_progress} state={higher_progress_item.get('state')} "
+                            f"item_id={higher_progress_item.get('item_id')}"
+                        )
+                        if not existing_anomaly:
+                            self.repository.record_release_anomaly(
+                                kinozal_id,
+                                "progress_regression",
+                                item_id=item_id,
+                                old_value=previous_progress,
+                                new_value=progress,
+                                details=anomaly_details,
+                            )
+                        log.warning(
+                            "Held delivery for item=%s kinozal_id=%s due to progress regression old=%s new=%s users=%s duplicate=%s",
+                            item_id,
+                            kinozal_id,
+                            previous_progress,
+                            progress,
+                            len(matches_by_user),
+                            bool(existing_anomaly),
+                        )
+                        if self._should_emit_anomaly_alert(matches_by_user, existing_anomaly):
+                            await self._notify_admins_about_anomaly(
+                                kinozal_id,
+                                item,
+                                "progress_regression",
+                                previous_progress,
+                                progress,
+                                details=anomaly_details,
+                            )
+                        continue
 
             needs_review = item_requires_match_review(item.to_dict())
 
