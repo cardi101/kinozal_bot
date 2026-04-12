@@ -136,17 +136,21 @@ def register_admin_match_handlers(router: Router, db: Any, tmdb: Any) -> None:
         lines = [f"📨 Delivery audit for Kinozal ID <code>{html.escape(kinozal_id)}</code>", ""]
         for row in audits:
             audit = row.get("delivery_audit") or {}
-            if not audit and compact_spaces(str(row.get("delivery_source") or "")) == "live":
-                item = db.get_item(int(row.get("item_id") or 0))
-                sub = db.get_subscription(int(row.get("subscription_id") or 0)) if row.get("subscription_id") else None
-                if item and sub:
-                    audit = build_delivery_audit(db, item, [sub], context="deliveryaudit_backfill")
             sub_name = compact_spaces(str(row.get("subscription_name") or "—")) or "—"
             matched_subs = audit.get("matched_subscriptions") or []
             matched_summary = "; ".join(
                 f"{compact_spaces(str(sub.get('name') or '—'))}: {compact_spaces(str(sub.get('reason') or '—'))}"
                 for sub in matched_subs[:3]
             ) or "—"
+            context = compact_spaces(str(audit.get("context") or ""))
+            bucket = compact_spaces(str(audit.get("bucket") or ""))
+            confidence = compact_spaces(str(audit.get("tmdb_match_confidence") or ""))
+            match_path = compact_spaces(str(audit.get("tmdb_match_path") or ""))
+            if not audit:
+                context = "historical_audit_missing"
+                bucket = "—"
+                confidence = "—"
+                match_path = "—"
             lines.extend(
                 [
                     (
@@ -156,10 +160,10 @@ def register_admin_match_handlers(router: Router, db: Any, tmdb: Any) -> None:
                         f"src=<code>{html.escape(compact_spaces(str(row.get('delivery_source') or 'live')))}</code>"
                     ),
                     (
-                        f"  context=<code>{html.escape(compact_spaces(str(audit.get('context') or '—')))}</code> | "
-                        f"bucket=<code>{html.escape(compact_spaces(str(audit.get('bucket') or '—')))}</code> | "
-                        f"confidence=<code>{html.escape(compact_spaces(str(audit.get('tmdb_match_confidence') or '—')))}</code> | "
-                        f"path=<code>{html.escape(compact_spaces(str(audit.get('tmdb_match_path') or '—')))}</code>"
+                        f"  context=<code>{html.escape(context or '—')}</code> | "
+                        f"bucket=<code>{html.escape(bucket or '—')}</code> | "
+                        f"confidence=<code>{html.escape(confidence or '—')}</code> | "
+                        f"path=<code>{html.escape(match_path or '—')}</code>"
                     ),
                     f"  matched: {html.escape(matched_summary)}",
                     "",

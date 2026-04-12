@@ -4,9 +4,7 @@ from typing import Any, Dict, Iterable, Tuple
 
 from aiogram.enums import ParseMode
 
-from config import CFG
 from delivery_audit import build_delivery_audit
-from delivery_sender import send_item_to_user
 from keyboards import match_review_kb
 from subscription_matching import match_subscription
 from utils import compact_spaces
@@ -17,8 +15,14 @@ log = logging.getLogger(__name__)
 REVIEW_MATCH_CONFIDENCES = {"low"}
 
 
+def _cfg() -> Any:
+    from config import CFG
+
+    return CFG
+
+
 def item_requires_match_review(item: Dict[str, Any]) -> bool:
-    if not CFG.match_review_enabled:
+    if not _cfg().match_review_enabled:
         return False
     confidence = compact_spaces(str(item.get("tmdb_match_confidence") or "")).lower()
     return confidence == "low" and bool(item.get("tmdb_id"))
@@ -66,12 +70,13 @@ async def notify_admins_about_match_review(
     text = build_match_review_alert(item, affected_users)
     kinozal_id = compact_spaces(str(item.get("kinozal_id") or ""))
     reply_markup = match_review_kb(kinozal_id, has_tmdb_match=bool(item.get("tmdb_id"))) if kinozal_id else None
-    if not CFG.admin_ids:
+    cfg = _cfg()
+    if not cfg.admin_ids:
         log.warning("Match review notification skipped: no ADMIN_IDS configured kinozal_id=%s", kinozal_id or "—")
         return 0
     skipped_admins = {int(admin_id) for admin_id in skip_admin_ids}
     sent_count = 0
-    for admin_id in CFG.admin_ids:
+    for admin_id in cfg.admin_ids:
         admin_id_int = int(admin_id)
         if admin_id_int in skipped_admins:
             continue
@@ -90,6 +95,8 @@ async def notify_admins_about_match_review(
 
 
 async def deliver_item_to_matching_subscriptions(db: Any, bot: Any, item: Dict[str, Any]) -> Tuple[int, int]:
+    from delivery_sender import send_item_to_user
+
     item_id = int(item["id"])
     item_tmdb_id = int(item["tmdb_id"]) if item.get("tmdb_id") is not None else None
     matched_users = 0
