@@ -10,6 +10,8 @@
 
 Telegram-бот для мониторинга новых релизов на [Kinozal.tv](https://kinozal.tv). Отправляет уведомления по подпискам с обогащением через TMDB — постеры, рейтинги, жанры, статус сериала.
 
+Текущий релиз: `1.1.0`. Краткая история изменений — в [CHANGELOG.md](./CHANGELOG.md).
+
 <p align="center">
   <img src="./assets/screenshot.png" alt="Kinozal Bot Screenshot" width="400" />
 </p>
@@ -210,6 +212,9 @@ keyboards.py            — inline-клавиатуры
 - `GET /admin/subscriptions/{user_id}`
 - `GET /admin/match-debug?kinozal_id=...&live=true`
 - `POST /admin/reparse/{kinozal_id}`
+- `GET /admin/release-timeline?kinozal_id=...`
+- `GET /admin/explain-delivery?kinozal_id=...&tg_user_id=...`
+- `POST /admin/replay-delivery?kinozal_id=...&tg_user_id=...&force=false`
 
 `/metrics` отдаёт Prometheus text exposition format и включает health/db метрики, а также worker counters вроде `items_fetched`, `deliveries_sent`, `debounce_queued` и длительности последнего цикла.
 
@@ -230,7 +235,26 @@ curl http://localhost:8000/metrics
 curl -H "X-Admin-Token: $ADMIN_HTTP_TOKEN" http://localhost:8000/admin/subscriptions/123456789
 curl -H "X-Admin-Token: $ADMIN_HTTP_TOKEN" "http://localhost:8000/admin/match-debug?kinozal_id=12345&live=true"
 curl -X POST -H "X-Admin-Token: $ADMIN_HTTP_TOKEN" http://localhost:8000/admin/reparse/12345
+curl -H "X-Admin-Token: $ADMIN_HTTP_TOKEN" "http://localhost:8000/admin/release-timeline?kinozal_id=12345"
+curl -H "X-Admin-Token: $ADMIN_HTTP_TOKEN" "http://localhost:8000/admin/explain-delivery?kinozal_id=12345&tg_user_id=443539115"
+curl -X POST -H "X-Admin-Token: $ADMIN_HTTP_TOKEN" "http://localhost:8000/admin/replay-delivery?kinozal_id=12345&tg_user_id=443539115&force=false"
 ```
+
+### Repair / Backfill
+
+Для поиска исторически пропущенных progress-апдейтов есть отдельные dry-run/apply скрипты:
+
+```bash
+docker compose exec -T app python scripts/audit_missing_progress_versions.py --with-users-only --limit 20
+docker compose exec -T app python scripts/repair_missing_progress_deliveries.py --limit 20
+docker compose exec -T app python scripts/repair_missing_progress_deliveries.py --apply --limit 20
+```
+
+`repair_missing_progress_deliveries.py` по умолчанию работает безопасно:
+
+- берёт только `latest_gap` кандидатов
+- смотрит только пользователей, у которых релиз реально доставлялся раньше
+- перед replay повторно прогоняет `explain_delivery`, поэтому без `ready`-статуса ничего не досылает
 
 ---
 

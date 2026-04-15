@@ -3,6 +3,7 @@ from typing import Any, Optional
 
 from fastapi import FastAPI
 
+from app_version import APP_VERSION
 from services.alertmanager_webhook_service import AlertmanagerWebhookService
 
 
@@ -22,7 +23,7 @@ def create_alert_webhook_app(service: Optional[AlertmanagerWebhookService] = Non
 
     app = FastAPI(
         title="Kinozal Alertmanager Webhook",
-        version="1.0.0",
+        version=APP_VERSION,
         lifespan=lifespan,
     )
 

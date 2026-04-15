@@ -4,6 +4,7 @@ import httpx
 import pytest
 from prometheus_client import CONTENT_TYPE_LATEST
 
+from app_version import APP_VERSION
 from api_app import create_api_app
 
 
@@ -74,6 +75,19 @@ def build_test_client(admin_http_token: str = "secret") -> httpx.AsyncClient:
     )
     transport = httpx.ASGITransport(app=create_api_app(container))
     return httpx.AsyncClient(transport=transport, base_url="http://testserver")
+
+
+def test_openapi_version_matches_release() -> None:
+    app = create_api_app(
+        FakeContainer(
+            admin_api_service=FakeAdminApiService(),
+            tmdb=FakeAsyncCloser(),
+            cache=FakeAsyncCloser(),
+            source=FakeAsyncCloser(),
+            admin_http_token="secret",
+        )
+    )
+    assert app.version == APP_VERSION
 
 
 @pytest.mark.anyio

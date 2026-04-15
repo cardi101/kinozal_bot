@@ -4,6 +4,8 @@ from typing import TYPE_CHECKING, Any, Optional
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Response
 from prometheus_client import CONTENT_TYPE_LATEST
 
+from app_version import APP_VERSION
+
 if TYPE_CHECKING:
     from api_bootstrap import ApiContainer
 
@@ -29,7 +31,7 @@ def create_api_app(container: Optional["ApiContainer"] = None) -> FastAPI:
 
     app = FastAPI(
         title="Kinozal Bot Admin API",
-        version="1.0.0",
+        version=APP_VERSION,
         lifespan=lifespan,
     )
 
