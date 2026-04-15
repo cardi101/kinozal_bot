@@ -17,6 +17,7 @@ def test_should_emit_anomaly_alert_suppresses_duplicates() -> None:
 class _FakeWorkerRepository:
     def __init__(self) -> None:
         self.deleted: list[tuple[int, int]] = []
+        self.deleted_debounce: list[tuple[int, str]] = []
         self.subscriptions = {
             7: {
                 "id": 7,
@@ -51,7 +52,13 @@ class _FakeWorkerRepository:
     def delivered(self, tg_user_id: int, item_id: int) -> bool:
         return False
 
+    def delivered_persisted(self, tg_user_id: int, item_id: int) -> bool:
+        return False
+
     def delivered_equivalent(self, tg_user_id: int, item: dict) -> bool:
+        return False
+
+    def delivered_equivalent_persisted(self, tg_user_id: int, item: dict) -> bool:
         return False
 
     def get_item_any(self, item_id: int):
@@ -70,8 +77,14 @@ class _FakeWorkerRepository:
     def list_user_subscriptions(self, tg_user_id: int):
         return [sub for sub in self.subscriptions.values() if sub["tg_user_id"] == tg_user_id]
 
+    def get_user_quiet_hours(self, tg_user_id: int):
+        return None, None
+
     def delete_pending_delivery(self, tg_user_id: int, item_id: int) -> None:
         self.deleted.append((tg_user_id, item_id))
+
+    def delete_debounce_entry(self, tg_user_id: int, kinozal_id: str) -> None:
+        self.deleted_debounce.append((tg_user_id, kinozal_id))
 
 
 class _FakeKinozalService:
@@ -90,6 +103,9 @@ class _FakeDeliveryService:
     async def send_item(self, tg_user_id: int, item: ReleaseItem, subs, old_release_text: str = "") -> None:
         self.sent.append((tg_user_id, item.id))
 
+    async def send_single(self, tg_user_id: int, delivery) -> None:
+        await self.send_item(tg_user_id, delivery.item, delivery.subs, old_release_text=delivery.old_release_text)
+
     def record_delivery(self, tg_user_id: int, item: ReleaseItem, subs, context: str = "worker") -> None:
         self.recorded.append((tg_user_id, item.id, context))
 
@@ -103,6 +119,17 @@ class _FakeDeliveryService:
     async def deliver_claimed_item(self, tg_user_id: int, item: ReleaseItem, subs, *, context: str = "worker", old_release_text: str = "") -> None:
         await self.send_item(tg_user_id, item, subs, old_release_text=old_release_text)
         self.record_delivery(tg_user_id, item, subs, context=context)
+
+
+class _ClaimBlockedDeliveryService(_FakeDeliveryService):
+    def begin_delivery_claim(self, tg_user_id: int, item: ReleaseItem, subs, context: str = "worker") -> bool:
+        self.claimed.append((tg_user_id, item.id, context))
+        return False
+
+
+class _FailingSingleDeliveryService(_FakeDeliveryService):
+    async def send_single(self, tg_user_id: int, delivery) -> None:
+        raise RuntimeError("send failed")
 
 
 class _FakeSubscriptionService:
@@ -131,6 +158,25 @@ def test_flush_due_pending_deliveries_uses_archived_item_payload() -> None:
     assert metrics["deliveries_sent_total"] == 1
 
 
+def test_flush_due_pending_deliveries_keeps_row_when_claim_already_exists() -> None:
+    repository = _FakeWorkerRepository()
+    delivery_service = _ClaimBlockedDeliveryService()
+    worker = WorkerService(
+        repository=repository,
+        kinozal_service=_FakeKinozalService(),
+        tmdb_service=None,
+        subscription_service=_FakeSubscriptionService(),
+        delivery_service=delivery_service,
+        bot=None,
+    )
+
+    metrics = worker._new_cycle_metrics()
+    asyncio.run(worker._flush_due_pending_deliveries(current_hour=12, cycle_metrics=metrics))
+
+    assert delivery_service.sent == []
+    assert repository.deleted == []
+
+
 def test_flush_due_debounce_uses_archived_item_payload() -> None:
     repository = _FakeWorkerRepository()
     worker = WorkerService(
@@ -148,6 +194,7 @@ def test_flush_due_debounce_uses_archived_item_payload() -> None:
     assert 1001 in pending
     assert len(pending[1001]) == 1
     assert pending[1001][0].item_id == 42
+    assert pending[1001][0].debounce_kinozal_id == "2128422"
 
 
 def test_flush_due_pending_deliveries_falls_back_to_current_matching_subscriptions() -> None:
@@ -203,6 +250,47 @@ def test_flush_due_debounce_falls_back_to_current_matching_subscriptions() -> No
     assert pending[1001][0].subs[0].id == 11
 
 
+def test_debounce_entry_deleted_only_after_successful_delivery() -> None:
+    repository = _FakeWorkerRepository()
+    delivery_service = _FakeDeliveryService()
+    worker = WorkerService(
+        repository=repository,
+        kinozal_service=_FakeKinozalService(),
+        tmdb_service=None,
+        subscription_service=_FakeSubscriptionService(),
+        delivery_service=delivery_service,
+        bot=None,
+    )
+
+    pending: dict[int, list] = {}
+    asyncio.run(worker._flush_due_debounce(pending))
+    metrics = worker._new_cycle_metrics()
+    asyncio.run(worker._deliver_current_cycle(pending, current_hour=12, cycle_metrics=metrics))
+
+    assert repository.deleted_debounce == [(1001, "2128422")]
+    assert delivery_service.sent == [(1001, 42)]
+
+
+def test_debounce_entry_survives_failed_delivery() -> None:
+    repository = _FakeWorkerRepository()
+    delivery_service = _FailingSingleDeliveryService()
+    worker = WorkerService(
+        repository=repository,
+        kinozal_service=_FakeKinozalService(),
+        tmdb_service=None,
+        subscription_service=_FakeSubscriptionService(),
+        delivery_service=delivery_service,
+        bot=None,
+    )
+
+    pending: dict[int, list] = {}
+    asyncio.run(worker._flush_due_debounce(pending))
+    metrics = worker._new_cycle_metrics()
+    asyncio.run(worker._deliver_current_cycle(pending, current_hour=12, cycle_metrics=metrics))
+
+    assert repository.deleted_debounce == []
+
+
 class _SelectiveSubscriptionService:
     def matches(self, sub, item: ReleaseItem) -> bool:
         return int(sub.id if hasattr(sub, "id") else sub["id"]) == 11
@@ -238,5 +326,6 @@ def test_resolve_delivery_subscriptions_rechecks_stored_subscription_match() -> 
         ReleaseItem.from_payload(repository.get_item_any(42)),
         "7",
     )
+
 
     assert [sub.id for sub in subs] == [11]

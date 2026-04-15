@@ -149,6 +149,17 @@ class MatchReviewRepository(BaseRepository):
             ).fetchone()
             return dict(row) if row else None
 
+    def delete_match_override(self, kinozal_id: str) -> None:
+        kinozal_id = compact_spaces(str(kinozal_id or ""))
+        if not kinozal_id:
+            return
+        with self.lock:
+            self.conn.execute(
+                "DELETE FROM match_overrides WHERE kinozal_id = ?",
+                (kinozal_id,),
+            )
+            self.conn.commit()
+
     def add_match_rejection(self, kinozal_id: str, tmdb_id: int, note: str = "") -> None:
         kinozal_id = compact_spaces(str(kinozal_id or ""))
         if not kinozal_id:

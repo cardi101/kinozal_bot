@@ -184,8 +184,17 @@ class AdminApiService:
             raise LookupError(f"user {user_id} not found")
         return user
 
-    async def build_match_debug(self, kinozal_id: str, live: bool = True) -> Dict[str, Any]:
+    def _find_item_any_by_kinozal_id(self, kinozal_id: str) -> Dict[str, Any] | None:
         item = self.db.find_item_by_kinozal_id(kinozal_id)
+        if item:
+            return item
+        finder = getattr(self.db, "find_item_any_by_kinozal_id", None)
+        if finder is None:
+            return None
+        return finder(kinozal_id)
+
+    async def build_match_debug(self, kinozal_id: str, live: bool = True) -> Dict[str, Any]:
+        item = self._find_item_any_by_kinozal_id(kinozal_id)
         if not item:
             raise LookupError(f"kinozal_id {kinozal_id} not found")
 
@@ -202,7 +211,7 @@ class AdminApiService:
         }
 
     async def reparse_release(self, kinozal_id: str) -> Dict[str, Any]:
-        item = self.db.find_item_by_kinozal_id(kinozal_id)
+        item = self._find_item_any_by_kinozal_id(kinozal_id)
         if not item:
             raise LookupError(f"kinozal_id {kinozal_id} not found")
 

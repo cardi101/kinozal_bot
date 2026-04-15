@@ -25,6 +25,9 @@ class _FakeDB:
             "media_type": "tv",
         }
 
+    def find_item_any_by_kinozal_id(self, kinozal_id: str):
+        return self.find_item_by_kinozal_id(kinozal_id)
+
     def save_item(self, payload: dict):
         self.saved_payload = dict(payload)
         return 99, True, True
@@ -39,6 +42,12 @@ class _FakeDB:
             "source_episode_progress": "1 сезон: 1-10 серии из 10",
             "media_type": "tv",
         }
+
+    def list_enabled_subscriptions(self):
+        return []
+
+    def get_subscription(self, sub_id: int):
+        return None
 
 
 class _FakeReplayDB:
@@ -195,3 +204,50 @@ def test_replay_delivery_uses_archive_aware_lookup(monkeypatch) -> None:
     assert result["status"] == "sent"
     assert result["item_id"] == 77
     assert db.recorded[0][1] == 77
+
+
+class _ArchivedOnlyDB(_FakeDB):
+    def find_item_by_kinozal_id(self, kinozal_id: str):
+        return None
+
+    def find_item_any_by_kinozal_id(self, kinozal_id: str):
+        return {
+            "id": 77,
+            "kinozal_id": kinozal_id,
+            "source_uid": f"kinozal:{kinozal_id}",
+            "source_title": "Archived title",
+            "source_release_text": "old text",
+            "source_episode_progress": "1 сезон: 1-8 серии из 10",
+            "media_type": "tv",
+        }
+
+
+def test_build_match_debug_uses_archive_aware_lookup() -> None:
+    db = _ArchivedOnlyDB()
+    service = AdminApiService(
+        db=db,
+        tmdb_service=None,
+        kinozal_service=None,
+        bot=None,
+    )
+
+    result = asyncio.run(service.build_match_debug("2128422", live=False))
+
+    assert result["stored_item"]["id"] == 77
+    assert result["live_item"] is None
+
+
+def test_reparse_release_uses_archive_aware_lookup() -> None:
+    db = _ArchivedOnlyDB()
+    service = AdminApiService(
+        db=db,
+        tmdb_service=None,
+        kinozal_service=_FakeKinozalService(),
+        bot=None,
+    )
+
+    result = asyncio.run(service.reparse_release("2128422"))
+
+    assert db.saved_payload is not None
+    assert db.saved_payload["source_title"] == "After title"
+    assert result["item_id"] == 99

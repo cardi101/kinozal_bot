@@ -28,33 +28,9 @@ class _FakeConn:
         params = params or ()
         normalized = " ".join(query.split())
 
-        if "SELECT status, updated_at, claimed_at FROM delivery_claims" in normalized:
-            return _FakeCursor(dict(self.claim_row) if self.claim_row else None)
-
-        if normalized.startswith("UPDATE delivery_claims SET kinozal_id = ?"):
-            self.claim_row = {
-                **(self.claim_row or {}),
-                "status": "sending",
-                "kinozal_id": params[0],
-                "source_uid": params[1],
-                "version_signature": params[2],
-                "subscription_id": params[3],
-                "matched_subscription_ids": params[4],
-                "delivery_context": params[5],
-                "delivery_audit_json": params[6],
-                "claimed_at": params[7],
-                "updated_at": params[8],
-                "sent_at": None,
-            }
-            return _FakeCursor()
-
-        if normalized.startswith("UPDATE delivery_claims SET last_error = ?"):
-            if self.claim_row is not None:
-                self.claim_row["last_error"] = params[0]
-            return _FakeCursor()
-
-        if normalized.startswith("INSERT INTO delivery_claims("):
-            self.claim_row = {
+        if normalized.startswith("INSERT INTO delivery_claims(") and "ON CONFLICT (tg_user_id, item_id) DO UPDATE SET" in normalized:
+            stale_cutoff = int(params[11])
+            payload = {
                 "tg_user_id": params[0],
                 "item_id": params[1],
                 "kinozal_id": params[2],
@@ -70,7 +46,23 @@ class _FakeConn:
                 "updated_at": params[10],
                 "sent_at": None,
             }
-            return _FakeCursor()
+            if self.claim_row is None:
+                self.claim_row = payload
+                return _FakeCursor({"tg_user_id": params[0]})
+            is_active = str(self.claim_row.get("status") or "") == "sent" or (
+                str(self.claim_row.get("status") or "") == "sending"
+                and int(self.claim_row.get("updated_at") or self.claim_row.get("claimed_at") or 0) > stale_cutoff
+            )
+            if is_active:
+                return _FakeCursor(None)
+            payload["last_error"] = (
+                "stale_claim_reclaimed"
+                if str(self.claim_row.get("status") or "") == "sending"
+                and int(self.claim_row.get("updated_at") or self.claim_row.get("claimed_at") or 0) <= stale_cutoff
+                else ""
+            )
+            self.claim_row = payload
+            return _FakeCursor({"tg_user_id": params[0]})
 
         if "SELECT 1 FROM (" in normalized and "FROM delivery_claims dc" in normalized:
             cutoff = int(params[0])
@@ -153,3 +145,26 @@ def test_delivered_ignores_stale_sending_claim(monkeypatch) -> None:
     monkeypatch.setattr(delivery_repo_module, "utc_ts", lambda: now)
 
     assert repository.delivered(1001, 42) is False
+
+
+def test_begin_delivery_claim_returns_false_when_active_claim_exists(monkeypatch) -> None:
+    now = 40_000
+    conn = _FakeConn(
+        {
+            "status": "sending",
+            "claimed_at": now,
+            "updated_at": now,
+        }
+    )
+    repository = DeliveryRepository(_FakeDB(conn))
+    monkeypatch.setattr(delivery_repo_module, "utc_ts", lambda: now)
+
+    claimed = repository.begin_delivery_claim(1001, 42, 7, [7], delivery_audit={"item_snapshot": {"kinozal_id": "2128422"}})
+
+    assert claimed is False
+
+
+def test_delivered_persisted_ignores_active_sending_claim() -> None:
+    repository = DeliveryRepository(_FakeDB(_FakeConn()))
+
+    assert repository.delivered_persisted(1001, 42) is False

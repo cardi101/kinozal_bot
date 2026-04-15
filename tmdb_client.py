@@ -354,6 +354,8 @@ class TMDBClient:
         await self.client.aclose()
 
     def _kinozal_override(self, item: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        if bool(item.get("_skip_kinozal_override")):
+            return None
         return self.db.get_match_override(resolve_item_kinozal_id(item) or "")
 
     def _is_rejected_match(self, item: Dict[str, Any], details: Optional[Dict[str, Any]]) -> bool:
@@ -977,7 +979,7 @@ class TMDBClient:
                     )
 
             override = manual_tmdb_override_for_item(item)
-            if override and not details:
+            if override and not details and not stored_override:
                 terminal_override = True
                 override_media_type, override_tmdb_id, override_key = override
                 try:

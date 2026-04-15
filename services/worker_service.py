@@ -579,7 +579,7 @@ class WorkerService:
         for flush_uid, pending_deliveries in due_pending.items():
             for pending_delivery in pending_deliveries:
                 pending_item_id = int(pending_delivery["item_id"])
-                if self.repository.delivered(flush_uid, pending_item_id):
+                if self.repository.delivered_persisted(flush_uid, pending_item_id):
                     self.repository.delete_pending_delivery(flush_uid, pending_item_id)
                     continue
 
@@ -605,7 +605,6 @@ class WorkerService:
                 try:
                     log.info("Flushing pending delivery item=%s to user=%s", pending_item_id, flush_uid)
                     if not self.delivery_service.begin_delivery_claim(flush_uid, pending_item, pending_subs, context="pending_flush"):
-                        self.repository.delete_pending_delivery(flush_uid, pending_item_id)
                         continue
                     await self.delivery_service.deliver_claimed_item(
                         flush_uid,
@@ -624,12 +623,15 @@ class WorkerService:
         for entry in self.repository.pop_due_debounce():
             tg_user_id = int(entry["tg_user_id"])
             item_id = int(entry["item_id"])
-            if self.repository.delivered(tg_user_id, item_id):
+            debounce_kinozal_id = str(entry.get("kinozal_id") or "")
+            if self.repository.delivered_persisted(tg_user_id, item_id):
+                self.repository.delete_debounce_entry(tg_user_id, debounce_kinozal_id)
                 continue
 
             if item_id not in enriched_cache:
                 raw_item = self.repository.get_item_any(item_id)
                 if not raw_item:
+                    self.repository.delete_debounce_entry(tg_user_id, debounce_kinozal_id)
                     continue
                 item = ReleaseItem.from_payload(raw_item)
                 try:
@@ -642,7 +644,8 @@ class WorkerService:
                     enriched_cache[item_id] = item
 
             item = enriched_cache[item_id]
-            if self.repository.delivered_equivalent(tg_user_id, item.to_dict()):
+            if self.repository.delivered_equivalent_persisted(tg_user_id, item.to_dict()):
+                self.repository.delete_debounce_entry(tg_user_id, debounce_kinozal_id)
                 continue
 
             subs = self._resolve_delivery_subscriptions(
@@ -651,6 +654,7 @@ class WorkerService:
                 str(entry.get("matched_sub_ids") or ""),
             )
             if not subs:
+                self.repository.delete_debounce_entry(tg_user_id, debounce_kinozal_id)
                 continue
 
             log.info("Debounce ready item=%s kinozal_id=%s to user=%s", item_id, entry["kinozal_id"], tg_user_id)
@@ -660,6 +664,7 @@ class WorkerService:
                     subs=subs,
                     old_release_text="",
                     is_release_text_change=False,
+                    debounce_kinozal_id=debounce_kinozal_id,
                 )
             )
 
@@ -687,6 +692,8 @@ class WorkerService:
                             delivery.old_release_text,
                             delivery.is_release_text_change,
                         )
+                        if delivery.debounce_kinozal_id:
+                            self.repository.delete_debounce_entry(tg_user_id, delivery.debounce_kinozal_id)
                     cycle_metrics["pending_queued_total"] += len(deliveries)
                     log.info(
                         "Queued %d deliveries for user=%s (quiet %02d:00-%02d:00 UTC)",
@@ -726,15 +733,21 @@ class WorkerService:
                             context="release_text_update",
                             old_release_text=delivery.old_release_text,
                         )
+                        if delivery.debounce_kinozal_id:
+                            self.repository.delete_debounce_entry(tg_user_id, delivery.debounce_kinozal_id)
                         cycle_metrics["deliveries_sent_total"] += 1
                     except Exception:
                         log.exception("Error delivering rtc item=%s to user=%s", delivery.item_id, tg_user_id)
 
                 for delivery in without_tmdb:
                     if self.repository.delivered(tg_user_id, delivery.item_id):
+                        if delivery.debounce_kinozal_id:
+                            self.repository.delete_debounce_entry(tg_user_id, delivery.debounce_kinozal_id)
                         continue
                     try:
                         await self.delivery_service.send_single(tg_user_id, delivery)
+                        if delivery.debounce_kinozal_id:
+                            self.repository.delete_debounce_entry(tg_user_id, delivery.debounce_kinozal_id)
                         cycle_metrics["deliveries_sent_total"] += 1
                     except Exception:
                         log.exception("Error delivering item=%s to user=%s", delivery.item_id, tg_user_id)
@@ -759,6 +772,8 @@ class WorkerService:
                                     context="grouped_singleton",
                                     old_release_text=claimed_group[0].old_release_text,
                                 )
+                                if claimed_group[0].debounce_kinozal_id:
+                                    self.repository.delete_debounce_entry(tg_user_id, claimed_group[0].debounce_kinozal_id)
                                 cycle_metrics["deliveries_sent_total"] += 1
                                 continue
                             all_subs = list({sub.id: sub for delivery in claimed_group for sub in delivery.subs}.values())
@@ -772,6 +787,8 @@ class WorkerService:
                                 cycle_metrics["grouped_messages_total"] += 1
                                 for delivery in claimed_group:
                                     self.delivery_service.record_delivery(tg_user_id, delivery.item, delivery.subs, context="grouped")
+                                    if delivery.debounce_kinozal_id:
+                                        self.repository.delete_debounce_entry(tg_user_id, delivery.debounce_kinozal_id)
                                     cycle_metrics["deliveries_sent_total"] += 1
                                     await asyncio.sleep(0.12)
                             except Exception as exc:
@@ -780,6 +797,8 @@ class WorkerService:
                                 raise
                         else:
                             await self.delivery_service.send_single(tg_user_id, group[0])
+                            if group[0].debounce_kinozal_id:
+                                self.repository.delete_debounce_entry(tg_user_id, group[0].debounce_kinozal_id)
                             cycle_metrics["deliveries_sent_total"] += 1
                     except Exception:
                         log.exception("Error delivering tmdb_group tmdb=%s to user=%s", tmdb_id, tg_user_id)

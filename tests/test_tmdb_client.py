@@ -2,6 +2,7 @@ import asyncio
 import logging
 from types import SimpleNamespace
 
+import tmdb_client as tmdb_client_module
 from tmdb_client import TMDBClient
 
 
@@ -41,5 +42,38 @@ def test_stored_override_none_details_blocks_fallback_paths() -> None:
     result = asyncio.run(client.enrich_item(item))
 
     assert calls["imdb"] == 0
+    assert result.get("tmdb_id") is None
+    assert result.get("tmdb_match_path") is None
+
+
+def test_stored_override_not_superseded_by_manual_override(monkeypatch) -> None:
+    client = object.__new__(TMDBClient)
+    client.anime_title_lexicon = None
+    client.anime_mapping_store = None
+    client.cfg = SimpleNamespace(anime_resolver_enabled=False, anime_resolver_log_only=False)
+    client.db = SimpleNamespace(get_match_override=lambda kinozal_id: {"tmdb_id": 123, "media_type": "movie", "source": "admin"})
+    client.cache = None
+    client.log = logging.getLogger("test-tmdb-client")
+    client.token = "token"
+    client.language = "en"
+
+    async def _fake_get_details(media_type: str, tmdb_id: int):
+        return None
+
+    client.get_details = _fake_get_details
+    client.find_by_imdb = None
+    client._is_rejected_match = lambda item, details: False
+    monkeypatch.setattr(tmdb_client_module, "manual_tmdb_override_for_item", lambda item: ("movie", 999, "manual-key"))
+
+    item = {
+        "kinozal_id": "2128422",
+        "source_uid": "kinozal:2128422",
+        "source_title": "Sample Movie / 2026 / WEB-DL (1080p)",
+        "source_description": "",
+        "media_type": "movie",
+    }
+
+    result = asyncio.run(client.enrich_item(item))
+
     assert result.get("tmdb_id") is None
     assert result.get("tmdb_match_path") is None

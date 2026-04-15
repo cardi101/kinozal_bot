@@ -77,6 +77,7 @@ class DeliveryCandidate:
     subs: List[SubscriptionRecord] = field(default_factory=list)
     old_release_text: str = ""
     is_release_text_change: bool = False
+    debounce_kinozal_id: str = ""
 
     @property
     def item_id(self) -> int:

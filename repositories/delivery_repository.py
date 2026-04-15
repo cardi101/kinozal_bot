@@ -1,6 +1,8 @@
 import json
 from typing import Any, Dict, Iterable, List, Optional
 
+from psycopg import IntegrityError
+
 from release_versioning import extract_kinozal_id
 from utils import compact_spaces, utc_ts
 
@@ -81,51 +83,8 @@ class DeliveryRepository(BaseRepository):
         now = utc_ts()
         stale_cutoff = now - DELIVERY_CLAIM_LEASE_SECONDS
         with self.lock:
-            row = self.conn.execute(
-                """
-                SELECT status, updated_at, claimed_at
-                FROM delivery_claims
-                WHERE tg_user_id = ? AND item_id = ?
-                LIMIT 1
-                """,
-                (tg_user_id, item_id),
-            ).fetchone()
-            if row and _delivery_claim_is_active(dict(row), now=now):
-                return False
-            if row:
-                self.conn.execute(
-                    """
-                    UPDATE delivery_claims
-                    SET kinozal_id = ?, source_uid = ?, version_signature = ?, subscription_id = ?,
-                        matched_subscription_ids = ?, delivery_context = ?, delivery_audit_json = ?,
-                        status = 'sending', last_error = '', claimed_at = ?, updated_at = ?, sent_at = NULL
-                    WHERE tg_user_id = ? AND item_id = ?
-                    """,
-                    (
-                        identity["kinozal_id"],
-                        identity["source_uid"],
-                        identity["version_signature"],
-                        sub_id,
-                        matched_ids_csv,
-                        compact_spaces(context),
-                        delivery_audit_json,
-                        now,
-                        now,
-                        tg_user_id,
-                        item_id,
-                    ),
-                )
-                if str(row.get("status") or "") == "sending" and _delivery_claim_ref_ts(dict(row)) <= stale_cutoff:
-                    self.conn.execute(
-                        """
-                        UPDATE delivery_claims
-                        SET last_error = ?
-                        WHERE tg_user_id = ? AND item_id = ?
-                        """,
-                        ("stale_claim_reclaimed", tg_user_id, item_id),
-                    )
-            else:
-                self.conn.execute(
+            try:
+                row = self.conn.execute(
                     """
                     INSERT INTO delivery_claims(
                         tg_user_id, item_id, kinozal_id, source_uid, version_signature, subscription_id,
@@ -133,6 +92,32 @@ class DeliveryRepository(BaseRepository):
                         claimed_at, updated_at, sent_at
                     )
                     VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, 'sending', '', ?, ?, NULL)
+                    ON CONFLICT (tg_user_id, item_id) DO UPDATE SET
+                        kinozal_id = EXCLUDED.kinozal_id,
+                        source_uid = EXCLUDED.source_uid,
+                        version_signature = EXCLUDED.version_signature,
+                        subscription_id = EXCLUDED.subscription_id,
+                        matched_subscription_ids = EXCLUDED.matched_subscription_ids,
+                        delivery_context = EXCLUDED.delivery_context,
+                        delivery_audit_json = EXCLUDED.delivery_audit_json,
+                        status = 'sending',
+                        last_error = CASE
+                            WHEN delivery_claims.status = 'sending'
+                             AND COALESCE(delivery_claims.updated_at, delivery_claims.claimed_at) <= ?
+                            THEN 'stale_claim_reclaimed'
+                            ELSE ''
+                        END,
+                        claimed_at = EXCLUDED.claimed_at,
+                        updated_at = EXCLUDED.updated_at,
+                        sent_at = NULL
+                    WHERE NOT (
+                        delivery_claims.status = 'sent'
+                        OR (
+                            delivery_claims.status = 'sending'
+                            AND COALESCE(delivery_claims.updated_at, delivery_claims.claimed_at) > ?
+                        )
+                    )
+                    RETURNING tg_user_id
                     """,
                     (
                         tg_user_id,
@@ -146,10 +131,14 @@ class DeliveryRepository(BaseRepository):
                         delivery_audit_json,
                         now,
                         now,
+                        stale_cutoff,
+                        stale_cutoff,
                     ),
-                )
+                ).fetchone()
+            except IntegrityError:
+                row = None
             self.conn.commit()
-        return True
+        return row is not None
 
     def mark_delivery_claim_failed(self, tg_user_id: int, item_id: int, error: str = "") -> None:
         with self.lock:
@@ -163,7 +152,7 @@ class DeliveryRepository(BaseRepository):
             )
             self.conn.commit()
 
-    def delivered_equivalent(self, tg_user_id: int, item: Dict[str, Any]) -> bool:
+    def _delivered_equivalent(self, tg_user_id: int, item: Dict[str, Any], include_claims: bool) -> bool:
         target_variant_sig = self.db.build_item_variant_signature(item) if hasattr(self.db, "build_item_variant_signature") else None
         if target_variant_sig is None:
             from release_versioning import build_item_variant_signature
@@ -201,27 +190,29 @@ class DeliveryRepository(BaseRepository):
                 ).fetchone()
                 if row is not None:
                     return True
-                row = self.conn.execute(
-                    """
-                    SELECT 1
-                    FROM delivery_claims
-                    WHERE tg_user_id = ?
-                      AND kinozal_id = ?
-                      AND COALESCE(version_signature, '') = ?
-                      AND (
-                        status = 'sent'
-                        OR (status = 'sending' AND COALESCE(updated_at, claimed_at) > ?)
-                      )
-                    LIMIT 1
-                    """,
-                    (
-                        tg_user_id,
-                        kinozal_id,
-                        compact_spaces(str(item.get("version_signature") or "")),
-                        utc_ts() - DELIVERY_CLAIM_LEASE_SECONDS,
-                    ),
-                ).fetchone()
-                return row is not None
+                if include_claims:
+                    row = self.conn.execute(
+                        """
+                        SELECT 1
+                        FROM delivery_claims
+                        WHERE tg_user_id = ?
+                          AND kinozal_id = ?
+                          AND COALESCE(version_signature, '') = ?
+                          AND (
+                            status = 'sent'
+                            OR (status = 'sending' AND COALESCE(updated_at, claimed_at) > ?)
+                          )
+                        LIMIT 1
+                        """,
+                        (
+                            tg_user_id,
+                            kinozal_id,
+                            compact_spaces(str(item.get("version_signature") or "")),
+                            utc_ts() - DELIVERY_CLAIM_LEASE_SECONDS,
+                        ),
+                    ).fetchone()
+                    return row is not None
+                return False
 
             source_uid = compact_spaces(str(item.get("source_uid") or ""))
             if not source_uid:
@@ -254,27 +245,35 @@ class DeliveryRepository(BaseRepository):
             ).fetchone()
             if row is not None:
                 return True
-            row = self.conn.execute(
-                """
-                SELECT 1
-                FROM delivery_claims
-                WHERE tg_user_id = ?
-                  AND source_uid = ?
-                  AND COALESCE(version_signature, '') = ?
-                  AND (
-                    status = 'sent'
-                    OR (status = 'sending' AND COALESCE(updated_at, claimed_at) > ?)
-                  )
-                LIMIT 1
-                """,
-                (
-                    tg_user_id,
-                    source_uid,
-                    compact_spaces(str(item.get("version_signature") or "")),
-                    utc_ts() - DELIVERY_CLAIM_LEASE_SECONDS,
-                ),
-            ).fetchone()
-            return row is not None
+            if include_claims:
+                row = self.conn.execute(
+                    """
+                    SELECT 1
+                    FROM delivery_claims
+                    WHERE tg_user_id = ?
+                      AND source_uid = ?
+                      AND COALESCE(version_signature, '') = ?
+                      AND (
+                        status = 'sent'
+                        OR (status = 'sending' AND COALESCE(updated_at, claimed_at) > ?)
+                      )
+                    LIMIT 1
+                    """,
+                    (
+                        tg_user_id,
+                        source_uid,
+                        compact_spaces(str(item.get("version_signature") or "")),
+                        utc_ts() - DELIVERY_CLAIM_LEASE_SECONDS,
+                    ),
+                ).fetchone()
+                return row is not None
+            return False
+
+    def delivered_equivalent(self, tg_user_id: int, item: Dict[str, Any]) -> bool:
+        return self._delivered_equivalent(tg_user_id, item, include_claims=True)
+
+    def delivered_equivalent_persisted(self, tg_user_id: int, item: Dict[str, Any]) -> bool:
+        return self._delivered_equivalent(tg_user_id, item, include_claims=False)
 
     def get_latest_delivered_related_item(self, tg_user_id: int, item: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         kinozal_id = compact_spaces(str(item.get("kinozal_id") or "")) or extract_kinozal_id(item.get("source_uid")) or extract_kinozal_id(item.get("source_link"))
@@ -398,6 +397,25 @@ class DeliveryRepository(BaseRepository):
                 LIMIT 1
                 """,
                 (utc_ts() - DELIVERY_CLAIM_LEASE_SECONDS, tg_user_id, item_id),
+            ).fetchone()
+            return row is not None
+
+    def delivered_persisted(self, tg_user_id: int, item_id: int) -> bool:
+        with self.lock:
+            row = self.conn.execute(
+                """
+                SELECT 1
+                FROM (
+                    SELECT d.tg_user_id, d.item_id AS delivered_item_id
+                    FROM deliveries d
+                    UNION ALL
+                    SELECT da.tg_user_id, da.original_item_id AS delivered_item_id
+                    FROM deliveries_archive da
+                ) delivered_rows
+                WHERE tg_user_id = ? AND delivered_item_id = ?
+                LIMIT 1
+                """,
+                (tg_user_id, item_id),
             ).fetchone()
             return row is not None
 
@@ -611,12 +629,18 @@ class DeliveryRepository(BaseRepository):
         now = utc_ts()
         with self.lock:
             rows = self.conn.execute(
-                "DELETE FROM debounce_queue WHERE deliver_after_ts <= ? RETURNING *",
+                "SELECT * FROM debounce_queue WHERE deliver_after_ts <= ? ORDER BY deliver_after_ts ASC",
                 (now,),
             ).fetchall()
-            if rows:
-                self.conn.commit()
             return [dict(row) for row in rows]
+
+    def delete_debounce_entry(self, tg_user_id: int, kinozal_id: str) -> None:
+        with self.lock:
+            self.conn.execute(
+                "DELETE FROM debounce_queue WHERE tg_user_id = ? AND kinozal_id = ?",
+                (tg_user_id, compact_spaces(str(kinozal_id or ""))),
+            )
+            self.conn.commit()
 
     def recently_delivered_kinozal_id(self, tg_user_id: int, kinozal_id: str, cooldown_seconds: int) -> bool:
         with self.lock:

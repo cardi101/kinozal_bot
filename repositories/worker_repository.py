@@ -117,8 +117,14 @@ class WorkerRepository:
     def delivered(self, tg_user_id: int, item_id: int) -> bool:
         return self.db.delivered(tg_user_id, item_id)
 
+    def delivered_persisted(self, tg_user_id: int, item_id: int) -> bool:
+        return self.db.delivered_persisted(tg_user_id, item_id)
+
     def delivered_equivalent(self, tg_user_id: int, item: Dict[str, Any]) -> bool:
         return self.db.delivered_equivalent(tg_user_id, item)
+
+    def delivered_equivalent_persisted(self, tg_user_id: int, item: Dict[str, Any]) -> bool:
+        return self.db.delivered_equivalent_persisted(tg_user_id, item)
 
     def recently_delivered(self, tg_user_id: int, item_id: int, cooldown_seconds: int) -> bool:
         return self.db.recently_delivered(tg_user_id, item_id, cooldown_seconds=cooldown_seconds)
@@ -148,6 +154,9 @@ class WorkerRepository:
 
     def pop_due_debounce(self) -> List[Dict[str, Any]]:
         return self.db.pop_due_debounce()
+
+    def delete_debounce_entry(self, tg_user_id: int, kinozal_id: str) -> None:
+        self.db.delete_debounce_entry(tg_user_id, kinozal_id)
 
     def get_user_quiet_hours(self, tg_user_id: int) -> Tuple[Optional[int], Optional[int]]:
         return self.db.get_user_quiet_hours(tg_user_id)

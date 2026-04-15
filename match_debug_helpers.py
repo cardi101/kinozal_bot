@@ -201,7 +201,11 @@ async def rematch_item_live(db: Any, tmdb: Any, item: Dict[str, Any]) -> Tuple[O
     before = dict(item)
     try:
         rematch_input = _strip_existing_match_fields(item)
+        rematch_input["_skip_kinozal_override"] = True
         enriched = await tmdb.enrich_item(rematch_input)
+        kinozal_id = compact_spaces(str(item.get("kinozal_id") or "")) or resolve_item_kinozal_id(item)
+        if kinozal_id and hasattr(db, "delete_match_override"):
+            db.delete_match_override(kinozal_id)
         db.save_item(enriched)
         refreshed = db.get_item(int(item["id"])) or db.find_item_by_kinozal_id(str(item.get("kinozal_id") or ""))
         if refreshed is not None and enriched.get("tmdb_match_path"):
