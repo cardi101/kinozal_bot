@@ -75,6 +75,8 @@ class DeliveryService:
         if previous_item:
             item.set("previous_related_item_id", previous_item.id)
             item.set("previous_progress", previous_item.get("source_episode_progress") or "")
+            item.set("previous_source_title", previous_item.get("source_title") or "")
+            item.set("previous_source_format", previous_item.get("source_format") or "")
             log.info(
                 "Delivering updated release item=%s to user=%s source_uid=%s reason=%s prev_item_id=%s",
                 item_id,
@@ -86,6 +88,8 @@ class DeliveryService:
         else:
             item.set("previous_related_item_id", None)
             item.set("previous_progress", "")
+            item.set("previous_source_title", "")
+            item.set("previous_source_format", "")
             log.info(
                 "Delivering new release item=%s to user=%s source_uid=%s",
                 item_id,

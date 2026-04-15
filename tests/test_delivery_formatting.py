@@ -6,11 +6,11 @@ class _DummyDb:
         return {18: "драма", 35: "комедия"}
 
 
-def test_item_message_uses_compact_ops_friendly_layout_for_updates() -> None:
+def test_item_message_uses_clean_user_layout_for_updates() -> None:
     db = _DummyDb()
     item = {
         "kinozal_id": "2124376",
-        "source_title": "Каждый за себя (Переходим на голландский) (2 сезон: 1-10 серии из 12) / Going Dutch / 2026 / ПМ (HDrezka Studio) / WEB-DL (1080p)",
+        "source_title": "Каждый за себя (Переходим на голландский) (2 сезон: 1-10 серии из 12) / Going Dutch / 2026 / 2 x ПМ (HDrezka Studio) / WEB-DL (1080p)",
         "tmdb_title": "Каждый за себя",
         "tmdb_original_title": "Going Dutch",
         "media_type": "tv",
@@ -21,6 +21,7 @@ def test_item_message_uses_compact_ops_friendly_layout_for_updates() -> None:
         "source_episode_progress": "1-10 из 12",
         "previous_progress": "1-9 из 12",
         "previous_related_item_id": 5171,
+        "previous_source_title": "Каждый за себя (Переходим на голландский) (2 сезон: 1-9 серии из 12) / Going Dutch / 2026 / ПМ (HDrezka Studio) / WEB-DL (1080p)",
         "genre_ids": [18, 35],
         "source_link": "https://kinozal.tv/details.php?id=2124376",
         "tmdb_id": 123456,
@@ -29,12 +30,12 @@ def test_item_message_uses_compact_ops_friendly_layout_for_updates() -> None:
 
     text = item_message(db, item, matched_subs=[{"name": "🌍 Новинки — мир"}])
 
-    assert "🟢 UPDATE" in text
-    assert "TV" in text
-    assert "1-9 из 12 → 1-10 из 12" in text
+    assert "🟢 UPDATE • TV • 1080p" in text
+    assert "Изменение: 1-9 из 12 → 1-10 из 12; добавлена многоголосая дорожка" in text
     assert "Kinozal 2124376" in text
-    assert "matched: 1" in text
-    assert "Релиз: <code>Каждый за себя" in text
+    assert "matched: 1" not in text
+    assert "Релиз: <code>Каждый за себя" not in text
+    assert "Озвучка: 2×ПМ (HDrezka Studio)" in text
     assert "Жанры: драма, комедия" in text
     assert "Категория API" not in text
     assert "Длинное описание" not in text
@@ -52,10 +53,11 @@ def test_item_message_marks_release_text_changes_explicitly() -> None:
 
     text = item_message(db, item, matched_subs=[{"name": "🌍 Новинки — мир"}], old_release_text="old")
 
-    assert "🔄 TEXT CHANGED" in text
+    assert "🟢 UPDATE" in text
+    assert "Изменение: обновились детали релиза" in text
 
 
-def test_item_message_marks_tv_items_with_progress_as_ongoing_when_not_new_movie() -> None:
+def test_item_message_marks_tv_items_as_new_and_keeps_series_line() -> None:
     db = _DummyDb()
     item = {
         "source_title": "Медики Чикаго (11 сезон: 1-17 серии из 22) / Chicago Med / 2025-2026 / ПМ (TVShows), ЛМ (LE-Production) / HEVC / WEBRip (1080p)",
@@ -68,9 +70,8 @@ def test_item_message_marks_tv_items_with_progress_as_ongoing_when_not_new_movie
 
     text = item_message(db, item, matched_subs=[{"name": "🌍 Новинки — мир"}])
 
-    assert "📺 ONGOING" in text
-    assert "🆕 NEW" not in text
-    assert "Серии:" not in text
+    assert "🆕 NEW • TV • 1080p" in text
+    assert "Серии: 11 сезон: 1-17 серии из 22" in text
 
 
 def test_grouped_items_message_uses_compact_multi_layout() -> None:
@@ -106,6 +107,7 @@ def test_grouped_items_message_uses_compact_multi_layout() -> None:
     assert "Kinozal 4002" in text
     assert "1-4 из 10" in text
     assert "Ссылки:" in text
+    assert "matched: 1" not in text
 
 
 def test_item_message_keeps_audio_multiplier_and_shows_countries() -> None:
@@ -130,3 +132,21 @@ def test_item_message_keeps_audio_multiplier_and_shows_countries() -> None:
 
     assert "2×ДБ + СТ" in text
     assert "Страны: США, Великобритания" in text
+
+
+def test_item_message_hides_low_vote_tmdb_rating() -> None:
+    db = _DummyDb()
+    item = {
+        "kinozal_id": "2136086",
+        "source_title": "Sample / 2026 / ПМ / WEB-DL (1080p)",
+        "tmdb_title": "Sample",
+        "media_type": "movie",
+        "tmdb_release_date": "2026-01-01",
+        "source_format": "1080",
+        "tmdb_rating": 10.0,
+        "tmdb_vote_count": 1,
+    }
+
+    text = item_message(db, item, matched_subs=[{"name": "🌍 Новинки — мир"}])
+
+    assert "TMDB:" not in text

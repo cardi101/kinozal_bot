@@ -11,44 +11,13 @@ from genres_helpers import item_genre_names
 from item_years import item_display_year
 from parsing_audio import (
     format_audio_variants,
-    infer_release_type,
     parse_audio_tracks,
     parse_audio_variants,
-    parse_release_text_episode_ranges,
 )
 from utils import compact_spaces
 
 
 _KINOZAL_ID_RE = re.compile(r"[?&]id=(\d+)")
-
-
-def _annotate_audio_with_episode_ranges(
-    variants: List[Dict[str, Any]], ranges: Dict[str, str]
-) -> List[Dict[str, Any]]:
-    """Annotates audio variant labels with episode ranges from release text.
-
-    E.g. variant "ПМ (Дубляжная, HDrezka Studio, LostFilm)" with ranges
-    {"дубляжная": "1-3", "lostfilm": "1-3"} becomes
-    "ПМ (Дубляжная [1-3], HDrezka Studio, LostFilm [1-3])".
-    """
-    if not ranges:
-        return variants
-    result = []
-    for variant in variants:
-        label = str(variant.get("label") or "")
-        m = re.search(r'\(([^)]+)\)', label)
-        if m:
-            parts = [compact_spaces(p) for p in m.group(1).split(",")]
-            new_parts = []
-            for p in parts:
-                ep = ranges.get(p.lower())
-                new_parts.append(f"{p} [{ep}]" if ep else p)
-            new_inner = ", ".join(new_parts)
-            new_label = label[:m.start(1)] + new_inner + label[m.end(1):]
-            result.append({**variant, "label": new_label})
-        else:
-            result.append(variant)
-    return result
 
 
 def _preserve_multiline_overview(value: str) -> str:
@@ -74,7 +43,7 @@ def _preserve_multiline_overview(value: str) -> str:
 
 def _message_event_label(item: Dict[str, Any], old_release_text: str = "") -> str:
     if compact_spaces(old_release_text):
-        return "🔄 TEXT CHANGED"
+        return "🟢 UPDATE"
     previous_progress = compact_spaces(str(item.get("previous_progress") or ""))
     current_progress = compact_spaces(
         str(item.get("source_episode_progress") or item.get("episode_progress") or item.get("source_series_update") or "")
@@ -83,8 +52,6 @@ def _message_event_label(item: Dict[str, Any], old_release_text: str = "") -> st
         return "🟢 UPDATE"
     if item.get("previous_related_item_id"):
         return "🟢 UPDATE"
-    if compact_spaces(str(item.get("media_type") or "")).lower() == "tv" and current_progress:
-        return "📺 ONGOING"
     return "🆕 NEW"
 
 
@@ -138,6 +105,118 @@ def _compact_audio_summary(audio_variants: List[Dict[str, Any]]) -> str:
     return summary
 
 
+def _quality_badge(item: Dict[str, Any]) -> str:
+    fmt = compact_spaces(str(item.get("source_format") or ""))
+    if not fmt:
+        title = compact_spaces(str(item.get("source_title") or ""))
+        match = re.search(r"(?<!\d)(720|1080|2160)p\b", title, flags=re.I)
+        if match:
+            fmt = match.group(1)
+    if not fmt:
+        return ""
+    return f"{fmt}p" if fmt.isdigit() else fmt
+
+
+def _audio_variant_counts(variants: List[Dict[str, Any]]) -> Dict[str, int]:
+    counts: Dict[str, int] = {}
+    for variant in variants:
+        label = compact_spaces(str(variant.get("label") or ""))
+        if not label:
+            continue
+        counts[label.lower()] = counts.get(label.lower(), 0) + max(1, int(variant.get("count") or 1))
+    return counts
+
+
+def _audio_change_label(label: str) -> str:
+    upper = compact_spaces(label).upper()
+    if upper.startswith(("ПМ", "MVO", "МВО")):
+        return "многоголосая дорожка"
+    if upper.startswith(("ЛД", "ДВО", "DVO")):
+        return "двухголосая дорожка"
+    if upper.startswith(("ДБ", "AVO", "РУ")):
+        return "новая аудиодорожка"
+    if upper.startswith(("СТ", "SUB")):
+        return "дорожка субтитров"
+    return "новая аудиодорожка"
+
+
+def _describe_audio_change(previous_title: str, current_title: str) -> str:
+    previous_variants = parse_audio_variants(previous_title)
+    current_variants = parse_audio_variants(current_title)
+    if not current_variants:
+        return ""
+
+    previous_counts = _audio_variant_counts(previous_variants)
+    current_counts = _audio_variant_counts(current_variants)
+    if previous_counts == current_counts:
+        return ""
+
+    added_total = 0
+    removed_total = 0
+    added_labels: List[str] = []
+    for label, count in current_counts.items():
+        delta = count - previous_counts.get(label, 0)
+        if delta > 0:
+            added_total += delta
+            added_labels.extend([label] * delta)
+    for label, count in previous_counts.items():
+        delta = count - current_counts.get(label, 0)
+        if delta > 0:
+            removed_total += delta
+
+    if added_total > 0 and removed_total == 0:
+        if added_total == 1 and added_labels:
+            return f"добавлена {_audio_change_label(added_labels[0])}"
+        if added_total > 1:
+            return f"добавлено {added_total} новых аудиодорожки"
+        return "добавлена новая аудиодорожка"
+    return "обновился набор озвучек"
+
+
+def _describe_update_change(item: Dict[str, Any], old_release_text: str = "") -> str:
+    changes: List[str] = []
+    previous_progress = compact_spaces(str(item.get("previous_progress") or ""))
+    current_progress = compact_spaces(
+        str(item.get("source_episode_progress") or item.get("episode_progress") or item.get("source_series_update") or "")
+    )
+    if previous_progress and current_progress and previous_progress != current_progress:
+        changes.append(f"{previous_progress} → {current_progress}")
+
+    previous_source_title = compact_spaces(str(item.get("previous_source_title") or ""))
+    current_source_title = compact_spaces(str(item.get("source_title") or ""))
+    if previous_source_title and current_source_title:
+        audio_change = _describe_audio_change(previous_source_title, current_source_title)
+        if audio_change:
+            changes.append(audio_change)
+
+    previous_format = compact_spaces(str(item.get("previous_source_format") or ""))
+    current_format = compact_spaces(str(item.get("source_format") or ""))
+    if previous_format and current_format and previous_format != current_format:
+        old_fmt = f"{previous_format}p" if previous_format.isdigit() else previous_format
+        new_fmt = f"{current_format}p" if current_format.isdigit() else current_format
+        changes.append(f"качество {old_fmt} → {new_fmt}")
+
+    if not changes and compact_spaces(old_release_text):
+        return "обновились детали релиза"
+    if not changes and item.get("previous_related_item_id"):
+        return "обновились данные релиза"
+    return "; ".join(changes)
+
+
+def _should_show_tmdb_line(rating: Any, votes: Any) -> bool:
+    if rating is None:
+        return False
+    try:
+        if float(rating) <= 0:
+            return False
+    except Exception:
+        return False
+    try:
+        return int(votes or 0) >= 20
+    except Exception:
+        return False
+
+
 def _display_kinozal_id(item: Dict[str, Any]) -> str:
     kinozal_id = compact_spaces(str(item.get("kinozal_id") or ""))
     if kinozal_id:
@@ -147,12 +226,6 @@ def _display_kinozal_id(item: Dict[str, Any]) -> str:
         return ""
     match = _KINOZAL_ID_RE.search(source_link)
     return match.group(1) if match else ""
-
-
-def _normalize_audio_compare(value: str) -> str:
-    normalized = compact_spaces(str(value or "")).lower()
-    normalized = normalized.replace(" + ", ", ")
-    return normalized
 
 
 def item_message(
@@ -193,7 +266,6 @@ def item_message(
     year = item_display_year(item)
     fmt = item.get("source_format")
     genres = item_genre_names(db, item)
-    release_type = infer_release_type(source_title)
     audio_variants = parse_audio_variants(source_title)
     if not audio_variants:
         raw_audio_tracks = item.get("source_audio_tracks")
@@ -208,25 +280,18 @@ def item_message(
     country_names = human_country_names(countries, limit=4)
     route_label = _message_route_label(item, matched_subs)
     event_label = _message_event_label(item, old_release_text=old_release_text)
-    previous_progress = compact_spaces(str(item.get("previous_progress") or ""))
     episode_progress = compact_spaces(
         str(item.get("source_episode_progress") or item.get("episode_progress") or item.get("source_series_update") or "")
     )
     audio_summary = _compact_audio_summary(audio_variants)
     kinozal_id = _display_kinozal_id(item)
+    quality_badge = _quality_badge(item)
+    is_update = event_label == "🟢 UPDATE"
+    change_text = _describe_update_change(item, old_release_text=old_release_text) if is_update else ""
 
     header_parts = [event_label, _message_media_badge(item)]
-    if previous_progress and episode_progress and previous_progress != episode_progress:
-        header_parts.append(f"{previous_progress} → {episode_progress}")
-    elif episode_progress:
-        header_parts.append(episode_progress)
-    if fmt:
-        fmt_str = str(fmt)
-        header_parts.append(f"{fmt_str}p" if fmt_str.isdigit() else fmt_str)
-    elif release_type:
-        header_parts.append(release_type)
-    if audio_summary:
-        header_parts.append(audio_summary)
+    if quality_badge:
+        header_parts.append(quality_badge)
 
     lines = [" • ".join(html.escape(part) for part in header_parts if part)]
 
@@ -240,31 +305,24 @@ def item_message(
     route_parts = [route_label]
     if kinozal_id:
         route_parts.append(f"Kinozal {kinozal_id}")
-    if matched_subs:
-        route_parts.append(f"matched: {len(matched_subs)}")
     lines.append(html.escape(" • ".join(str(part) for part in route_parts if part)))
 
-    if source_title:
-        lines.append(f"Релиз: <code>{html.escape(source_title)}</code>")
+    if change_text:
+        lines.append(f"Изменение: {html.escape(change_text)}")
 
-    if audio_variants and len(audio_variants) > 1:
-        release_text = str(item.get("source_release_text") or "")
-        ep_ranges = parse_release_text_episode_ranges(release_text)
-        display_variants = _annotate_audio_with_episode_ranges(audio_variants, ep_ranges)
-        detailed_audio = format_audio_variants(display_variants)
-        if _normalize_audio_compare(detailed_audio) != _normalize_audio_compare(audio_summary):
-            lines.append(f"Озвучки: {html.escape(detailed_audio)}")
+    if media_type == "tv" and episode_progress and not change_text.startswith(episode_progress):
+        lines.append(f"Серии: {html.escape(episode_progress)}")
+
+    if audio_summary:
+        lines.append(f"Озвучка: {html.escape(audio_summary)}")
 
     if genres:
         lines.append(f"Жанры: {html.escape(', '.join(genres[:4]))}")
     if country_names:
         lines.append(f"Страны: {html.escape(', '.join(country_names[:3]))}")
 
-    if rating is not None and float(rating) > 0:
-        if votes:
-            lines.append(f"TMDB: <code>{float(rating):.1f}</code> ({int(votes)})")
-        else:
-            lines.append(f"TMDB: <code>{float(rating):.1f}</code>")
+    if _should_show_tmdb_line(rating, votes):
+        lines.append(f"TMDB: <code>{float(rating):.1f}</code> ({int(votes)})")
 
     if media_type == "tv":
         next_ep = fmt_episode("tmdb_next_episode")
@@ -314,15 +372,12 @@ def grouped_items_message(db: Any, items: List[Dict[str, Any]], matched_subs: Op
     route_parts = [route_label]
     if kinozal_id:
         route_parts.append(f"Kinozal {kinozal_id}")
-    if matched_subs:
-        route_parts.append(f"matched: {len(matched_subs)}")
     lines.append(html.escape(" • ".join(str(part) for part in route_parts if part)))
 
     for item in items:
         source_title = item.get("source_title") or ""
         audio_variants = parse_audio_variants(source_title)
         fmt = item.get("source_format")
-        release_type = infer_release_type(source_title)
         parts = []
         progress = compact_spaces(str(item.get("source_episode_progress") or item.get("episode_progress") or item.get("source_series_update") or ""))
         if progress:
@@ -332,8 +387,6 @@ def grouped_items_message(db: Any, items: List[Dict[str, Any]], matched_subs: Op
         if fmt:
             fmt_str = str(fmt)
             parts.append(f"{fmt_str}p" if fmt_str.isdigit() else fmt_str)
-        if release_type:
-            parts.append(release_type)
         desc = " • ".join(parts) if parts else compact_spaces(source_title)
         link = item.get("source_link")
         magnet_url = build_public_magnet_redirect_url(item)
@@ -358,11 +411,8 @@ def grouped_items_message(db: Any, items: List[Dict[str, Any]], matched_subs: Op
     if links:
         lines.append("Ссылки: " + " • ".join(links))
 
-    if rating is not None and float(rating) > 0:
-        if votes:
-            lines.append(f"TMDB: <code>{float(rating):.1f}</code> ({int(votes)})")
-        else:
-            lines.append(f"TMDB: <code>{float(rating):.1f}</code>")
+    if _should_show_tmdb_line(rating, votes):
+        lines.append(f"TMDB: <code>{float(rating):.1f}</code> ({int(votes)})")
 
     text = "\n".join(lines)
     text = re.sub(r"\n{3,}", "\n\n", text)
