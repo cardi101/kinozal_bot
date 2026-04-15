@@ -130,8 +130,26 @@ def test_item_message_keeps_audio_multiplier_and_shows_countries() -> None:
 
     text = item_message(db, item, matched_subs=[{"name": "🌍 Новинки — мир"}])
 
-    assert "2×ДБ + СТ" in text
+    assert "Озвучка: 2×ДБ, СТ" in text
     assert "Страны: США, Великобритания" in text
+
+
+def test_item_message_writes_full_audio_list_without_compact_suffix() -> None:
+    db = _DummyDb()
+    item = {
+        "kinozal_id": "2135633",
+        "source_title": "Последствия / Outcome / 2026 / ДБ, ПМ, ЛМ, СТ / WEB-DL (1080p)",
+        "tmdb_title": "Последствия",
+        "tmdb_original_title": "Outcome",
+        "media_type": "movie",
+        "tmdb_release_date": "2026-01-01",
+        "source_format": "1080",
+    }
+
+    text = item_message(db, item, matched_subs=[{"name": "🌍 Новинки — мир"}])
+
+    assert "Озвучка: ДБ, ПМ, ЛМ, СТ" in text
+    assert "+2" not in text
 
 
 def test_item_message_hides_low_vote_tmdb_rating() -> None:

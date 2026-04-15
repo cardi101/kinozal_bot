@@ -86,23 +86,15 @@ def _message_route_label(item: Dict[str, Any], matched_subs: Optional[Sequence[D
 
 
 def _compact_audio_summary(audio_variants: List[Dict[str, Any]]) -> str:
-    labels = [compact_spaces(str(variant.get("label") or "")) for variant in audio_variants]
-    labels = [label for label in labels if label]
-    compact_variants: List[Dict[str, Any]] = []
-    for variant in audio_variants[:2]:
+    normalized_variants: List[Dict[str, Any]] = []
+    for variant in audio_variants:
         label = compact_spaces(str(variant.get("label") or ""))
         if not label:
             continue
-        compact_variants.append({"label": label, "count": int(variant.get("count") or 1)})
-    if not compact_variants:
+        normalized_variants.append({"label": label, "count": int(variant.get("count") or 1)})
+    if not normalized_variants:
         return ""
-    summary = " + ".join(
-        format_audio_variants([variant]).strip()
-        for variant in compact_variants
-    )
-    if len(labels) > 2:
-        summary += f" +{len(labels) - 2}"
-    return summary
+    return format_audio_variants(normalized_variants).strip()
 
 
 def _quality_badge(item: Dict[str, Any]) -> str:
