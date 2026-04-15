@@ -605,7 +605,7 @@ class DeliveryRepository(BaseRepository):
                     FROM deliveries d
                     WHERE d.item_id = ?
                     UNION ALL
-                    SELECT da.item_id
+                    SELECT da.original_item_id AS item_id
                     FROM deliveries_archive da
                     WHERE da.original_item_id = ?
                     UNION ALL
