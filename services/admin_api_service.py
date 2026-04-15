@@ -361,6 +361,9 @@ class AdminApiService:
         if anomalies:
             status = "held"
             blockers.append("anomaly_hold")
+        if quiet_active:
+            status = "waiting"
+            blockers.append("quiet_hours")
 
         return {
             "kinozal_id": str(kinozal_id),
@@ -444,6 +447,33 @@ class AdminApiService:
                 ],
                 "mismatches": mismatches,
             }
+
+        if not force:
+            explanation = self.explain_delivery(str(kinozal_id), int(tg_user_id))
+            suppressors = {
+                "muted_title",
+                "cooldown",
+                "pending_delivery",
+                "debounce",
+                "match_review",
+                "anomaly_hold",
+                "quiet_hours",
+            }
+            active_suppressors = [blocker for blocker in explanation.get("blockers", []) if blocker in suppressors]
+            if active_suppressors:
+                return {
+                    "status": "skipped",
+                    "reason": active_suppressors[0],
+                    "kinozal_id": str(kinozal_id),
+                    "tg_user_id": int(tg_user_id),
+                    "item_id": int(item["id"]),
+                    "matched_subscriptions": [
+                        {"id": int(sub["id"]), "name": str(sub.get("name") or "")}
+                        for sub in enabled_subs
+                    ],
+                    "mismatches": mismatches,
+                    "blockers": active_suppressors,
+                }
 
         await send_item_to_user(
             self.db,

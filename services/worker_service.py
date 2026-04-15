@@ -14,6 +14,7 @@ from domain import DeliveryCandidate, ReleaseItem, SubscriptionRecord
 from media_detection import is_non_video_release, is_russian_release
 from release_versioning import extract_kinozal_id, format_variant_summary, parse_episode_progress
 from service_helpers import ops_alert_chat_ids
+from subscription_matching import match_subscription
 from source_categories import source_category_is_non_video
 from source_health import note_source_cycle_failure, note_source_cycle_success
 from utils import compact_spaces, utc_ts
@@ -197,6 +198,29 @@ class WorkerService:
         existing_anomaly: Dict[str, Any] | None,
     ) -> bool:
         return bool(matches_by_user) and not existing_anomaly
+
+    def _resolve_delivery_subscriptions(self, tg_user_id: int, item: ReleaseItem, matched_sub_ids_csv: str) -> List[SubscriptionRecord]:
+        sub_ids = [sub_id.strip() for sub_id in str(matched_sub_ids_csv or "").split(",") if sub_id.strip()]
+        subs = [
+            SubscriptionRecord.from_payload(sub)
+            for sub in [self.repository.get_subscription(int(sub_id)) for sub_id in sub_ids if sub_id.isdigit()]
+            if sub and int(sub.get("is_enabled") or 0)
+        ]
+        if subs:
+            return subs
+        matcher_db = getattr(self.repository, "db", self.repository)
+        fallback_subs: List[SubscriptionRecord] = []
+        for sub in self.repository.list_user_subscriptions(int(tg_user_id)):
+            sub_full = self.repository.get_subscription(int(sub["id"]))
+            if not sub_full or not int(sub_full.get("is_enabled") or 0):
+                continue
+            if self.subscription_service and hasattr(self.subscription_service, "matches"):
+                matched = bool(self.subscription_service.matches(SubscriptionRecord.from_payload(sub_full), item))
+            else:
+                matched = match_subscription(matcher_db, sub_full, item.to_dict())
+            if matched:
+                fallback_subs.append(SubscriptionRecord.from_payload(sub_full))
+        return fallback_subs
 
     async def process_new_items(self, cycle_metrics: Dict[str, int] | None = None) -> None:
         if cycle_metrics is None:
@@ -565,16 +589,14 @@ class WorkerService:
                 except Exception:
                     log.warning("Failed to enrich pending item=%s", pending_item_id, exc_info=True)
 
-                sub_ids = [
-                    sub_id.strip()
-                    for sub_id in str(pending_delivery.get("matched_sub_ids") or "").split(",")
-                    if sub_id.strip()
-                ]
-                pending_subs = [
-                    SubscriptionRecord.from_payload(sub)
-                    for sub in [self.repository.get_subscription(int(sub_id)) for sub_id in sub_ids if sub_id.isdigit()]
-                    if sub
-                ]
+                pending_subs = self._resolve_delivery_subscriptions(
+                    flush_uid,
+                    pending_item,
+                    str(pending_delivery.get("matched_sub_ids") or ""),
+                )
+                if not pending_subs:
+                    self.repository.delete_pending_delivery(flush_uid, pending_item_id)
+                    continue
                 try:
                     log.info("Flushing pending delivery item=%s to user=%s", pending_item_id, flush_uid)
                     await self.delivery_service.send_item(
@@ -616,12 +638,11 @@ class WorkerService:
             if self.repository.delivered_equivalent(tg_user_id, item.to_dict()):
                 continue
 
-            sub_ids = [sub_id.strip() for sub_id in str(entry.get("matched_sub_ids") or "").split(",") if sub_id.strip()]
-            subs = [
-                SubscriptionRecord.from_payload(sub)
-                for sub in [self.repository.get_subscription(int(sub_id)) for sub_id in sub_ids if sub_id.isdigit()]
-                if sub
-            ]
+            subs = self._resolve_delivery_subscriptions(
+                tg_user_id,
+                item,
+                str(entry.get("matched_sub_ids") or ""),
+            )
             if not subs:
                 continue
 

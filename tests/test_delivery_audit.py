@@ -53,5 +53,7 @@ def test_build_delivery_audit_includes_bucket_context_and_match_reasons() -> Non
     assert audit["bucket"] == "anime"
     assert audit["kinozal_id"] == "2135734"
     assert audit["tmdb_match_confidence"] == "high"
+    assert audit["item_snapshot"]["source_title"] == item["source_title"]
+    assert audit["item_snapshot"]["source_format"] == "2160"
     assert audit["matched_subscriptions"][0]["id"] == 19
     assert audit["matched_subscriptions"][0]["reason"] == "passed"

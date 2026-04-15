@@ -269,8 +269,19 @@ def _build_release_followup_messages(item: Dict[str, Any], old_release_text: str
     for line in source_lines:
         candidate_body = "\n".join(current_lines + [line]).strip()
         candidate_text = f"{current_header}\n\n{candidate_body}".strip()
+        candidate_visible = len(html_to_plain_text(candidate_text))
 
-        if current_lines and len(candidate_text) > limit:
+        if not current_lines and candidate_visible > limit:
+            head = f"{current_header}\n\n"
+            available = max(256, limit - len(html_to_plain_text(head)))
+            truncated_line = _safe_truncate_html(line, available)
+            current_lines.append(truncated_line)
+            messages.append(f"{current_header}\n\n" + "\n".join(current_lines))
+            current_header = header(False)
+            current_lines = []
+            continue
+
+        if current_lines and candidate_visible > limit:
             messages.append(f"{current_header}\n\n" + "\n".join(current_lines))
             current_header = header(False)
             current_lines = [line]
@@ -323,7 +334,7 @@ async def send_item_to_user(
     action_kb: Optional[InlineKeyboardMarkup] = mute_title_kb(int(tmdb_id)) if tmdb_id else None
 
     poster_url = item.get("tmdb_poster_url")
-    full_html_text = short(text, 3900)
+    full_html_text = _safe_truncate_html(text, 3900)
     full_plain_text = short(html_to_plain_text(text), 3900)
 
     main_sent = False
@@ -384,7 +395,7 @@ async def send_item_to_user(
 
     if main_sent:
         try:
-            await _send_release_followups(bot, tg_user_id, item, old_release_text=old_release_text)
+            await _send_release_followups(bot, tg_user_id, primary_item, old_release_text=old_release_text)
         except Exception:
             log.warning(
                 "send release followup failed for user=%s item=%s",
@@ -427,7 +438,7 @@ async def send_grouped_items_to_user(
         try:
             await _tg_retry(bot.send_message,
                 tg_user_id,
-                text=short(text, 3900),
+                text=_safe_truncate_html(text, 3900),
                 parse_mode=ParseMode.HTML,
                 disable_web_page_preview=CFG.disable_preview,
                 reply_markup=action_kb,

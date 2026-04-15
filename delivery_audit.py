@@ -13,6 +13,25 @@ def _sub_payload(sub: Any) -> Dict[str, Any]:
     return dict(sub)
 
 
+def _item_snapshot(item: Dict[str, Any]) -> Dict[str, Any]:
+    return {
+        "id": int(item.get("id") or 0),
+        "kinozal_id": compact_spaces(str(item.get("kinozal_id") or "")),
+        "source_uid": compact_spaces(str(item.get("source_uid") or "")),
+        "source_link": compact_spaces(str(item.get("source_link") or "")),
+        "source_title": compact_spaces(str(item.get("source_title") or "")),
+        "media_type": compact_spaces(str(item.get("media_type") or "")),
+        "version_signature": compact_spaces(str(item.get("version_signature") or "")),
+        "variant_signature": compact_spaces(str(item.get("variant_signature") or "")),
+        "source_episode_progress": compact_spaces(str(item.get("source_episode_progress") or "")),
+        "source_format": compact_spaces(str(item.get("source_format") or "")),
+        "source_audio_tracks": list(item.get("source_audio_tracks") or []),
+        "tmdb_id": item.get("tmdb_id"),
+        "tmdb_title": compact_spaces(str(item.get("tmdb_title") or item.get("tmdb_original_title") or "")),
+        "imdb_id": compact_spaces(str(item.get("imdb_id") or "")),
+    }
+
+
 def build_delivery_audit(
     db: Any,
     item: Dict[str, Any],
@@ -40,6 +59,7 @@ def build_delivery_audit(
         "previous_related_item_id": item.get("previous_related_item_id"),
         "previous_progress": compact_spaces(str(item.get("previous_progress") or "")),
         "anomaly_flags": list(item.get("anomaly_flags") or []),
+        "item_snapshot": _item_snapshot(item),
         "matched_subscriptions": [
             {
                 "id": int(sub.get("id") or 0),

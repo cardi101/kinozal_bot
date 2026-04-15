@@ -128,6 +128,20 @@ def _extract_release_tab_index(main_html: str, kinozal_id: str) -> Optional[int]
     return None
 
 
+def _extract_tab_indices(main_html: str, kinozal_id: str) -> List[int]:
+    if not main_html or not kinozal_id:
+        return []
+    indices = {
+        int(match)
+        for match in re.findall(
+            rf"showtab\(\s*{re.escape(kinozal_id)}\s*,\s*(\d+)\s*\)",
+            main_html,
+            flags=re.I,
+        )
+    }
+    return sorted(indices)
+
+
 def _release_repair_score(value: str) -> int:
     value = str(value or "")
     low = value.lower()
@@ -457,7 +471,8 @@ async def _fetch_best_release_text(kinozal_id: str, source_link: str, main_html:
     best_text = ""
     best_score = -10**9
 
-    for idx in [0, 1, 2, 3, 4, 5, 6, 7]:
+    probe_indices = sorted(set(_extract_tab_indices(main_html, kinozal_id)) | set(range(8)))
+    for idx in probe_indices:
         if release_tab_index is not None and idx == release_tab_index:
             continue
         try:

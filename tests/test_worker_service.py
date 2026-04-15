@@ -17,6 +17,14 @@ def test_should_emit_anomaly_alert_suppresses_duplicates() -> None:
 class _FakeWorkerRepository:
     def __init__(self) -> None:
         self.deleted: list[tuple[int, int]] = []
+        self.subscriptions = {
+            7: {
+                "id": 7,
+                "tg_user_id": 1001,
+                "name": "Sub",
+                "is_enabled": 1,
+            }
+        }
 
     def pop_due_pending_deliveries(self, current_hour: int):
         return {
@@ -57,12 +65,10 @@ class _FakeWorkerRepository:
         }
 
     def get_subscription(self, subscription_id: int):
-        return {
-            "id": subscription_id,
-            "tg_user_id": 1001,
-            "name": "Sub",
-            "is_enabled": 1,
-        }
+        return self.subscriptions.get(subscription_id)
+
+    def list_user_subscriptions(self, tg_user_id: int):
+        return [sub for sub in self.subscriptions.values() if sub["tg_user_id"] == tg_user_id]
 
     def delete_pending_delivery(self, tg_user_id: int, item_id: int) -> None:
         self.deleted.append((tg_user_id, item_id))
@@ -86,6 +92,11 @@ class _FakeDeliveryService:
         self.recorded.append((tg_user_id, item.id, context))
 
 
+class _FakeSubscriptionService:
+    def matches(self, sub: dict, item: ReleaseItem) -> bool:
+        return True
+
+
 def test_flush_due_pending_deliveries_uses_archived_item_payload() -> None:
     repository = _FakeWorkerRepository()
     delivery_service = _FakeDeliveryService()
@@ -93,7 +104,7 @@ def test_flush_due_pending_deliveries_uses_archived_item_payload() -> None:
         repository=repository,
         kinozal_service=_FakeKinozalService(),
         tmdb_service=None,
-        subscription_service=None,
+        subscription_service=_FakeSubscriptionService(),
         delivery_service=delivery_service,
         bot=None,
     )
@@ -113,7 +124,7 @@ def test_flush_due_debounce_uses_archived_item_payload() -> None:
         repository=repository,
         kinozal_service=_FakeKinozalService(),
         tmdb_service=None,
-        subscription_service=None,
+        subscription_service=_FakeSubscriptionService(),
         delivery_service=_FakeDeliveryService(),
         bot=None,
     )
@@ -124,3 +135,56 @@ def test_flush_due_debounce_uses_archived_item_payload() -> None:
     assert 1001 in pending
     assert len(pending[1001]) == 1
     assert pending[1001][0].item_id == 42
+
+
+def test_flush_due_pending_deliveries_falls_back_to_current_matching_subscriptions() -> None:
+    repository = _FakeWorkerRepository()
+    repository.subscriptions = {
+        11: {
+            "id": 11,
+            "tg_user_id": 1001,
+            "name": "New Sub",
+            "is_enabled": 1,
+        }
+    }
+    delivery_service = _FakeDeliveryService()
+    worker = WorkerService(
+        repository=repository,
+        kinozal_service=_FakeKinozalService(),
+        tmdb_service=None,
+        subscription_service=_FakeSubscriptionService(),
+        delivery_service=delivery_service,
+        bot=None,
+    )
+
+    metrics = worker._new_cycle_metrics()
+    asyncio.run(worker._flush_due_pending_deliveries(current_hour=12, cycle_metrics=metrics))
+
+    assert delivery_service.sent == [(1001, 42)]
+    assert repository.deleted == [(1001, 42)]
+
+
+def test_flush_due_debounce_falls_back_to_current_matching_subscriptions() -> None:
+    repository = _FakeWorkerRepository()
+    repository.subscriptions = {
+        11: {
+            "id": 11,
+            "tg_user_id": 1001,
+            "name": "New Sub",
+            "is_enabled": 1,
+        }
+    }
+    worker = WorkerService(
+        repository=repository,
+        kinozal_service=_FakeKinozalService(),
+        tmdb_service=None,
+        subscription_service=_FakeSubscriptionService(),
+        delivery_service=_FakeDeliveryService(),
+        bot=None,
+    )
+
+    pending: dict[int, list] = {}
+    asyncio.run(worker._flush_due_debounce(pending))
+
+    assert 1001 in pending
+    assert pending[1001][0].subs[0].id == 11

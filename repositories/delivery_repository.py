@@ -7,6 +7,23 @@ from utils import compact_spaces, utc_ts
 from .base import BaseRepository
 
 
+def _load_delivery_audit(delivery_audit_json: Any) -> Dict[str, Any]:
+    raw = str(delivery_audit_json or "").strip()
+    if not raw:
+        return {}
+    try:
+        loaded = json.loads(raw)
+        return loaded if isinstance(loaded, dict) else {}
+    except Exception:
+        return {}
+
+
+def _item_snapshot_from_audit(delivery_audit_json: Any) -> Dict[str, Any]:
+    audit = _load_delivery_audit(delivery_audit_json)
+    snapshot = audit.get("item_snapshot") if isinstance(audit, dict) else None
+    return dict(snapshot) if isinstance(snapshot, dict) else {}
+
+
 class DeliveryRepository(BaseRepository):
     def delivered_equivalent(self, tg_user_id: int, item: Dict[str, Any]) -> bool:
         target_variant_sig = self.db.build_item_variant_signature(item) if hasattr(self.db, "build_item_variant_signature") else None
@@ -99,7 +116,7 @@ class DeliveryRepository(BaseRepository):
                     return dict(row)
                 archived = self.conn.execute(
                     """
-                    SELECT ia.item_json
+                    SELECT da.delivery_audit_json, ia.item_json
                     FROM deliveries_archive da
                     JOIN items_archive ia ON ia.original_item_id = da.original_item_id
                     WHERE da.tg_user_id = ?
@@ -109,6 +126,19 @@ class DeliveryRepository(BaseRepository):
                     """,
                     (tg_user_id, kinozal_id),
                 ).fetchone()
+                if archived:
+                    snapshot = _item_snapshot_from_audit(archived.get("delivery_audit_json"))
+                    fallback_payload: Dict[str, Any] = {}
+                    if archived.get("item_json"):
+                        try:
+                            fallback_payload = json.loads(archived["item_json"])
+                        except Exception:
+                            fallback_payload = {}
+                    if snapshot:
+                        merged = dict(fallback_payload)
+                        merged.update({k: v for k, v in snapshot.items() if v not in (None, "")})
+                        if merged:
+                            return merged
                 if archived and archived.get("item_json"):
                     try:
                         return json.loads(archived["item_json"])
@@ -135,7 +165,7 @@ class DeliveryRepository(BaseRepository):
                 return dict(row)
             archived = self.conn.execute(
                 """
-                SELECT ia.item_json
+                SELECT da.delivery_audit_json, ia.item_json
                 FROM deliveries_archive da
                 JOIN items_archive ia ON ia.original_item_id = da.original_item_id
                 WHERE da.tg_user_id = ?
@@ -145,6 +175,19 @@ class DeliveryRepository(BaseRepository):
                 """,
                 (tg_user_id, source_uid),
             ).fetchone()
+            if archived:
+                snapshot = _item_snapshot_from_audit(archived.get("delivery_audit_json"))
+                fallback_payload: Dict[str, Any] = {}
+                if archived.get("item_json"):
+                    try:
+                        fallback_payload = json.loads(archived["item_json"])
+                    except Exception:
+                        fallback_payload = {}
+                if snapshot:
+                    merged = dict(fallback_payload)
+                    merged.update({k: v for k, v in snapshot.items() if v not in (None, "")})
+                    if merged:
+                        return merged
             if archived and archived.get("item_json"):
                 try:
                     return json.loads(archived["item_json"])
@@ -214,6 +257,7 @@ class DeliveryRepository(BaseRepository):
                 if existing_archived:
                     return
                 archived_payload = dict(archived_item)
+                snapshot = _item_snapshot_from_audit(delivery_audit_json)
                 delivered_at = utc_ts()
                 self.conn.execute(
                     """
@@ -228,11 +272,11 @@ class DeliveryRepository(BaseRepository):
                         None,
                         tg_user_id,
                         item_id,
-                        compact_spaces(str(archived_payload.get("kinozal_id") or "")) or None,
-                        archived_payload.get("source_uid"),
-                        archived_payload.get("media_type"),
-                        archived_payload.get("version_signature"),
-                        archived_payload.get("source_title"),
+                        compact_spaces(str(snapshot.get("kinozal_id") or archived_payload.get("kinozal_id") or "")) or None,
+                        snapshot.get("source_uid") or archived_payload.get("source_uid"),
+                        snapshot.get("media_type") or archived_payload.get("media_type"),
+                        snapshot.get("version_signature") or archived_payload.get("version_signature"),
+                        snapshot.get("source_title") or archived_payload.get("source_title"),
                         sub_id,
                         matched_ids_csv,
                         delivery_audit_json,
@@ -494,7 +538,11 @@ class DeliveryRepository(BaseRepository):
                 """INSERT INTO pending_deliveries
                    (tg_user_id, item_id, matched_sub_ids, old_release_text, is_release_text_change, queued_at)
                    VALUES (?, ?, ?, ?, ?, ?)
-                   ON CONFLICT (tg_user_id, item_id) DO NOTHING""",
+                   ON CONFLICT (tg_user_id, item_id) DO UPDATE SET
+                       matched_sub_ids = excluded.matched_sub_ids,
+                       old_release_text = excluded.old_release_text,
+                       is_release_text_change = excluded.is_release_text_change,
+                       queued_at = excluded.queued_at""",
                 (
                     tg_user_id,
                     item_id,

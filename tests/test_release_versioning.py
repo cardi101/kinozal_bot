@@ -29,6 +29,12 @@ def test_parse_episode_progress_range():
     assert result is not None
 
 
+def test_parse_episode_progress_x_format():
+    assert parse_episode_progress("1x08") == "1x08"
+    assert compare_episode_progress("1x10", "1x08") == 1
+    assert compare_episode_progress("2x03-2x05", "2x03") == 1
+
+
 def test_parse_episode_progress_issues():
     result = parse_episode_progress("15 выпусков из 20")
     assert result is not None

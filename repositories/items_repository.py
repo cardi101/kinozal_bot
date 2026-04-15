@@ -20,6 +20,18 @@ from .base import BaseRepository
 log = logging.getLogger("kinozal-news-bot")
 
 
+def _item_snapshot_from_delivery_audit(delivery_audit_json: Any) -> Dict[str, Any]:
+    raw = str(delivery_audit_json or "").strip()
+    if not raw:
+        return {}
+    try:
+        audit = json.loads(raw)
+    except Exception:
+        return {}
+    snapshot = audit.get("item_snapshot") if isinstance(audit, dict) else None
+    return dict(snapshot) if isinstance(snapshot, dict) else {}
+
+
 def item_duplicate_quality_score(item: Dict[str, Any]) -> int:
     score = 0
     if item.get("tmdb_id"):
@@ -805,6 +817,7 @@ class ItemsRepository(BaseRepository):
         ).fetchall()
         for row in delivery_rows:
             delivery = dict(row)
+            delivery_snapshot = _item_snapshot_from_delivery_audit(delivery.get("delivery_audit_json"))
             self.conn.execute(
                 """
                 INSERT INTO deliveries_archive(
@@ -817,11 +830,11 @@ class ItemsRepository(BaseRepository):
                     delivery.get("id"),
                     delivery.get("tg_user_id"),
                     item_id,
-                    kinozal_id,
-                    full_item.get("source_uid"),
-                    full_item.get("media_type"),
-                    full_item.get("version_signature"),
-                    full_item.get("source_title"),
+                    compact_spaces(str(delivery_snapshot.get("kinozal_id") or kinozal_id or "")) or None,
+                    delivery_snapshot.get("source_uid") or full_item.get("source_uid"),
+                    delivery_snapshot.get("media_type") or full_item.get("media_type"),
+                    delivery_snapshot.get("version_signature") or full_item.get("version_signature"),
+                    delivery_snapshot.get("source_title") or full_item.get("source_title"),
                     delivery.get("subscription_id"),
                     delivery.get("matched_subscription_ids"),
                     delivery.get("delivery_audit_json") or "",

@@ -105,6 +105,9 @@ class WorkerRepository:
     def get_subscription(self, subscription_id: int) -> Optional[Dict[str, Any]]:
         return self.db.get_subscription(subscription_id)
 
+    def list_user_subscriptions(self, tg_user_id: int) -> List[Dict[str, Any]]:
+        return self.db.list_user_subscriptions(tg_user_id)
+
     def get_subscription_genres(self, subscription_id: int) -> List[int]:
         return self.db.get_subscription_genres(subscription_id)
 
