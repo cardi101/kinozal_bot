@@ -13,8 +13,6 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from release_audit import build_missing_progress_candidates
-
 
 def _fmt_ts(value: int) -> str:
     if not value:
@@ -77,6 +75,8 @@ def _fetch_rows(dsn: str, kinozal_id: str = "") -> tuple[List[Dict[str, Any]], L
 
 
 def main() -> None:
+    from release_audit import build_missing_progress_candidates
+
     load_dotenv()
     parser = argparse.ArgumentParser(description="Audit observed episode-progress gaps that never became item versions")
     parser.add_argument("--dsn", default=os.getenv("DATABASE_URL", ""), help="Postgres DSN, defaults to DATABASE_URL")

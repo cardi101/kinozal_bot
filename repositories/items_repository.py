@@ -5,11 +5,9 @@ from typing import Any, Dict, List, Optional, Tuple
 from country_helpers import parse_country_codes
 from release_versioning import (
     build_item_variant_signature,
-    build_version_signature,
     compare_episode_progress,
     extract_kinozal_id,
     format_variant_summary,
-    get_item_variant_components,
     normalize_audio_tracks_signature,
     refresh_item_version_fields,
     resolve_item_kinozal_id,
