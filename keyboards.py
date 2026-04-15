@@ -207,10 +207,11 @@ def match_review_kb(kinozal_id: str, has_tmdb_match: bool) -> InlineKeyboardMark
         kb.button(text="✅ Approve", callback_data=f"matchreview:approve:{kinozal_id}")
         kb.button(text="⛔ Reject", callback_data=f"matchreview:reject:{kinozal_id}")
     kb.button(text="🚫 No Match", callback_data=f"matchreview:no_match:{kinozal_id}")
+    kb.button(text="🔔 Отправить уведомление", callback_data=f"matchreview:deliver:{kinozal_id}")
     kb.button(text="📨 Force Deliver", callback_data=f"matchreview:force:{kinozal_id}")
     kb.button(text="🔎 Candidates", callback_data=f"matchreview:candidates:{kinozal_id}")
     kb.button(text="🧭 Explain", callback_data=f"matchreview:explain:{kinozal_id}")
-    kb.adjust(2, 2, 2)
+    kb.adjust(2, 2, 2, 1)
     return kb.as_markup()
 
 

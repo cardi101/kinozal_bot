@@ -693,9 +693,9 @@ def register_admin_match_handlers(router: Router, db: Any, tmdb: Any) -> None:
             await _no_match(callback.message, callback.from_user.id, kinozal_id)
             await callback.answer("Marked no match")
             return
-        if action == "force":
+        if action in {"force", "deliver"}:
             await _force_deliver(callback.message, callback.from_user.id, kinozal_id)
-            await callback.answer("Force delivered")
+            await callback.answer("Уведомление отправлено")
             return
         if action == "candidates":
             await _send_match_candidates(callback.message, kinozal_id)
