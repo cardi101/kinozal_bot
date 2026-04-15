@@ -6,6 +6,8 @@ from utils import compact_spaces, utc_ts
 
 from .base import BaseRepository
 
+DELIVERY_CLAIM_LEASE_SECONDS = 900
+
 
 def _load_delivery_audit(delivery_audit_json: Any) -> Dict[str, Any]:
     raw = str(delivery_audit_json or "").strip()
@@ -22,6 +24,23 @@ def _item_snapshot_from_audit(delivery_audit_json: Any) -> Dict[str, Any]:
     audit = _load_delivery_audit(delivery_audit_json)
     snapshot = audit.get("item_snapshot") if isinstance(audit, dict) else None
     return dict(snapshot) if isinstance(snapshot, dict) else {}
+
+
+def _delivery_claim_ref_ts(row: Dict[str, Any]) -> int:
+    updated_at = int(row.get("updated_at") or 0)
+    claimed_at = int(row.get("claimed_at") or 0)
+    return max(updated_at, claimed_at)
+
+
+def _delivery_claim_is_active(row: Dict[str, Any], now: Optional[int] = None) -> bool:
+    status = compact_spaces(str(row.get("status") or "")).lower()
+    if status == "sent":
+        return True
+    if status != "sending":
+        return False
+    ref_ts = _delivery_claim_ref_ts(row)
+    current_ts = int(now or utc_ts())
+    return ref_ts > current_ts - DELIVERY_CLAIM_LEASE_SECONDS
 
 
 class DeliveryRepository(BaseRepository):
@@ -60,17 +79,18 @@ class DeliveryRepository(BaseRepository):
         delivery_audit_json = json.dumps(delivery_audit, ensure_ascii=False, sort_keys=True) if delivery_audit else ""
         identity = self._delivery_claim_identity(item_id, delivery_audit_json)
         now = utc_ts()
+        stale_cutoff = now - DELIVERY_CLAIM_LEASE_SECONDS
         with self.lock:
             row = self.conn.execute(
                 """
-                SELECT status
+                SELECT status, updated_at, claimed_at
                 FROM delivery_claims
                 WHERE tg_user_id = ? AND item_id = ?
                 LIMIT 1
                 """,
                 (tg_user_id, item_id),
             ).fetchone()
-            if row and str(row.get("status") or "") in {"sending", "sent"}:
+            if row and _delivery_claim_is_active(dict(row), now=now):
                 return False
             if row:
                 self.conn.execute(
@@ -95,6 +115,15 @@ class DeliveryRepository(BaseRepository):
                         item_id,
                     ),
                 )
+                if str(row.get("status") or "") == "sending" and _delivery_claim_ref_ts(dict(row)) <= stale_cutoff:
+                    self.conn.execute(
+                        """
+                        UPDATE delivery_claims
+                        SET last_error = ?
+                        WHERE tg_user_id = ? AND item_id = ?
+                        """,
+                        ("stale_claim_reclaimed", tg_user_id, item_id),
+                    )
             else:
                 self.conn.execute(
                     """
@@ -179,10 +208,18 @@ class DeliveryRepository(BaseRepository):
                     WHERE tg_user_id = ?
                       AND kinozal_id = ?
                       AND COALESCE(version_signature, '') = ?
-                      AND status IN ('sending', 'sent')
+                      AND (
+                        status = 'sent'
+                        OR (status = 'sending' AND COALESCE(updated_at, claimed_at) > ?)
+                      )
                     LIMIT 1
                     """,
-                    (tg_user_id, kinozal_id, compact_spaces(str(item.get("version_signature") or ""))),
+                    (
+                        tg_user_id,
+                        kinozal_id,
+                        compact_spaces(str(item.get("version_signature") or "")),
+                        utc_ts() - DELIVERY_CLAIM_LEASE_SECONDS,
+                    ),
                 ).fetchone()
                 return row is not None
 
@@ -224,10 +261,18 @@ class DeliveryRepository(BaseRepository):
                 WHERE tg_user_id = ?
                   AND source_uid = ?
                   AND COALESCE(version_signature, '') = ?
-                  AND status IN ('sending', 'sent')
+                  AND (
+                    status = 'sent'
+                    OR (status = 'sending' AND COALESCE(updated_at, claimed_at) > ?)
+                  )
                 LIMIT 1
                 """,
-                (tg_user_id, source_uid, compact_spaces(str(item.get("version_signature") or ""))),
+                (
+                    tg_user_id,
+                    source_uid,
+                    compact_spaces(str(item.get("version_signature") or "")),
+                    utc_ts() - DELIVERY_CLAIM_LEASE_SECONDS,
+                ),
             ).fetchone()
             return row is not None
 
@@ -346,12 +391,13 @@ class DeliveryRepository(BaseRepository):
                     UNION ALL
                     SELECT dc.tg_user_id, dc.item_id AS delivered_item_id
                     FROM delivery_claims dc
-                    WHERE dc.status IN ('sending', 'sent')
+                    WHERE dc.status = 'sent'
+                       OR (dc.status = 'sending' AND COALESCE(dc.updated_at, dc.claimed_at) > ?)
                 ) delivered_rows
                 WHERE tg_user_id = ? AND delivered_item_id = ?
                 LIMIT 1
                 """,
-                (tg_user_id, item_id),
+                (utc_ts() - DELIVERY_CLAIM_LEASE_SECONDS, tg_user_id, item_id),
             ).fetchone()
             return row is not None
 
@@ -523,12 +569,13 @@ class DeliveryRepository(BaseRepository):
                     UNION ALL
                     SELECT dc.tg_user_id, dc.item_id AS delivered_item_id, COALESCE(dc.sent_at, dc.claimed_at) AS delivered_at
                     FROM delivery_claims dc
-                    WHERE dc.status IN ('sending', 'sent')
+                    WHERE dc.status = 'sent'
+                       OR (dc.status = 'sending' AND COALESCE(dc.updated_at, dc.claimed_at) > ?)
                 ) delivered_rows
                 WHERE tg_user_id = ? AND delivered_item_id = ? AND delivered_at > ?
                 LIMIT 1
                 """,
-                (tg_user_id, item_id, utc_ts() - cooldown_seconds),
+                (utc_ts() - DELIVERY_CLAIM_LEASE_SECONDS, tg_user_id, item_id, utc_ts() - cooldown_seconds),
             ).fetchone()
             return row is not None
 
@@ -586,12 +633,13 @@ class DeliveryRepository(BaseRepository):
                     UNION ALL
                     SELECT dc.tg_user_id, dc.kinozal_id, COALESCE(dc.sent_at, dc.claimed_at) AS delivered_at
                     FROM delivery_claims dc
-                    WHERE dc.status IN ('sending', 'sent')
+                    WHERE dc.status = 'sent'
+                       OR (dc.status = 'sending' AND COALESCE(dc.updated_at, dc.claimed_at) > ?)
                 ) delivered_rows
                 WHERE tg_user_id = ? AND kinozal_id = ? AND delivered_at > ?
                 LIMIT 1
                 """,
-                (tg_user_id, kinozal_id, utc_ts() - cooldown_seconds),
+                (utc_ts() - DELIVERY_CLAIM_LEASE_SECONDS, tg_user_id, kinozal_id, utc_ts() - cooldown_seconds),
             ).fetchone()
             return row is not None
 
@@ -611,11 +659,15 @@ class DeliveryRepository(BaseRepository):
                     UNION ALL
                     SELECT dc.item_id
                     FROM delivery_claims dc
-                    WHERE dc.item_id = ? AND dc.status IN ('sending', 'sent')
+                    WHERE dc.item_id = ?
+                      AND (
+                        dc.status = 'sent'
+                        OR (dc.status = 'sending' AND COALESCE(dc.updated_at, dc.claimed_at) > ?)
+                      )
                 ) delivered_rows
                 LIMIT 1
                 """,
-                (item_id, item_id, item_id),
+                (item_id, item_id, item_id, utc_ts() - DELIVERY_CLAIM_LEASE_SECONDS),
             ).fetchone()
             return row is not None
 

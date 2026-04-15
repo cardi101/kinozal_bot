@@ -952,6 +952,7 @@ class TMDBClient:
             terminal_override = False
             stored_override = self._kinozal_override(item)
             if stored_override:
+                terminal_override = True
                 try:
                     override_details = await self.get_details(
                         str(stored_override.get("media_type") or "movie"),
@@ -977,6 +978,7 @@ class TMDBClient:
 
             override = manual_tmdb_override_for_item(item)
             if override and not details:
+                terminal_override = True
                 override_media_type, override_tmdb_id, override_key = override
                 try:
                     override_details = await self.get_details(override_media_type, int(override_tmdb_id))
@@ -1009,7 +1011,7 @@ class TMDBClient:
                         override_tmdb_id,
                         exc_info=True,
                     )
-            if source_imdb_id and not details:
+            if source_imdb_id and not details and not terminal_override:
                 details = await self.find_by_imdb(source_imdb_id)
                 if details:
                     tmdb_match_path = "imdb_lookup"
