@@ -1,0 +1,50 @@
+name: Publish Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Create GitHub Release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Extract release notes
+        id: notes
+        shell: bash
+        run: |
+          python <<'PY'
+          import os
+          import pathlib
+          import re
+
+          version = os.environ["GITHUB_REF_NAME"].lstrip("v")
+          changelog = pathlib.Path("CHANGELOG.md").read_text(encoding="utf-8")
+          pattern = re.compile(rf"^## {re.escape(version)}(?:\s*-\s*[^\n]+)?\n(?P<body>.*?)(?=^## |\Z)", re.M | re.S)
+          match = pattern.search(changelog)
+          if not match:
+              raise SystemExit(f"Missing CHANGELOG section for {version}")
+          body = match.group("body").strip() + "\n"
+          output = pathlib.Path(os.environ["GITHUB_OUTPUT"])
+          with output.open("a", encoding="utf-8") as fh:
+              fh.write("body<<EOF\n")
+              fh.write(body)
+              fh.write("EOF\n")
+          PY
+
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: ${{ github.ref_name }}
+          body: ${{ steps.notes.outputs.body }}
+          generate_release_notes: true
