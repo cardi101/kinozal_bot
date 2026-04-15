@@ -51,43 +51,83 @@ def parse_episode_progress(text: str) -> Optional[str]:
     return None
 
 
-def episode_progress_sort_key(value: Any) -> Optional[Tuple[int, int, int, int]]:
+def _episode_progress_parts(value: Any) -> Optional[Dict[str, int | None]]:
     text = compact_spaces(str(value or "")).lower().replace("ё", "е")
     if not text:
         return None
 
     patterns = [
-        (r"(\d+)\s*сезон:\s*(\d+)\s*-\s*(\d+)", True),
-        (r"(\d+)\s*сезон:\s*(\d+)", False),
-        (r"s(\d{1,2})\s*e(\d{1,3})\s*-\s*e(\d{1,3})", True),
-        (r"s(\d{1,2})\s*e(\d{1,3})", False),
-        (r"(\d+)\s*-\s*(\d+)\s*(?:сер|выпуск|из\b)", True),
-        (r"(\d+)\s*(?:сер|выпуск|из\b)", False),
-        (r"(\d+)\s*-\s*(\d+)", True),
-        (r"(\d+)", False),
+        r"(?P<season>\d+)\s*сезон:\s*(?P<start>\d+)\s*-\s*(?P<end>\d+)\s*(?:сер(?:ия|ии|ий)|выпуск(?:а|ов)?)\s*из\s*(?P<total>\d+)",
+        r"(?P<season>\d+)\s*сезон:\s*(?P<start>\d+)\s*(?:сер(?:ия|ии|ий)|выпуск(?:а|ов)?)\s*из\s*(?P<total>\d+)",
+        r"(?P<season>\d+)\s*сезон:\s*(?P<start>\d+)\s*-\s*(?P<end>\d+)\s*(?:сер(?:ия|ии|ий)|выпуск(?:а|ов)?)",
+        r"(?P<season>\d+)\s*сезон:\s*(?P<start>\d+)\s*(?:сер(?:ия|ии|ий)|выпуск(?:а|ов)?)",
+        r"s(?P<season>\d{1,2})\s*e(?P<start>\d{1,3})\s*-\s*e(?P<end>\d{1,3})",
+        r"s(?P<season>\d{1,2})\s*e(?P<start>\d{1,3})",
+        r"(?P<start>\d+)\s*-\s*(?P<end>\d+)\s*(?:сер(?:ия|ии|ий)|выпуск(?:а|ов)?)\s*из\s*(?P<total>\d+)",
+        r"(?P<start>\d+)\s*(?:сер(?:ия|ии|ий)|выпуск(?:а|ов)?)\s*из\s*(?P<total>\d+)",
+        r"(?P<start>\d+)\s*-\s*(?P<end>\d+)\s*(?:сер(?:ия|ии|ий)|выпуск(?:а|ов)?)",
+        r"(?P<start>\d+)\s*(?:сер(?:ия|ии|ий)|выпуск(?:а|ов)?)",
+        r"(?P<start>\d+)\s*-\s*(?P<end>\d+)\s*из\s*(?P<total>\d+)",
+        r"(?P<start>\d+)\s*из\s*(?P<total>\d+)",
     ]
-    for pattern, has_range in patterns:
+    for pattern in patterns:
         match = re.search(pattern, text, flags=re.I)
         if not match:
             continue
-        values = [int(group) for group in match.groups()]
-        if len(values) == 3:
-            season, start_ep, end_ep = values
-        elif len(values) == 2 and has_range:
-            season, start_ep, end_ep = 0, values[0], values[1]
-        elif len(values) == 2:
-            season, start_ep, end_ep = values[0], values[1], values[1]
-        else:
-            season, start_ep, end_ep = 0, values[0], values[0]
-        return (season, end_ep, start_ep, len(text))
+        season_raw = match.groupdict().get("season")
+        start_raw = match.groupdict().get("start")
+        end_raw = match.groupdict().get("end")
+        total_raw = match.groupdict().get("total")
+        start = int(start_raw) if start_raw is not None else None
+        if start is None:
+            continue
+        end = int(end_raw) if end_raw is not None else start
+        return {
+            "season": int(season_raw) if season_raw is not None else None,
+            "start": start,
+            "end": end,
+            "total": int(total_raw) if total_raw is not None else None,
+            "length": len(text),
+        }
     return None
 
 
-def compare_episode_progress(left: Any, right: Any) -> Optional[int]:
-    left_key = episode_progress_sort_key(left)
-    right_key = episode_progress_sort_key(right)
-    if left_key is None or right_key is None:
+def episode_progress_sort_key(value: Any) -> Optional[Tuple[int, int, int, int]]:
+    parts = _episode_progress_parts(value)
+    if not parts:
         return None
+    return (
+        int(parts.get("season") or 0),
+        int(parts["end"]),
+        int(parts["start"]),
+        int(parts["length"]),
+    )
+
+
+def compare_episode_progress(left: Any, right: Any) -> Optional[int]:
+    left_parts = _episode_progress_parts(left)
+    right_parts = _episode_progress_parts(right)
+    if left_parts is None or right_parts is None:
+        return None
+
+    left_season = left_parts.get("season")
+    right_season = right_parts.get("season")
+    if left_season is None and right_season is not None:
+        left_season = right_season
+    if right_season is None and left_season is not None:
+        right_season = left_season
+
+    left_total = left_parts.get("total")
+    right_total = right_parts.get("total")
+    left_end = int(left_parts["end"])
+    right_end = int(right_parts["end"])
+    if left_total is not None and right_end > int(left_total):
+        return None
+    if right_total is not None and left_end > int(right_total):
+        return None
+
+    left_key = (int(left_season or 0), left_end, int(left_parts["start"]))
+    right_key = (int(right_season or 0), right_end, int(right_parts["start"]))
     if left_key > right_key:
         return 1
     if left_key < right_key:

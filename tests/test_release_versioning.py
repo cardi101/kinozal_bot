@@ -64,3 +64,13 @@ def test_compare_episode_progress_regression():
 def test_compare_episode_progress_unknown():
     assert compare_episode_progress("Just a movie title", "2 сезон: 1-9 серии из 12") is None
     assert classify_episode_progress_change("2 сезон: 1-9 серии из 12", "Just a movie title") == "unknown"
+
+
+def test_compare_episode_progress_ignores_missing_season_prefix() -> None:
+    assert compare_episode_progress("1-3 серии", "1 сезон: 1-2 серии из 25") == 1
+    assert compare_episode_progress("1 серия из 12", "1 сезон: 1 серия из 12") == 0
+
+
+def test_compare_episode_progress_marks_incompatible_totals_as_unknown() -> None:
+    assert compare_episode_progress("1 сезон: 1-6 серии из 6", "1 сезон: 13 серии") is None
+    assert classify_episode_progress_change("1 сезон: 13 серии", "1 сезон: 1-6 серии из 6") == "unknown"
