@@ -106,3 +106,27 @@ def test_grouped_items_message_uses_compact_multi_layout() -> None:
     assert "Kinozal 4002" in text
     assert "1-4 из 10" in text
     assert "Ссылки:" in text
+
+
+def test_item_message_keeps_audio_multiplier_and_shows_countries() -> None:
+    db = _DummyDb()
+    item = {
+        "kinozal_id": "2135794",
+        "source_title": "F1 / F1: The Movie / 2025 / 2 x ДБ, СТ / HEVC / BDRip (1080p)",
+        "tmdb_title": "F1",
+        "tmdb_original_title": "F1: The Movie",
+        "media_type": "movie",
+        "tmdb_release_date": "2025-01-01",
+        "source_format": "1080",
+        "tmdb_rating": 7.8,
+        "tmdb_vote_count": 3715,
+        "genre_ids": [18, 35],
+        "tmdb_countries": ["US", "GB"],
+        "source_link": "https://kinozal.tv/details.php?id=2135794",
+        "tmdb_id": 911430,
+    }
+
+    text = item_message(db, item, matched_subs=[{"name": "🌍 Новинки — мир"}])
+
+    assert "2×ДБ + СТ" in text
+    assert "Страны: США, Великобритания" in text

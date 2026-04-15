@@ -121,9 +121,18 @@ def _message_route_label(item: Dict[str, Any], matched_subs: Optional[Sequence[D
 def _compact_audio_summary(audio_variants: List[Dict[str, Any]]) -> str:
     labels = [compact_spaces(str(variant.get("label") or "")) for variant in audio_variants]
     labels = [label for label in labels if label]
-    if not labels:
+    compact_variants: List[Dict[str, Any]] = []
+    for variant in audio_variants[:2]:
+        label = compact_spaces(str(variant.get("label") or ""))
+        if not label:
+            continue
+        compact_variants.append({"label": label, "count": int(variant.get("count") or 1)})
+    if not compact_variants:
         return ""
-    summary = " + ".join(labels[:2])
+    summary = " + ".join(
+        format_audio_variants([variant]).strip()
+        for variant in compact_variants
+    )
     if len(labels) > 2:
         summary += f" +{len(labels) - 2}"
     return summary
@@ -248,7 +257,7 @@ def item_message(
 
     if genres:
         lines.append(f"Жанры: {html.escape(', '.join(genres[:4]))}")
-    elif country_names:
+    if country_names:
         lines.append(f"Страны: {html.escape(', '.join(country_names[:3]))}")
 
     if rating is not None and float(rating) > 0:
