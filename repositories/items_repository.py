@@ -11,6 +11,7 @@ from release_versioning import (
     format_variant_summary,
     get_item_variant_components,
     normalize_audio_tracks_signature,
+    refresh_item_version_fields,
     resolve_item_kinozal_id,
 )
 from subscription_matching import match_subscription
@@ -101,30 +102,10 @@ class ItemsRepository(BaseRepository):
         return None
 
     def save_item(self, item: Dict[str, Any]) -> Tuple[int, bool, bool]:
-        if not item.get("variant_signature"):
-            try:
-                item["variant_signature"] = build_item_variant_signature(item)
-            except Exception:
-                item["variant_signature"] = ""
-
-        if not item.get("variant_components"):
-            try:
-                item["variant_components"] = get_item_variant_components(item)
-            except Exception:
-                item["variant_components"] = {}
-
-        if not item.get("version_signature"):
-            try:
-                item["version_signature"] = build_version_signature(
-                    source_uid=item.get("source_uid"),
-                    media_type=item.get("media_type"),
-                    source_title=item.get("source_title"),
-                    source_episode_progress=item.get("source_episode_progress"),
-                    source_format=item.get("source_format"),
-                    source_audio_tracks=item.get("source_audio_tracks"),
-                )
-            except Exception:
-                item["version_signature"] = ""
+        # Always recompute signatures from the current payload. Callers may mutate
+        # title/progress after the initial parse (e.g. details-page corrections),
+        # and stale signatures would otherwise collapse a new version into an old row.
+        item = refresh_item_version_fields(item)
 
         data = {
             "source_uid": item["source_uid"],

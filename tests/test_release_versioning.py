@@ -3,6 +3,7 @@ from release_versioning import (
     compare_episode_progress,
     extract_kinozal_id,
     parse_episode_progress,
+    refresh_item_version_fields,
 )
 
 
@@ -74,3 +75,28 @@ def test_compare_episode_progress_ignores_missing_season_prefix() -> None:
 def test_compare_episode_progress_marks_incompatible_totals_as_unknown() -> None:
     assert compare_episode_progress("1 сезон: 1-6 серии из 6", "1 сезон: 13 серии") is None
     assert classify_episode_progress_change("1 сезон: 13 серии", "1 сезон: 1-6 серии из 6") == "unknown"
+
+
+def test_refresh_item_version_fields_recomputes_stale_signatures() -> None:
+    item = {
+        "source_uid": "kinozal:2128422",
+        "media_type": "tv",
+        "source_title": "Падение и взлёт Реджи Динкинса (1 сезон: 1-8 серии из 10) / The Fall and Rise of Reggie Dinkins / 2026 / ДБ / WEB-DL (1080p)",
+        "source_episode_progress": "1 сезон: 1-8 серии из 10",
+        "source_format": "1080",
+        "source_audio_tracks": ["ДБ (Dragon Money Studio)"],
+    }
+
+    initial = refresh_item_version_fields(item)
+    initial_variant = initial["variant_signature"]
+    initial_version = initial["version_signature"]
+
+    mutated = dict(initial)
+    mutated["source_title"] = "Падение и взлёт Реджи Динкинса (1 сезон: 1-10 серии из 10) / The Fall and Rise of Reggie Dinkins / 2026 / ДБ / WEB-DL (1080p)"
+    mutated["source_episode_progress"] = "1 сезон: 1-10 серии из 10"
+
+    refreshed = refresh_item_version_fields(mutated)
+
+    assert refreshed["variant_signature"] != initial_variant
+    assert refreshed["version_signature"] != initial_version
+    assert refreshed["variant_components"]["progress"] == "1 сезон: 1-10 серии из 10"

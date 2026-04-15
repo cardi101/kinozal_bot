@@ -253,6 +253,34 @@ def build_item_variant_signature(item: Dict[str, Any]) -> str:
     )
 
 
+def refresh_item_version_fields(item: Dict[str, Any]) -> Dict[str, Any]:
+    refreshed = dict(item)
+
+    try:
+        refreshed["variant_signature"] = build_item_variant_signature(refreshed)
+    except Exception:
+        refreshed["variant_signature"] = ""
+
+    try:
+        refreshed["variant_components"] = get_item_variant_components(refreshed)
+    except Exception:
+        refreshed["variant_components"] = {}
+
+    try:
+        refreshed["version_signature"] = build_version_signature(
+            source_uid=refreshed.get("source_uid"),
+            media_type=refreshed.get("media_type"),
+            source_title=refreshed.get("source_title"),
+            source_episode_progress=refreshed.get("source_episode_progress"),
+            source_format=refreshed.get("source_format"),
+            source_audio_tracks=refreshed.get("source_audio_tracks"),
+        )
+    except Exception:
+        refreshed["version_signature"] = ""
+
+    return refreshed
+
+
 def get_variant_components(
     media_type: Any,
     source_title: Any,
