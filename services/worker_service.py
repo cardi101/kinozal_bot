@@ -604,16 +604,18 @@ class WorkerService:
                     continue
                 try:
                     log.info("Flushing pending delivery item=%s to user=%s", pending_item_id, flush_uid)
-                    await self.delivery_service.send_item(
+                    if not self.delivery_service.begin_delivery_claim(flush_uid, pending_item, pending_subs, context="pending_flush"):
+                        self.repository.delete_pending_delivery(flush_uid, pending_item_id)
+                        continue
+                    await self.delivery_service.deliver_claimed_item(
                         flush_uid,
                         pending_item,
                         pending_subs,
+                        context="pending_flush",
                         old_release_text=str(pending_delivery.get("old_release_text") or ""),
                     )
-                    self.delivery_service.record_delivery(flush_uid, pending_item, pending_subs, context="pending_flush")
                     cycle_metrics["deliveries_sent_total"] += 1
                     self.repository.delete_pending_delivery(flush_uid, pending_item_id)
-                    await asyncio.sleep(0.12)
                 except Exception:
                     log.exception("Failed to flush pending delivery user=%s item=%s", flush_uid, pending_item_id)
 
@@ -715,15 +717,16 @@ class WorkerService:
                             tg_user_id,
                             delivery.item.source_uid,
                         )
-                        await self.delivery_service.send_item(
+                        if not self.delivery_service.begin_delivery_claim(tg_user_id, delivery.item, delivery.subs, context="release_text_update"):
+                            continue
+                        await self.delivery_service.deliver_claimed_item(
                             tg_user_id,
                             delivery.item,
                             delivery.subs,
+                            context="release_text_update",
                             old_release_text=delivery.old_release_text,
                         )
-                        self.delivery_service.record_delivery(tg_user_id, delivery.item, delivery.subs, context="release_text_update")
                         cycle_metrics["deliveries_sent_total"] += 1
-                        await asyncio.sleep(0.12)
                     except Exception:
                         log.exception("Error delivering rtc item=%s to user=%s", delivery.item_id, tg_user_id)
 
@@ -742,18 +745,39 @@ class WorkerService:
                         if not group:
                             continue
                         if len(group) >= 2:
-                            all_subs = list({sub.id: sub for delivery in group for sub in delivery.subs}.values())
-                            log.info("Delivering grouped %d items tmdb=%s to user=%s", len(group), tmdb_id, tg_user_id)
-                            await self.delivery_service.send_grouped_items(
-                                tg_user_id,
-                                [delivery.item for delivery in group],
-                                all_subs,
-                            )
-                            cycle_metrics["grouped_messages_total"] += 1
+                            claimed_group: List[DeliveryCandidate] = []
                             for delivery in group:
-                                self.delivery_service.record_delivery(tg_user_id, delivery.item, delivery.subs, context="grouped")
+                                if self.delivery_service.begin_delivery_claim(tg_user_id, delivery.item, delivery.subs, context="grouped"):
+                                    claimed_group.append(delivery)
+                            if not claimed_group:
+                                continue
+                            if len(claimed_group) == 1:
+                                await self.delivery_service.deliver_claimed_item(
+                                    tg_user_id,
+                                    claimed_group[0].item,
+                                    claimed_group[0].subs,
+                                    context="grouped_singleton",
+                                    old_release_text=claimed_group[0].old_release_text,
+                                )
                                 cycle_metrics["deliveries_sent_total"] += 1
-                                await asyncio.sleep(0.12)
+                                continue
+                            all_subs = list({sub.id: sub for delivery in claimed_group for sub in delivery.subs}.values())
+                            log.info("Delivering grouped %d items tmdb=%s to user=%s", len(claimed_group), tmdb_id, tg_user_id)
+                            try:
+                                await self.delivery_service.send_grouped_items(
+                                    tg_user_id,
+                                    [delivery.item for delivery in claimed_group],
+                                    all_subs,
+                                )
+                                cycle_metrics["grouped_messages_total"] += 1
+                                for delivery in claimed_group:
+                                    self.delivery_service.record_delivery(tg_user_id, delivery.item, delivery.subs, context="grouped")
+                                    cycle_metrics["deliveries_sent_total"] += 1
+                                    await asyncio.sleep(0.12)
+                            except Exception as exc:
+                                for delivery in claimed_group:
+                                    self.delivery_service.mark_delivery_claim_failed(tg_user_id, delivery.item, error=str(exc))
+                                raise
                         else:
                             await self.delivery_service.send_single(tg_user_id, group[0])
                             cycle_metrics["deliveries_sent_total"] += 1

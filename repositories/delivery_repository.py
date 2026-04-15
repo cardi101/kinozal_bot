@@ -25,6 +25,115 @@ def _item_snapshot_from_audit(delivery_audit_json: Any) -> Dict[str, Any]:
 
 
 class DeliveryRepository(BaseRepository):
+    def _delivery_claim_identity(self, item_id: int, delivery_audit_json: str = "") -> Dict[str, Any]:
+        snapshot = _item_snapshot_from_audit(delivery_audit_json)
+        if snapshot:
+            kinozal_id = compact_spaces(str(snapshot.get("kinozal_id") or "")) or extract_kinozal_id(snapshot.get("source_uid")) or extract_kinozal_id(snapshot.get("source_link"))
+            return {
+                "kinozal_id": kinozal_id or None,
+                "source_uid": compact_spaces(str(snapshot.get("source_uid") or "")) or None,
+                "version_signature": compact_spaces(str(snapshot.get("version_signature") or "")) or None,
+            }
+        payload = self.db.get_item_any(int(item_id)) if hasattr(self.db, "get_item_any") else None
+        if not payload:
+            return {"kinozal_id": None, "source_uid": None, "version_signature": None}
+        kinozal_id = compact_spaces(str(payload.get("kinozal_id") or "")) or extract_kinozal_id(payload.get("source_uid")) or extract_kinozal_id(payload.get("source_link"))
+        return {
+            "kinozal_id": kinozal_id or None,
+            "source_uid": compact_spaces(str(payload.get("source_uid") or "")) or None,
+            "version_signature": compact_spaces(str(payload.get("version_signature") or "")) or None,
+        }
+
+    def begin_delivery_claim(
+        self,
+        tg_user_id: int,
+        item_id: int,
+        sub_id: Optional[int],
+        matched_sub_ids: Optional[Iterable[int]] = None,
+        delivery_audit: Optional[Dict[str, Any]] = None,
+        context: str = "",
+    ) -> bool:
+        matched_ids_csv = None
+        if matched_sub_ids:
+            normalized_ids = sorted({int(x) for x in matched_sub_ids})
+            matched_ids_csv = ",".join(str(x) for x in normalized_ids) if normalized_ids else None
+        delivery_audit_json = json.dumps(delivery_audit, ensure_ascii=False, sort_keys=True) if delivery_audit else ""
+        identity = self._delivery_claim_identity(item_id, delivery_audit_json)
+        now = utc_ts()
+        with self.lock:
+            row = self.conn.execute(
+                """
+                SELECT status
+                FROM delivery_claims
+                WHERE tg_user_id = ? AND item_id = ?
+                LIMIT 1
+                """,
+                (tg_user_id, item_id),
+            ).fetchone()
+            if row and str(row.get("status") or "") in {"sending", "sent"}:
+                return False
+            if row:
+                self.conn.execute(
+                    """
+                    UPDATE delivery_claims
+                    SET kinozal_id = ?, source_uid = ?, version_signature = ?, subscription_id = ?,
+                        matched_subscription_ids = ?, delivery_context = ?, delivery_audit_json = ?,
+                        status = 'sending', last_error = '', claimed_at = ?, updated_at = ?, sent_at = NULL
+                    WHERE tg_user_id = ? AND item_id = ?
+                    """,
+                    (
+                        identity["kinozal_id"],
+                        identity["source_uid"],
+                        identity["version_signature"],
+                        sub_id,
+                        matched_ids_csv,
+                        compact_spaces(context),
+                        delivery_audit_json,
+                        now,
+                        now,
+                        tg_user_id,
+                        item_id,
+                    ),
+                )
+            else:
+                self.conn.execute(
+                    """
+                    INSERT INTO delivery_claims(
+                        tg_user_id, item_id, kinozal_id, source_uid, version_signature, subscription_id,
+                        matched_subscription_ids, delivery_context, delivery_audit_json, status, last_error,
+                        claimed_at, updated_at, sent_at
+                    )
+                    VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, 'sending', '', ?, ?, NULL)
+                    """,
+                    (
+                        tg_user_id,
+                        item_id,
+                        identity["kinozal_id"],
+                        identity["source_uid"],
+                        identity["version_signature"],
+                        sub_id,
+                        matched_ids_csv,
+                        compact_spaces(context),
+                        delivery_audit_json,
+                        now,
+                        now,
+                    ),
+                )
+            self.conn.commit()
+        return True
+
+    def mark_delivery_claim_failed(self, tg_user_id: int, item_id: int, error: str = "") -> None:
+        with self.lock:
+            self.conn.execute(
+                """
+                UPDATE delivery_claims
+                SET status = 'failed', last_error = ?, updated_at = ?
+                WHERE tg_user_id = ? AND item_id = ? AND status = 'sending'
+                """,
+                (compact_spaces(error)[:500], utc_ts(), tg_user_id, item_id),
+            )
+            self.conn.commit()
+
     def delivered_equivalent(self, tg_user_id: int, item: Dict[str, Any]) -> bool:
         target_variant_sig = self.db.build_item_variant_signature(item) if hasattr(self.db, "build_item_variant_signature") else None
         if target_variant_sig is None:
@@ -61,6 +170,20 @@ class DeliveryRepository(BaseRepository):
                     """,
                     (tg_user_id, kinozal_id, compact_spaces(str(item.get("version_signature") or ""))),
                 ).fetchone()
+                if row is not None:
+                    return True
+                row = self.conn.execute(
+                    """
+                    SELECT 1
+                    FROM delivery_claims
+                    WHERE tg_user_id = ?
+                      AND kinozal_id = ?
+                      AND COALESCE(version_signature, '') = ?
+                      AND status IN ('sending', 'sent')
+                    LIMIT 1
+                    """,
+                    (tg_user_id, kinozal_id, compact_spaces(str(item.get("version_signature") or ""))),
+                ).fetchone()
                 return row is not None
 
             source_uid = compact_spaces(str(item.get("source_uid") or ""))
@@ -88,6 +211,20 @@ class DeliveryRepository(BaseRepository):
                 WHERE tg_user_id = ?
                   AND source_uid = ?
                   AND COALESCE(version_signature, '') = ?
+                LIMIT 1
+                """,
+                (tg_user_id, source_uid, compact_spaces(str(item.get("version_signature") or ""))),
+            ).fetchone()
+            if row is not None:
+                return True
+            row = self.conn.execute(
+                """
+                SELECT 1
+                FROM delivery_claims
+                WHERE tg_user_id = ?
+                  AND source_uid = ?
+                  AND COALESCE(version_signature, '') = ?
+                  AND status IN ('sending', 'sent')
                 LIMIT 1
                 """,
                 (tg_user_id, source_uid, compact_spaces(str(item.get("version_signature") or ""))),
@@ -206,6 +343,10 @@ class DeliveryRepository(BaseRepository):
                     UNION ALL
                     SELECT da.tg_user_id, da.original_item_id AS delivered_item_id
                     FROM deliveries_archive da
+                    UNION ALL
+                    SELECT dc.tg_user_id, dc.item_id AS delivered_item_id
+                    FROM delivery_claims dc
+                    WHERE dc.status IN ('sending', 'sent')
                 ) delivered_rows
                 WHERE tg_user_id = ? AND delivered_item_id = ?
                 LIMIT 1
@@ -286,6 +427,14 @@ class DeliveryRepository(BaseRepository):
                         archived_payload.get("merged_into_item_id"),
                     ),
                 )
+                self.conn.execute(
+                    """
+                    UPDATE delivery_claims
+                    SET status = 'sent', last_error = '', sent_at = ?, updated_at = ?
+                    WHERE tg_user_id = ? AND item_id = ?
+                    """,
+                    (delivered_at, delivered_at, tg_user_id, item_id),
+                )
                 self.conn.commit()
                 return
             self.conn.execute(
@@ -295,6 +444,15 @@ class DeliveryRepository(BaseRepository):
                 ON CONFLICT(tg_user_id, item_id) DO NOTHING
                 """,
                 (tg_user_id, item_id, sub_id, matched_ids_csv, delivery_audit_json, utc_ts()),
+            )
+            sent_at = utc_ts()
+            self.conn.execute(
+                """
+                UPDATE delivery_claims
+                SET status = 'sent', last_error = '', sent_at = ?, updated_at = ?
+                WHERE tg_user_id = ? AND item_id = ?
+                """,
+                (sent_at, sent_at, tg_user_id, item_id),
             )
             self.conn.commit()
 
@@ -362,6 +520,10 @@ class DeliveryRepository(BaseRepository):
                     UNION ALL
                     SELECT da.tg_user_id, da.original_item_id AS delivered_item_id, da.delivered_at
                     FROM deliveries_archive da
+                    UNION ALL
+                    SELECT dc.tg_user_id, dc.item_id AS delivered_item_id, COALESCE(dc.sent_at, dc.claimed_at) AS delivered_at
+                    FROM delivery_claims dc
+                    WHERE dc.status IN ('sending', 'sent')
                 ) delivered_rows
                 WHERE tg_user_id = ? AND delivered_item_id = ? AND delivered_at > ?
                 LIMIT 1
@@ -421,6 +583,10 @@ class DeliveryRepository(BaseRepository):
                     UNION ALL
                     SELECT da.tg_user_id, da.kinozal_id, da.delivered_at
                     FROM deliveries_archive da
+                    UNION ALL
+                    SELECT dc.tg_user_id, dc.kinozal_id, COALESCE(dc.sent_at, dc.claimed_at) AS delivered_at
+                    FROM delivery_claims dc
+                    WHERE dc.status IN ('sending', 'sent')
                 ) delivered_rows
                 WHERE tg_user_id = ? AND kinozal_id = ? AND delivered_at > ?
                 LIMIT 1
@@ -442,10 +608,14 @@ class DeliveryRepository(BaseRepository):
                     SELECT da.item_id
                     FROM deliveries_archive da
                     WHERE da.item_id = ? OR da.original_item_id = ?
+                    UNION ALL
+                    SELECT dc.item_id
+                    FROM delivery_claims dc
+                    WHERE dc.item_id = ? AND dc.status IN ('sending', 'sent')
                 ) delivered_rows
                 LIMIT 1
                 """,
-                (item_id, item_id, item_id),
+                (item_id, item_id, item_id, item_id),
             ).fetchone()
             return row is not None
 

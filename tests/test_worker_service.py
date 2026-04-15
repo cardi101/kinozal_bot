@@ -84,12 +84,25 @@ class _FakeDeliveryService:
     def __init__(self) -> None:
         self.sent: list[tuple[int, int]] = []
         self.recorded: list[tuple[int, int, str]] = []
+        self.claimed: list[tuple[int, int, str]] = []
+        self.failed: list[tuple[int, int]] = []
 
     async def send_item(self, tg_user_id: int, item: ReleaseItem, subs, old_release_text: str = "") -> None:
         self.sent.append((tg_user_id, item.id))
 
     def record_delivery(self, tg_user_id: int, item: ReleaseItem, subs, context: str = "worker") -> None:
         self.recorded.append((tg_user_id, item.id, context))
+
+    def begin_delivery_claim(self, tg_user_id: int, item: ReleaseItem, subs, context: str = "worker") -> bool:
+        self.claimed.append((tg_user_id, item.id, context))
+        return True
+
+    def mark_delivery_claim_failed(self, tg_user_id: int, item: ReleaseItem, error: str = "") -> None:
+        self.failed.append((tg_user_id, item.id))
+
+    async def deliver_claimed_item(self, tg_user_id: int, item: ReleaseItem, subs, *, context: str = "worker", old_release_text: str = "") -> None:
+        await self.send_item(tg_user_id, item, subs, old_release_text=old_release_text)
+        self.record_delivery(tg_user_id, item, subs, context=context)
 
 
 class _FakeSubscriptionService:

@@ -77,8 +77,14 @@ class _FakeReplayDB:
     def delivered(self, tg_user_id: int, item_id: int) -> bool:
         return False
 
+    def begin_delivery_claim(self, tg_user_id: int, item_id: int, sub_id: int, matched_ids, delivery_audit=None, context: str = ""):
+        return True
+
     def record_delivery(self, tg_user_id: int, item_id: int, sub_id: int, matched_ids, delivery_audit=None):
         self.recorded.append((tg_user_id, item_id, sub_id, list(matched_ids), delivery_audit))
+
+    def mark_delivery_claim_failed(self, tg_user_id: int, item_id: int, error: str = ""):
+        return None
 
     def is_title_muted(self, tg_user_id: int, tmdb_id: int) -> bool:
         return False

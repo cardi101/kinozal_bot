@@ -861,16 +861,28 @@ def register_admin_match_handlers(router: Router, db: Any, tmdb: Any) -> None:
                         tg_user_id,
                         item.get("source_uid"),
                     )
+                delivery_audit = build_delivery_audit(db, item, matched_subs, context="admin_route")
+                if not db.begin_delivery_claim(
+                    tg_user_id,
+                    int(item["id"]),
+                    int(matched_subs[0]["id"]),
+                    [int(sub["id"]) for sub in matched_subs],
+                    delivery_audit=delivery_audit,
+                    context="admin_route",
+                ):
+                    skipped_existing_user_ids.add(tg_user_id)
+                    continue
                 await send_item_to_user(db, message.bot, tg_user_id, item, matched_subs)
                 db.record_delivery(
                     tg_user_id,
                     int(item["id"]),
                     int(matched_subs[0]["id"]),
                     [int(sub["id"]) for sub in matched_subs],
-                    delivery_audit=build_delivery_audit(db, item, matched_subs, context="admin_route"),
+                    delivery_audit=delivery_audit,
                 )
                 delivered_count += 1
             except Exception:
+                db.mark_delivery_claim_failed(tg_user_id, int(item["id"]), error="admin_route_send_failed")
                 log.exception("Admin route delivery failed item=%s user=%s", item.get("id"), tg_user_id)
 
         summary_lines = [

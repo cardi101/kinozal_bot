@@ -178,6 +178,27 @@ class WorkerRepository:
     ) -> None:
         self.db.record_delivery(tg_user_id, item_id, primary_sub_id, matched_sub_ids, delivery_audit=delivery_audit)
 
+    def begin_delivery_claim(
+        self,
+        tg_user_id: int,
+        item_id: int,
+        primary_sub_id: int,
+        matched_sub_ids: List[int],
+        delivery_audit: Optional[Dict[str, Any]] = None,
+        context: str = "",
+    ) -> bool:
+        return self.db.begin_delivery_claim(
+            tg_user_id,
+            item_id,
+            primary_sub_id,
+            matched_sub_ids,
+            delivery_audit=delivery_audit,
+            context=context,
+        )
+
+    def mark_delivery_claim_failed(self, tg_user_id: int, item_id: int, error: str = "") -> None:
+        self.db.mark_delivery_claim_failed(tg_user_id, item_id, error=error)
+
     def get_latest_delivered_related_item(self, tg_user_id: int, item: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         return self.db.get_latest_delivered_related_item(tg_user_id, item)
 

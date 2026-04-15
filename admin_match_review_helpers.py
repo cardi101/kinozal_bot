@@ -125,14 +125,28 @@ async def deliver_item_to_matching_subscriptions(
     for tg_user_id, matched_subs in matched_by_user.items():
         if not force and (db.delivered(tg_user_id, item_id) or db.delivered_equivalent(tg_user_id, item)):
             continue
-        await send_item_to_user(db, bot, tg_user_id, item, matched_subs)
-        db.record_delivery(
+        delivery_audit = build_delivery_audit(db, item, matched_subs, context="match_review")
+        if not db.begin_delivery_claim(
             tg_user_id,
             item_id,
             int(matched_subs[0]["id"]),
             [int(sub["id"]) for sub in matched_subs],
-            delivery_audit=build_delivery_audit(db, item, matched_subs, context="match_review"),
-        )
+            delivery_audit=delivery_audit,
+            context="match_review",
+        ):
+            continue
+        try:
+            await send_item_to_user(db, bot, tg_user_id, item, matched_subs)
+            db.record_delivery(
+                tg_user_id,
+                item_id,
+                int(matched_subs[0]["id"]),
+                [int(sub["id"]) for sub in matched_subs],
+                delivery_audit=delivery_audit,
+            )
+        except Exception as exc:
+            db.mark_delivery_claim_failed(tg_user_id, item_id, error=str(exc))
+            raise
         delivered_count += 1
 
     return len(matched_by_user), delivered_count

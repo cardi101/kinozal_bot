@@ -49,16 +49,36 @@ class DeliveryService:
             [sub.to_dict() for sub in subs] if subs else None,
         )
 
-    def record_delivery(self, tg_user_id: int, item: ReleaseItem, subs: Sequence[SubscriptionRecord], context: str = "worker") -> None:
-        item_id = item.id
-        primary_sub_id = subs[0].id if subs else 0
-        matched_sub_ids = [sub.id for sub in subs]
-        delivery_audit = build_delivery_audit(
+    def _build_delivery_audit(self, item: ReleaseItem, subs: Sequence[SubscriptionRecord], context: str) -> dict:
+        return build_delivery_audit(
             self.repository.db,
             item.to_dict(),
             [sub.to_dict() for sub in subs],
             context=context,
         )
+
+    def begin_delivery_claim(self, tg_user_id: int, item: ReleaseItem, subs: Sequence[SubscriptionRecord], context: str = "worker") -> bool:
+        item_id = item.id
+        primary_sub_id = subs[0].id if subs else 0
+        matched_sub_ids = [sub.id for sub in subs]
+        delivery_audit = self._build_delivery_audit(item, subs, context)
+        return self.repository.begin_delivery_claim(
+            tg_user_id,
+            item_id,
+            primary_sub_id,
+            matched_sub_ids,
+            delivery_audit=delivery_audit,
+            context=context,
+        )
+
+    def mark_delivery_claim_failed(self, tg_user_id: int, item: ReleaseItem, error: str = "") -> None:
+        self.repository.mark_delivery_claim_failed(tg_user_id, item.id, error=error)
+
+    def record_delivery(self, tg_user_id: int, item: ReleaseItem, subs: Sequence[SubscriptionRecord], context: str = "worker") -> None:
+        item_id = item.id
+        primary_sub_id = subs[0].id if subs else 0
+        matched_sub_ids = [sub.id for sub in subs]
+        delivery_audit = self._build_delivery_audit(item, subs, context)
         self.repository.record_delivery(
             tg_user_id,
             item_id,
@@ -66,6 +86,28 @@ class DeliveryService:
             matched_sub_ids,
             delivery_audit=delivery_audit,
         )
+
+    async def deliver_claimed_item(
+        self,
+        tg_user_id: int,
+        item: ReleaseItem,
+        subs: Sequence[SubscriptionRecord],
+        *,
+        context: str = "worker",
+        old_release_text: str = "",
+    ) -> None:
+        try:
+            await self.send_item(
+                tg_user_id,
+                item,
+                subs,
+                old_release_text=old_release_text,
+            )
+            self.record_delivery(tg_user_id, item, subs, context=context)
+            await asyncio.sleep(0.12)
+        except Exception as exc:
+            self.mark_delivery_claim_failed(tg_user_id, item, error=str(exc))
+            raise
 
     async def send_single(self, tg_user_id: int, delivery: DeliveryCandidate) -> None:
         item = delivery.item
@@ -97,11 +139,12 @@ class DeliveryService:
                 item.source_uid,
             )
 
-        await self.send_item(
+        if not self.begin_delivery_claim(tg_user_id, item, matched_subs, context="worker"):
+            return
+        await self.deliver_claimed_item(
             tg_user_id,
             item,
             matched_subs,
+            context="worker",
             old_release_text=delivery.old_release_text,
         )
-        self.record_delivery(tg_user_id, item, matched_subs)
-        await asyncio.sleep(0.12)

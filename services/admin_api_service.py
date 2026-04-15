@@ -482,23 +482,44 @@ class AdminApiService:
                     "blockers": active_suppressors,
                 }
 
-        await send_item_to_user(
-            self.db,
-            self.bot,
+        delivery_audit = build_delivery_audit(self.db, item, enabled_subs, context="admin_replay")
+        matched_ids = [int(sub["id"]) for sub in enabled_subs]
+        primary_sub_id = int(enabled_subs[0]["id"]) if enabled_subs else None
+        if not self.db.begin_delivery_claim(
             int(tg_user_id),
-            item,
-            enabled_subs or None,
-        )
-        if not self.db.delivered(int(tg_user_id), int(item["id"])):
-            primary_sub_id = int(enabled_subs[0]["id"]) if enabled_subs else None
-            matched_ids = [int(sub["id"]) for sub in enabled_subs]
-            self.db.record_delivery(
+            int(item["id"]),
+            primary_sub_id,
+            matched_ids,
+            delivery_audit=delivery_audit,
+            context="admin_replay",
+        ):
+            return {
+                "status": "skipped",
+                "reason": "delivery_claim_exists",
+                "kinozal_id": str(kinozal_id),
+                "tg_user_id": int(tg_user_id),
+                "item_id": int(item["id"]),
+            }
+
+        try:
+            await send_item_to_user(
+                self.db,
+                self.bot,
                 int(tg_user_id),
-                int(item["id"]),
-                primary_sub_id,
-                matched_ids,
-                delivery_audit=build_delivery_audit(self.db, item, enabled_subs, context="admin_replay"),
+                item,
+                enabled_subs or None,
             )
+            if not self.db.delivered(int(tg_user_id), int(item["id"])):
+                self.db.record_delivery(
+                    int(tg_user_id),
+                    int(item["id"]),
+                    primary_sub_id,
+                    matched_ids,
+                    delivery_audit=delivery_audit,
+                )
+        except Exception as exc:
+            self.db.mark_delivery_claim_failed(int(tg_user_id), int(item["id"]), error=str(exc))
+            raise
         self._increment_admin_metric("metrics_admin_replayed_deliveries_total", 1)
         return {
             "status": "sent",
