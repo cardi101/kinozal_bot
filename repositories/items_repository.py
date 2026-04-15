@@ -19,6 +19,37 @@ from .base import BaseRepository
 
 log = logging.getLogger("kinozal-news-bot")
 
+TMDB_CLEARABLE_FIELDS = {
+    "media_type",
+    "tmdb_id",
+    "tmdb_title",
+    "tmdb_original_title",
+    "tmdb_original_language",
+    "tmdb_rating",
+    "tmdb_vote_count",
+    "tmdb_release_date",
+    "tmdb_overview",
+    "tmdb_poster_url",
+    "tmdb_status",
+    "tmdb_age_rating",
+    "tmdb_countries",
+    "tmdb_match_path",
+    "tmdb_match_confidence",
+    "tmdb_match_evidence",
+    "tmdb_number_of_seasons",
+    "tmdb_number_of_episodes",
+    "tmdb_next_episode_name",
+    "tmdb_next_episode_air_date",
+    "tmdb_next_episode_season_number",
+    "tmdb_next_episode_episode_number",
+    "tmdb_last_episode_name",
+    "tmdb_last_episode_air_date",
+    "tmdb_last_episode_season_number",
+    "tmdb_last_episode_episode_number",
+    "imdb_id",
+    "mal_id",
+}
+
 
 def _item_snapshot_from_delivery_audit(delivery_audit_json: Any) -> Dict[str, Any]:
     raw = str(delivery_audit_json or "").strip()
@@ -178,6 +209,7 @@ class ItemsRepository(BaseRepository):
         # and stale signatures would otherwise collapse a new version into an old row.
         item = refresh_item_version_fields(item)
 
+        clear_tmdb_match = bool(item.get("_clear_tmdb_match"))
         data = {
             "source_uid": item["source_uid"],
             "version_signature": item["version_signature"],
@@ -228,7 +260,13 @@ class ItemsRepository(BaseRepository):
             "created_at": utc_ts(),
         }
 
-        def pick_value(new_value: Any, old_value: Any) -> Any:
+        def pick_value(field: str, new_value: Any, old_value: Any) -> Any:
+            if clear_tmdb_match and field in TMDB_CLEARABLE_FIELDS:
+                if isinstance(new_value, (list, tuple, set, dict)):
+                    return new_value if new_value else None
+                if isinstance(new_value, str):
+                    return new_value if compact_spaces(new_value) else None
+                return new_value
             if new_value is None:
                 return old_value
             if isinstance(new_value, str):
@@ -247,7 +285,7 @@ class ItemsRepository(BaseRepository):
                     if key == "created_at":
                         merged[key] = existing_data.get(key, data[key])
                         continue
-                    merged[key] = pick_value(data.get(key), existing_data.get(key))
+                    merged[key] = pick_value(key, data.get(key), existing_data.get(key))
 
                 fields_to_update = [
                     "source_uid",
@@ -451,6 +489,34 @@ class ItemsRepository(BaseRepository):
                 (kinozal_id, f"kinozal:{kinozal_id}", f"%details.php?id={kinozal_id}%", f"%id={kinozal_id}%"),
             ).fetchone()
             return self.db.get_item(int(row["id"])) if row else None
+
+    def find_item_any_by_kinozal_id(self, kinozal_id: str) -> Optional[Dict[str, Any]]:
+        item = self.find_item_by_kinozal_id(kinozal_id)
+        if item is not None:
+            return item
+        kinozal_id = compact_spaces(str(kinozal_id or ""))
+        if not kinozal_id:
+            return None
+        with self.lock:
+            archived = self.conn.execute(
+                """
+                SELECT *
+                FROM items_archive
+                WHERE kinozal_id = ? OR source_uid = ? OR source_uid LIKE ? OR source_link LIKE ?
+                ORDER BY COALESCE(source_published_at, 0) DESC, archived_at DESC, archive_id DESC
+                LIMIT 1
+                """,
+                (kinozal_id, f"kinozal:{kinozal_id}", f"%details.php?id={kinozal_id}%", f"%id={kinozal_id}%"),
+            ).fetchone()
+            if not archived:
+                return None
+            item = self._hydrate_archived_item_payload(dict(archived))
+            merged_into_item_id = int(item.get("merged_into_item_id") or 0)
+        if merged_into_item_id:
+            merged_item = self.get_item(merged_into_item_id)
+            if merged_item:
+                return merged_item
+        return item
 
     def record_source_observation(
         self,

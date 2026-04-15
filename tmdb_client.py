@@ -949,14 +949,17 @@ class TMDBClient:
         try:
             source_imdb_id = item.get("source_imdb_id")
             details = None
+            terminal_override = False
             stored_override = self._kinozal_override(item)
             if stored_override:
                 try:
-                    details = await self.get_details(
+                    override_details = await self.get_details(
                         str(stored_override.get("media_type") or "movie"),
                         int(stored_override["tmdb_id"]),
                     )
-                    if details:
+                    if override_details:
+                        details = override_details
+                        terminal_override = True
                         self._apply_match_metadata(
                             item,
                             details,
@@ -978,6 +981,7 @@ class TMDBClient:
                 try:
                     override_details = await self.get_details(override_media_type, int(override_tmdb_id))
                     if override_details:
+                        terminal_override = True
                         override_details["search_match_title"] = override_key
                         override_details["search_match_original_title"] = override_key
                         details = override_details
@@ -1026,6 +1030,8 @@ class TMDBClient:
                         )
 
             if (
+                not terminal_override
+                and
                 self.cfg.anime_resolver_enabled
                 and resolver_result
                 and resolver_result.get("resolver_confidence") == "high"
@@ -1100,7 +1106,7 @@ class TMDBClient:
                         exc_info=True,
                     )
 
-            if not details:
+            if not details and not terminal_override:
                 media_type = item.get("media_type") or "movie"
                 year = item.get("source_year")
                 candidates = title_search_candidates(
@@ -1262,7 +1268,7 @@ class TMDBClient:
                     item["media_type"] = details.get("media_type")
                 if not item.get("imdb_id"):
                     item["imdb_id"] = details.get("imdb_id")
-            elif item.get("tmdb_id") is None:
+            elif item.get("tmdb_id") is None and not terminal_override:
                 item["tmdb_match_confidence"] = "unmatched"
                 if not compact_spaces(str(item.get("tmdb_match_evidence") or "")):
                     item["tmdb_match_evidence"] = "no valid TMDB candidate"

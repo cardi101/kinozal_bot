@@ -94,7 +94,8 @@ async def _run() -> None:
     try:
         for candidate in candidates:
             kinozal_id = str(candidate["kinozal_id"])
-            current_item = db.find_item_by_kinozal_id(kinozal_id)
+            finder = getattr(db, "find_item_any_by_kinozal_id", None) or db.find_item_by_kinozal_id
+            current_item = finder(kinozal_id)
             if not current_item:
                 results.append(
                     {

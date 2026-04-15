@@ -13,6 +13,19 @@ def test_select_repair_candidates_keeps_latest_gap_with_users_by_default() -> No
     assert [row["kinozal_id"] for row in result] == ["1"]
 
 
+def test_select_repair_candidates_deduplicates_same_kinozal_id() -> None:
+    candidates = [
+        {"kinozal_id": "1", "gap_kind": "latest_gap", "delivery_users": 2, "observed_progress": "1-5 из 10"},
+        {"kinozal_id": "1", "gap_kind": "latest_gap", "delivery_users": 2, "observed_progress": "1-6 из 10"},
+        {"kinozal_id": "2", "gap_kind": "latest_gap", "delivery_users": 1, "observed_progress": "1-3 из 10"},
+    ]
+
+    result = select_repair_candidates(candidates)
+
+    assert [row["kinozal_id"] for row in result] == ["1", "2"]
+    assert result[0]["observed_progress"] == "1-5 из 10"
+
+
 def test_group_users_by_kinozal_sorts_by_recent_delivery() -> None:
     rows = [
         {"kinozal_id": "2128422", "tg_user_id": 2, "last_delivered_at": 100},

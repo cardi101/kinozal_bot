@@ -12,7 +12,15 @@ def select_repair_candidates(
         rows = [row for row in rows if str(row.get("gap_kind") or "") == "latest_gap"]
     if with_users_only:
         rows = [row for row in rows if int(row.get("delivery_users") or 0) > 0]
-    return rows
+    deduped: List[Dict[str, Any]] = []
+    seen_kinozal_ids: set[str] = set()
+    for row in rows:
+        kinozal_id = str(row.get("kinozal_id") or "").strip()
+        if not kinozal_id or kinozal_id in seen_kinozal_ids:
+            continue
+        seen_kinozal_ids.add(kinozal_id)
+        deduped.append(row)
+    return deduped
 
 
 def group_users_by_kinozal(rows: Iterable[Dict[str, Any]]) -> Dict[str, List[Dict[str, Any]]]:

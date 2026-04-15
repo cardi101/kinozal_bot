@@ -208,15 +208,16 @@ def normalize_audio_tracks_signature(value: Any) -> str:
     else:
         items = []
 
-    normalized: List[str] = []
-    seen = set()
+    normalized_counts: Dict[str, int] = {}
     for item in items:
         label = compact_spaces(str(item or "")).lower()
-        if not label or label in seen:
+        if not label:
             continue
-        seen.add(label)
-        normalized.append(label)
-    normalized.sort()
+        normalized_counts[label] = normalized_counts.get(label, 0) + 1
+    normalized = [
+        f"{count}x:{label}" if count > 1 else label
+        for label, count in sorted(normalized_counts.items())
+    ]
     return ",".join(normalized)
 
 

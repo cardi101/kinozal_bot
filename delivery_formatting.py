@@ -97,6 +97,16 @@ def _compact_audio_summary(audio_variants: List[Dict[str, Any]]) -> str:
     return format_audio_variants(normalized_variants).strip()
 
 
+def _audio_variants_from_track_labels(labels: List[str]) -> List[Dict[str, Any]]:
+    grouped: Dict[str, int] = {}
+    for raw_label in labels:
+        label = compact_spaces(str(raw_label or ""))
+        if not label:
+            continue
+        grouped[label] = grouped.get(label, 0) + 1
+    return [{"label": label, "count": count} for label, count in grouped.items()]
+
+
 def _quality_badge(item: Dict[str, Any]) -> str:
     fmt = compact_spaces(str(item.get("source_format") or ""))
     if not fmt:
@@ -267,7 +277,7 @@ def item_message(
             except Exception:
                 raw_audio_tracks = parse_audio_tracks(source_title)
         raw_audio_tracks = raw_audio_tracks or parse_audio_tracks(source_title)
-        audio_variants = [{"label": str(label), "count": 1} for label in raw_audio_tracks if str(label).strip()]
+        audio_variants = _audio_variants_from_track_labels([str(label) for label in raw_audio_tracks if str(label).strip()])
     countries = parse_country_codes(item.get("tmdb_countries"))
     country_names = human_country_names(countries, limit=4)
     route_label = _message_route_label(item, matched_subs)

@@ -424,7 +424,7 @@ def register_admin_match_handlers(router: Router, db: Any, tmdb: Any) -> None:
 
         db.set_match_override(kinozal_id, int(item["tmdb_id"]), str(item.get("media_type") or "movie"), source="admin_approve")
         db.resolve_match_review(int(review["item_id"]), "approved", admin_user_id, note="approved current match")
-        matched_users, delivered_count = await deliver_item_to_matching_subscriptions(db, message.bot, item)
+        matched_users, delivered_count = await deliver_item_to_matching_subscriptions(db, message.bot, item, force=True)
         await message.answer(
             "\n".join(
                 [

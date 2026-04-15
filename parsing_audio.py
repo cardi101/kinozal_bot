@@ -18,10 +18,13 @@ def parse_audio_variants(source_title: str) -> List[Dict[str, Any]]:
         r'(?:(\d{1,2})\s*[xх×]\s*)?'
         r'(?<!\w)(' + "|".join(re.escape(tag) for tag in AUDIO_TAGS) + r')(?!\w)'
         r'(?:\s*\(([^)]{1,120})\))?'
+        r'(?:\s*[xх×]\s*(\d{1,2}))?'
     )
 
     for match in re.finditer(pattern, title, flags=re.I):
-        count = int(match.group(1) or 1)
+        prefix_count = int(match.group(1) or 0)
+        suffix_count = int(match.group(4) or 0)
+        count = prefix_count or suffix_count or 1
         kind_raw = compact_spaces(match.group(2) or "")
         kind = kind_raw if kind_raw.lower() == "оригинал" else kind_raw.upper()
         extra = compact_spaces(match.group(3) or "")
@@ -58,7 +61,14 @@ def count_audio_variants(variants: List[Dict[str, Any]]) -> int:
 
 
 def parse_audio_tracks(source_title: str) -> List[str]:
-    return [str(item.get("label")) for item in parse_audio_variants(source_title) if item.get("label")]
+    tracks: List[str] = []
+    for item in parse_audio_variants(source_title):
+        label = compact_spaces(str(item.get("label") or ""))
+        if not label:
+            continue
+        count = max(1, int(item.get("count") or 1))
+        tracks.extend([label] * count)
+    return tracks
 
 
 def parse_release_text_episode_ranges(release_text: str) -> Dict[str, str]:

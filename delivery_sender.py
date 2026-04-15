@@ -16,7 +16,7 @@ from keyboards import mute_title_kb
 from kinozal_details import enrich_kinozal_item_with_details
 from magnet_links import build_public_magnet_redirect_url
 from text_access import html_to_plain_text
-from utils import short
+from utils import compact_spaces, short
 
 log = logging.getLogger("kinozal-news-bot")
 
@@ -319,7 +319,10 @@ async def send_item_to_user(
             primary_item[key] = item.get(key)
 
     try:
-        primary_item = await enrich_kinozal_item_with_details(dict(primary_item))
+        primary_item = await enrich_kinozal_item_with_details(
+            dict(primary_item),
+            force_refresh=not bool(compact_spaces(str(primary_item.get("source_release_text") or ""))),
+        )
     except Exception:
         log.warning(
             "Failed to enrich primary_item before formatting item=%s",
@@ -449,9 +452,17 @@ async def send_grouped_items_to_user(
 
     if sent:
         for item in items:
-            if item.get("source_release_text"):
+            followup_item = dict(item)
+            try:
+                followup_item = await enrich_kinozal_item_with_details(
+                    dict(item),
+                    force_refresh=not bool(compact_spaces(str(item.get("source_release_text") or ""))),
+                )
+            except Exception:
+                log.warning("Failed to enrich grouped followup item=%s", item.get("id"), exc_info=True)
+            if followup_item.get("source_release_text"):
                 try:
-                    await _send_release_followups(bot, tg_user_id, item, old_release_text="")
+                    await _send_release_followups(bot, tg_user_id, followup_item, old_release_text="")
                     await asyncio.sleep(0.12)
                 except Exception:
                     log.warning("send_release_followup failed for grouped item user=%s", tg_user_id, exc_info=True)

@@ -432,8 +432,20 @@ class DeliveryRepository(BaseRepository):
     def was_delivered_to_anyone(self, item_id: int) -> bool:
         with self.lock:
             row = self.conn.execute(
-                "SELECT 1 FROM deliveries WHERE item_id = ? LIMIT 1",
-                (item_id,),
+                """
+                SELECT 1
+                FROM (
+                    SELECT d.item_id
+                    FROM deliveries d
+                    WHERE d.item_id = ?
+                    UNION ALL
+                    SELECT da.item_id
+                    FROM deliveries_archive da
+                    WHERE da.item_id = ? OR da.original_item_id = ?
+                ) delivered_rows
+                LIMIT 1
+                """,
+                (item_id, item_id, item_id),
             ).fetchone()
             return row is not None
 

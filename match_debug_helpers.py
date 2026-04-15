@@ -50,6 +50,7 @@ def _strip_existing_match_fields(item: Dict[str, Any]) -> Dict[str, Any]:
         "media_type",
     ]:
         cleaned.pop(key, None)
+    cleaned["_clear_tmdb_match"] = True
     return cleaned
 
 

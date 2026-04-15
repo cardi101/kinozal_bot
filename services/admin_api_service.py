@@ -6,6 +6,7 @@ from delivery_sender import send_item_to_user
 from domain import ReleaseItem
 from match_debug_helpers import _strip_existing_match_fields, build_match_explanation
 from metrics_registry import build_metrics_payload
+from release_versioning import parse_episode_progress
 from subscription_matching import explain_subscription_match, match_subscription
 
 
@@ -210,6 +211,11 @@ class AdminApiService:
             ReleaseItem.from_payload(item),
             force_refresh=True,
         )
+        details_title = str(refreshed.get("details_title") or "")
+        details_progress = parse_episode_progress(details_title)
+        if details_title and details_progress and details_progress != str(refreshed.get("source_episode_progress") or ""):
+            refreshed.set("source_title", details_title)
+            refreshed.set("source_episode_progress", details_progress)
         after_release_text = str(refreshed.get("source_release_text") or "")
         refreshed_item_id, _, _ = self.db.save_item(refreshed.to_dict())
         persisted_item = self.db.get_item(int(refreshed_item_id)) or refreshed.to_dict()
@@ -403,7 +409,8 @@ class AdminApiService:
         user = self.db.get_user(int(tg_user_id))
         if not user:
             raise LookupError(f"user {tg_user_id} not found")
-        item = self.db.find_item_by_kinozal_id(kinozal_id)
+        finder = getattr(self.db, "find_item_any_by_kinozal_id", None) or self.db.find_item_by_kinozal_id
+        item = finder(kinozal_id)
         if not item:
             raise LookupError(f"kinozal_id {kinozal_id} not found")
 

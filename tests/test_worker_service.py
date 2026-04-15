@@ -188,3 +188,42 @@ def test_flush_due_debounce_falls_back_to_current_matching_subscriptions() -> No
 
     assert 1001 in pending
     assert pending[1001][0].subs[0].id == 11
+
+
+class _SelectiveSubscriptionService:
+    def matches(self, sub, item: ReleaseItem) -> bool:
+        return int(sub.id if hasattr(sub, "id") else sub["id"]) == 11
+
+
+def test_resolve_delivery_subscriptions_rechecks_stored_subscription_match() -> None:
+    repository = _FakeWorkerRepository()
+    repository.subscriptions = {
+        7: {
+            "id": 7,
+            "tg_user_id": 1001,
+            "name": "Old Sub",
+            "is_enabled": 1,
+        },
+        11: {
+            "id": 11,
+            "tg_user_id": 1001,
+            "name": "New Sub",
+            "is_enabled": 1,
+        },
+    }
+    worker = WorkerService(
+        repository=repository,
+        kinozal_service=_FakeKinozalService(),
+        tmdb_service=None,
+        subscription_service=_SelectiveSubscriptionService(),
+        delivery_service=_FakeDeliveryService(),
+        bot=None,
+    )
+
+    subs = worker._resolve_delivery_subscriptions(
+        1001,
+        ReleaseItem.from_payload(repository.get_item_any(42)),
+        "7",
+    )
+
+    assert [sub.id for sub in subs] == [11]

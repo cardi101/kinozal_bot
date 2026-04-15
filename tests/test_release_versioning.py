@@ -1,7 +1,9 @@
+from parsing_audio import parse_audio_tracks
 from release_versioning import (
     classify_episode_progress_change,
     compare_episode_progress,
     extract_kinozal_id,
+    normalize_audio_tracks_signature,
     parse_episode_progress,
     refresh_item_version_fields,
 )
@@ -106,3 +108,11 @@ def test_refresh_item_version_fields_recomputes_stale_signatures() -> None:
     assert refreshed["variant_signature"] != initial_variant
     assert refreshed["version_signature"] != initial_version
     assert refreshed["variant_components"]["progress"] == "1 сезон: 1-10 серии из 10"
+
+
+def test_normalize_audio_tracks_signature_keeps_track_multiplicity() -> None:
+    assert normalize_audio_tracks_signature(["ДБ", "ДБ", "СТ"]) == "2x:дб,ст"
+
+
+def test_parse_audio_tracks_supports_suffix_multiplier() -> None:
+    assert parse_audio_tracks("Sample / 2026 / ДБ x2, СТ ×2 / WEB-DL (1080p)") == ["ДБ", "ДБ", "СТ", "СТ"]

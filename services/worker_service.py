@@ -201,14 +201,19 @@ class WorkerService:
 
     def _resolve_delivery_subscriptions(self, tg_user_id: int, item: ReleaseItem, matched_sub_ids_csv: str) -> List[SubscriptionRecord]:
         sub_ids = [sub_id.strip() for sub_id in str(matched_sub_ids_csv or "").split(",") if sub_id.strip()]
-        subs = [
-            SubscriptionRecord.from_payload(sub)
-            for sub in [self.repository.get_subscription(int(sub_id)) for sub_id in sub_ids if sub_id.isdigit()]
-            if sub and int(sub.get("is_enabled") or 0)
-        ]
+        matcher_db = getattr(self.repository, "db", self.repository)
+        subs: List[SubscriptionRecord] = []
+        for sub in [self.repository.get_subscription(int(sub_id)) for sub_id in sub_ids if sub_id.isdigit()]:
+            if not sub or not int(sub.get("is_enabled") or 0):
+                continue
+            if self.subscription_service and hasattr(self.subscription_service, "matches"):
+                matched = bool(self.subscription_service.matches(SubscriptionRecord.from_payload(sub), item))
+            else:
+                matched = match_subscription(matcher_db, sub, item.to_dict())
+            if matched:
+                subs.append(SubscriptionRecord.from_payload(sub))
         if subs:
             return subs
-        matcher_db = getattr(self.repository, "db", self.repository)
         fallback_subs: List[SubscriptionRecord] = []
         for sub in self.repository.list_user_subscriptions(int(tg_user_id)):
             sub_full = self.repository.get_subscription(int(sub["id"]))
@@ -664,6 +669,7 @@ class WorkerService:
     ) -> None:
         for tg_user_id, deliveries in all_pending.items():
             try:
+                current_hour = datetime.now(timezone.utc).hour
                 quiet_start, quiet_end = self.repository.get_user_quiet_hours(tg_user_id)
                 if (
                     quiet_start is not None

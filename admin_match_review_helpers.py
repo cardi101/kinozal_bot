@@ -97,7 +97,13 @@ async def notify_admins_about_match_review(
     return sent_count
 
 
-async def deliver_item_to_matching_subscriptions(db: Any, bot: Any, item: Dict[str, Any]) -> Tuple[int, int]:
+async def deliver_item_to_matching_subscriptions(
+    db: Any,
+    bot: Any,
+    item: Dict[str, Any],
+    *,
+    force: bool = False,
+) -> Tuple[int, int]:
     from delivery_sender import send_item_to_user
 
     item_id = int(item["id"])
@@ -117,7 +123,7 @@ async def deliver_item_to_matching_subscriptions(db: Any, bot: Any, item: Dict[s
         matched_by_user.setdefault(tg_user_id, []).append(sub_full)
 
     for tg_user_id, matched_subs in matched_by_user.items():
-        if db.delivered(tg_user_id, item_id) or db.delivered_equivalent(tg_user_id, item):
+        if not force and (db.delivered(tg_user_id, item_id) or db.delivered_equivalent(tg_user_id, item)):
             continue
         await send_item_to_user(db, bot, tg_user_id, item, matched_subs)
         db.record_delivery(
