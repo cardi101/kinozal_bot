@@ -59,16 +59,25 @@ def _fetch_rows(dsn: str, kinozal_id: str = "") -> tuple[List[Dict[str, Any]], L
             observation_rows = list(cur.fetchall())
             cur.execute(
                 f"""
-                SELECT i.kinozal_id,
+                SELECT kinozal_id,
                        COUNT(*) AS delivery_count,
-                       COUNT(DISTINCT d.tg_user_id) AS delivery_users,
-                       MAX(d.delivered_at) AS last_delivered_at
-                FROM deliveries d
-                JOIN items i ON i.id = d.item_id
-                WHERE COALESCE(i.kinozal_id, '') <> ''{kinozal_filter.replace('kinozal_id', 'i.kinozal_id')}
-                GROUP BY i.kinozal_id
+                       COUNT(DISTINCT tg_user_id) AS delivery_users,
+                       MAX(delivered_at) AS last_delivered_at
+                FROM (
+                    SELECT i.kinozal_id, d.tg_user_id, d.delivered_at
+                    FROM deliveries d
+                    JOIN items i ON i.id = d.item_id
+                    WHERE COALESCE(i.kinozal_id, '') <> ''{kinozal_filter.replace('kinozal_id', 'i.kinozal_id')}
+
+                    UNION ALL
+
+                    SELECT da.kinozal_id, da.tg_user_id, da.delivered_at
+                    FROM deliveries_archive da
+                    WHERE COALESCE(da.kinozal_id, '') <> ''{kinozal_filter}
+                ) delivery_rows
+                GROUP BY kinozal_id
                 """,
-                params,
+                params + params,
             )
             delivery_rows = list(cur.fetchall())
     return item_rows, observation_rows, delivery_rows
