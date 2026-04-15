@@ -607,7 +607,7 @@ class DeliveryRepository(BaseRepository):
                     UNION ALL
                     SELECT da.item_id
                     FROM deliveries_archive da
-                    WHERE da.item_id = ? OR da.original_item_id = ?
+                    WHERE da.original_item_id = ?
                     UNION ALL
                     SELECT dc.item_id
                     FROM delivery_claims dc
@@ -615,7 +615,7 @@ class DeliveryRepository(BaseRepository):
                 ) delivered_rows
                 LIMIT 1
                 """,
-                (item_id, item_id, item_id, item_id),
+                (item_id, item_id, item_id),
             ).fetchone()
             return row is not None
 
