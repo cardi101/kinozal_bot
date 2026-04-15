@@ -554,7 +554,7 @@ class WorkerService:
                     self.repository.delete_pending_delivery(flush_uid, pending_item_id)
                     continue
 
-                pending_item_payload = self.repository.get_item(pending_item_id)
+                pending_item_payload = self.repository.get_item_any(pending_item_id)
                 if not pending_item_payload:
                     self.repository.delete_pending_delivery(flush_uid, pending_item_id)
                     continue
@@ -599,7 +599,7 @@ class WorkerService:
                 continue
 
             if item_id not in enriched_cache:
-                raw_item = self.repository.get_item(item_id)
+                raw_item = self.repository.get_item_any(item_id)
                 if not raw_item:
                     continue
                 item = ReleaseItem.from_payload(raw_item)

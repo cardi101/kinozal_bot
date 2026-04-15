@@ -155,7 +155,18 @@ class DeliveryRepository(BaseRepository):
     def delivered(self, tg_user_id: int, item_id: int) -> bool:
         with self.lock:
             row = self.conn.execute(
-                "SELECT 1 FROM deliveries WHERE tg_user_id = ? AND item_id = ?",
+                """
+                SELECT 1
+                FROM (
+                    SELECT d.tg_user_id, d.item_id AS delivered_item_id
+                    FROM deliveries d
+                    UNION ALL
+                    SELECT da.tg_user_id, da.original_item_id AS delivered_item_id
+                    FROM deliveries_archive da
+                ) delivered_rows
+                WHERE tg_user_id = ? AND delivered_item_id = ?
+                LIMIT 1
+                """,
                 (tg_user_id, item_id),
             ).fetchone()
             return row is not None
@@ -174,6 +185,65 @@ class DeliveryRepository(BaseRepository):
             matched_ids_csv = ",".join(str(x) for x in normalized_ids) if normalized_ids else None
         delivery_audit_json = json.dumps(delivery_audit, ensure_ascii=False, sort_keys=True) if delivery_audit else ""
         with self.lock:
+            live_item = self.conn.execute(
+                "SELECT 1 FROM items WHERE id = ? LIMIT 1",
+                (item_id,),
+            ).fetchone()
+            if not live_item:
+                archived_item = self.conn.execute(
+                    """
+                    SELECT *
+                    FROM items_archive
+                    WHERE original_item_id = ?
+                    ORDER BY archived_at DESC, archive_id DESC
+                    LIMIT 1
+                    """,
+                    (item_id,),
+                ).fetchone()
+                if not archived_item:
+                    return
+                existing_archived = self.conn.execute(
+                    """
+                    SELECT 1
+                    FROM deliveries_archive
+                    WHERE tg_user_id = ? AND original_item_id = ?
+                    LIMIT 1
+                    """,
+                    (tg_user_id, item_id),
+                ).fetchone()
+                if existing_archived:
+                    return
+                archived_payload = dict(archived_item)
+                delivered_at = utc_ts()
+                self.conn.execute(
+                    """
+                    INSERT INTO deliveries_archive(
+                        original_delivery_id, tg_user_id, original_item_id, kinozal_id, source_uid, media_type,
+                        version_signature, source_title, subscription_id, matched_subscription_ids,
+                        delivery_audit_json, delivered_at, archived_at, archive_reason, merged_into_item_id
+                    )
+                    VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        None,
+                        tg_user_id,
+                        item_id,
+                        compact_spaces(str(archived_payload.get("kinozal_id") or "")) or None,
+                        archived_payload.get("source_uid"),
+                        archived_payload.get("media_type"),
+                        archived_payload.get("version_signature"),
+                        archived_payload.get("source_title"),
+                        sub_id,
+                        matched_ids_csv,
+                        delivery_audit_json,
+                        delivered_at,
+                        delivered_at,
+                        "delivered_from_archive",
+                        archived_payload.get("merged_into_item_id"),
+                    ),
+                )
+                self.conn.commit()
+                return
             self.conn.execute(
                 """
                 INSERT INTO deliveries(tg_user_id, item_id, subscription_id, matched_subscription_ids, delivery_audit_json, delivered_at)
@@ -240,7 +310,18 @@ class DeliveryRepository(BaseRepository):
     def recently_delivered(self, tg_user_id: int, item_id: int, cooldown_seconds: int) -> bool:
         with self.lock:
             row = self.conn.execute(
-                "SELECT 1 FROM deliveries WHERE tg_user_id = ? AND item_id = ? AND delivered_at > ?",
+                """
+                SELECT 1
+                FROM (
+                    SELECT d.tg_user_id, d.item_id AS delivered_item_id, d.delivered_at
+                    FROM deliveries d
+                    UNION ALL
+                    SELECT da.tg_user_id, da.original_item_id AS delivered_item_id, da.delivered_at
+                    FROM deliveries_archive da
+                ) delivered_rows
+                WHERE tg_user_id = ? AND delivered_item_id = ? AND delivered_at > ?
+                LIMIT 1
+                """,
                 (tg_user_id, item_id, utc_ts() - cooldown_seconds),
             ).fetchone()
             return row is not None
@@ -288,9 +369,16 @@ class DeliveryRepository(BaseRepository):
         with self.lock:
             row = self.conn.execute(
                 """
-                SELECT 1 FROM deliveries d
-                JOIN items i ON i.id = d.item_id
-                WHERE d.tg_user_id = ? AND i.kinozal_id = ? AND d.delivered_at > ?
+                SELECT 1
+                FROM (
+                    SELECT d.tg_user_id, i.kinozal_id, d.delivered_at
+                    FROM deliveries d
+                    JOIN items i ON i.id = d.item_id
+                    UNION ALL
+                    SELECT da.tg_user_id, da.kinozal_id, da.delivered_at
+                    FROM deliveries_archive da
+                ) delivered_rows
+                WHERE tg_user_id = ? AND kinozal_id = ? AND delivered_at > ?
                 LIMIT 1
                 """,
                 (tg_user_id, kinozal_id, utc_ts() - cooldown_seconds),
@@ -357,14 +445,38 @@ class DeliveryRepository(BaseRepository):
     def get_user_delivery_history(self, tg_user_id: int, limit: int = 15) -> List[Dict[str, Any]]:
         with self.lock:
             rows = self.conn.execute(
-                """SELECT i.id, i.source_title, i.source_link, i.tmdb_title, i.media_type,
-                          d.delivered_at
-                   FROM deliveries d
-                   JOIN items i ON d.item_id = i.id
-                   WHERE d.tg_user_id = ?
-                   ORDER BY d.delivered_at DESC
-                   LIMIT ?""",
-                (tg_user_id, limit),
+                """
+                SELECT *
+                FROM (
+                    SELECT
+                        i.id,
+                        i.source_title,
+                        i.source_link,
+                        i.tmdb_title,
+                        i.media_type,
+                        d.delivered_at
+                    FROM deliveries d
+                    JOIN items i ON d.item_id = i.id
+                    WHERE d.tg_user_id = ?
+
+                    UNION ALL
+
+                    SELECT
+                        da.original_item_id AS id,
+                        da.source_title,
+                        ia.source_link,
+                        ia.tmdb_title,
+                        da.media_type,
+                        da.delivered_at
+                    FROM deliveries_archive da
+                    LEFT JOIN items_archive ia
+                      ON ia.original_item_id = da.original_item_id
+                    WHERE da.tg_user_id = ?
+                ) history_rows
+                ORDER BY delivered_at DESC
+                LIMIT ?
+                """,
+                (tg_user_id, tg_user_id, limit),
             ).fetchall()
             return [dict(row) for row in rows]
 

@@ -44,6 +44,67 @@ def item_duplicate_quality_score(item: Dict[str, Any]) -> int:
 
 
 class ItemsRepository(BaseRepository):
+    def _hydrate_archived_item_payload(self, row: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        if not row:
+            return None
+        payload: Dict[str, Any] = {}
+        item_json = row.get("item_json")
+        if item_json:
+            try:
+                payload = json.loads(item_json) if isinstance(item_json, str) else dict(item_json)
+            except Exception:
+                payload = {}
+        if not payload:
+            payload = {
+                "id": int(row.get("original_item_id") or 0),
+                "kinozal_id": row.get("kinozal_id"),
+                "source_uid": row.get("source_uid"),
+                "version_signature": row.get("version_signature"),
+                "source_title": row.get("source_title"),
+                "source_link": row.get("source_link"),
+                "media_type": row.get("media_type"),
+                "source_published_at": row.get("source_published_at"),
+                "source_year": row.get("source_year"),
+                "source_format": row.get("source_format"),
+                "source_description": row.get("source_description"),
+                "source_episode_progress": row.get("source_episode_progress"),
+                "source_audio_tracks": row.get("source_audio_tracks"),
+                "imdb_id": row.get("imdb_id"),
+                "cleaned_title": row.get("cleaned_title"),
+                "source_category_id": row.get("source_category_id"),
+                "source_category_name": row.get("source_category_name"),
+                "tmdb_id": row.get("tmdb_id"),
+                "tmdb_title": row.get("tmdb_title"),
+                "tmdb_original_title": row.get("tmdb_original_title"),
+                "tmdb_original_language": row.get("tmdb_original_language"),
+                "tmdb_rating": row.get("tmdb_rating"),
+                "tmdb_vote_count": row.get("tmdb_vote_count"),
+                "tmdb_release_date": row.get("tmdb_release_date"),
+                "tmdb_status": row.get("tmdb_status"),
+                "tmdb_countries": row.get("tmdb_countries"),
+                "manual_bucket": row.get("manual_bucket"),
+                "manual_country_codes": row.get("manual_country_codes"),
+                "genre_ids": row.get("genre_ids"),
+                "created_at": row.get("original_created_at") or row.get("archived_at"),
+            }
+        payload["id"] = int(payload.get("id") or row.get("original_item_id") or 0)
+        payload["archived_at"] = int(row.get("archived_at") or 0)
+        payload["archive_reason"] = row.get("archive_reason") or ""
+        payload["merged_into_item_id"] = row.get("merged_into_item_id")
+        payload["tmdb_countries"] = parse_country_codes(payload.get("tmdb_countries"))
+        payload["manual_country_codes"] = parse_country_codes(payload.get("manual_country_codes"))
+        genre_ids = payload.get("genre_ids")
+        if isinstance(genre_ids, str):
+            try:
+                loaded = json.loads(genre_ids)
+                genre_ids = loaded if isinstance(loaded, list) else []
+            except Exception:
+                genre_ids = []
+        payload["genre_ids"] = [int(value) for value in (genre_ids or [])]
+        if not compact_spaces(str(payload.get("kinozal_id") or "")):
+            payload["kinozal_id"] = resolve_item_kinozal_id(payload)
+        return payload
+
     def find_existing_enriched(self, source_uid: str, source_title: str) -> Optional[Dict[str, Any]]:
         source_uid = compact_spaces(str(source_uid or ""))
         source_title = compact_spaces(str(source_title or ""))
@@ -297,6 +358,31 @@ class ItemsRepository(BaseRepository):
             if not compact_spaces(str(data.get("kinozal_id") or "")):
                 data["kinozal_id"] = resolve_item_kinozal_id(data)
             return data
+
+    def get_archived_item(self, item_id: int) -> Optional[Dict[str, Any]]:
+        with self.lock:
+            row = self.conn.execute(
+                """
+                SELECT *
+                FROM items_archive
+                WHERE original_item_id = ?
+                ORDER BY archived_at DESC, archive_id DESC
+                LIMIT 1
+                """,
+                (int(item_id),),
+            ).fetchone()
+            if not row:
+                return None
+            archived = self._hydrate_archived_item_payload(dict(row))
+            merged_into_item_id = int(archived.get("merged_into_item_id") or 0)
+        if merged_into_item_id:
+            merged_item = self.get_item(merged_into_item_id)
+            if merged_item:
+                return merged_item
+        return archived
+
+    def get_item_any(self, item_id: int) -> Optional[Dict[str, Any]]:
+        return self.get_item(int(item_id)) or self.get_archived_item(int(item_id))
 
     def clear_item_match(self, item_id: int) -> None:
         with self.lock:

@@ -20,6 +20,9 @@ class WorkerRepository:
     def get_item(self, item_id: int) -> Optional[Dict[str, Any]]:
         return self.db.get_item(item_id)
 
+    def get_item_any(self, item_id: int) -> Optional[Dict[str, Any]]:
+        return self.db.get_item_any(item_id)
+
     def update_item_release_text(self, item_id: int, release_text: str) -> None:
         self.db.update_item_release_text(item_id, release_text)
 

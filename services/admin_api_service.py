@@ -211,19 +211,19 @@ class AdminApiService:
             force_refresh=True,
         )
         after_release_text = str(refreshed.get("source_release_text") or "")
-        if after_release_text:
-            self.db.update_item_release_text(int(item["id"]), after_release_text)
+        refreshed_item_id, _, _ = self.db.save_item(refreshed.to_dict())
+        persisted_item = self.db.get_item(int(refreshed_item_id)) or refreshed.to_dict()
 
         return {
             "kinozal_id": str(kinozal_id),
-            "item_id": int(item["id"]),
+            "item_id": int(refreshed_item_id),
             "title_before": str(item.get("source_title") or ""),
             "title_after": str(refreshed.get("source_title") or ""),
             "details_title": str(refreshed.get("details_title") or ""),
             "release_text_changed": before_release_text != after_release_text,
             "release_text_length_before": len(before_release_text),
             "release_text_length_after": len(after_release_text),
-            "item": refreshed.to_dict(),
+            "item": persisted_item,
         }
 
     def get_release_timeline(
