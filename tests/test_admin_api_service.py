@@ -1,4 +1,8 @@
+import os
 import asyncio
+
+os.environ.setdefault("BOT_TOKEN", "123456:TESTTOKEN")
+os.environ.setdefault("DATABASE_URL", "postgresql://example/example")
 
 from domain import ReleaseItem
 from services.admin_api_service import AdminApiService

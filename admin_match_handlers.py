@@ -827,7 +827,7 @@ def register_admin_match_handlers(router: Router, db: Any, tmdb: Any) -> None:
         matched_subscription_count = 0
         matched_user_ids: set[int] = set()
         skipped_existing_user_ids: set[int] = set()
-        sent_user_ids: set[int] = set()
+        matched_by_user: dict[int, list[dict[str, Any]]] = {}
         for sub in db.list_enabled_subscriptions():
             sub_full = db.get_subscription(int(sub["id"]))
             if not sub_full:
@@ -837,8 +837,9 @@ def register_admin_match_handlers(router: Router, db: Any, tmdb: Any) -> None:
             matched_subscription_count += 1
             tg_user_id = int(sub_full["tg_user_id"])
             matched_user_ids.add(tg_user_id)
-            if tg_user_id in sent_user_ids:
-                continue
+            matched_by_user.setdefault(tg_user_id, []).append(sub_full)
+
+        for tg_user_id, matched_subs in matched_by_user.items():
             if db.delivered(tg_user_id, int(item["id"])) or db.delivered_equivalent(tg_user_id, item):
                 skipped_existing_user_ids.add(tg_user_id)
                 continue
@@ -860,16 +861,15 @@ def register_admin_match_handlers(router: Router, db: Any, tmdb: Any) -> None:
                         tg_user_id,
                         item.get("source_uid"),
                     )
-                await send_item_to_user(db, message.bot, tg_user_id, item, [sub_full])
+                await send_item_to_user(db, message.bot, tg_user_id, item, matched_subs)
                 db.record_delivery(
                     tg_user_id,
                     int(item["id"]),
-                    int(sub_full["id"]),
-                    [int(sub_full["id"])],
-                    delivery_audit=build_delivery_audit(db, item, [sub_full], context="admin_route"),
+                    int(matched_subs[0]["id"]),
+                    [int(sub["id"]) for sub in matched_subs],
+                    delivery_audit=build_delivery_audit(db, item, matched_subs, context="admin_route"),
                 )
                 delivered_count += 1
-                sent_user_ids.add(tg_user_id)
             except Exception:
                 log.exception("Admin route delivery failed item=%s user=%s", item.get("id"), tg_user_id)
 

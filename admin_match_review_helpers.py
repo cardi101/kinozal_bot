@@ -102,7 +102,7 @@ async def deliver_item_to_matching_subscriptions(db: Any, bot: Any, item: Dict[s
 
     item_id = int(item["id"])
     item_tmdb_id = int(item["tmdb_id"]) if item.get("tmdb_id") is not None else None
-    matched_users = 0
+    matched_by_user: Dict[int, list[Dict[str, Any]]] = {}
     delivered_count = 0
 
     for sub in db.list_enabled_subscriptions():
@@ -114,17 +114,19 @@ async def deliver_item_to_matching_subscriptions(db: Any, bot: Any, item: Dict[s
             continue
         if not match_subscription(db, sub_full, item):
             continue
-        matched_users += 1
+        matched_by_user.setdefault(tg_user_id, []).append(sub_full)
+
+    for tg_user_id, matched_subs in matched_by_user.items():
         if db.delivered(tg_user_id, item_id) or db.delivered_equivalent(tg_user_id, item):
             continue
-        await send_item_to_user(db, bot, tg_user_id, item, [sub_full])
+        await send_item_to_user(db, bot, tg_user_id, item, matched_subs)
         db.record_delivery(
             tg_user_id,
             item_id,
-            int(sub_full["id"]),
-            [int(sub_full["id"])],
-            delivery_audit=build_delivery_audit(db, item, [sub_full], context="match_review"),
+            int(matched_subs[0]["id"]),
+            [int(sub["id"]) for sub in matched_subs],
+            delivery_audit=build_delivery_audit(db, item, matched_subs, context="match_review"),
         )
         delivered_count += 1
 
-    return matched_users, delivered_count
+    return len(matched_by_user), delivered_count
