@@ -13,9 +13,9 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from parsing_audio import parse_audio_tracks
-from release_versioning import refresh_item_version_fields
-from utils import compact_spaces
+from parsing_audio import parse_audio_tracks  # noqa: E402
+from release_versioning import refresh_item_version_fields  # noqa: E402
+from utils import compact_spaces  # noqa: E402
 
 
 # variant_components/variant_signature в проекте вычисляются runtime.
