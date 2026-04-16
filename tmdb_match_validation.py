@@ -26,6 +26,47 @@ from utils import compact_spaces
 log = logging.getLogger(__name__)
 
 
+TMDB_VALIDATION_REASON_CODE_MAP = {
+    "tmdb_match_looks_valid:L208": "SOURCE_TV_CANDIDATE_MOVIE",
+    "tmdb_match_looks_valid:L290": "SHORT_COMMON_QUERY_TOKEN_MISMATCH",
+    "tmdb_match_looks_valid:L292": "SHORT_COMMON_QUERY_LOW_SIMILARITY",
+    "tmdb_match_looks_valid:derivative_suffix": "DERIVATIVE_SUFFIX_MISMATCH",
+    "tmdb_match_looks_valid:L297": "LATIN_TITLE_WEAK_MATCH_TV",
+    "tmdb_match_looks_valid:L300": "LATIN_TITLE_WEAK_MATCH",
+    "tmdb_match_looks_valid:L314": "ALIAS_ONLY_MEDIA_MISMATCH",
+    "tmdb_match_looks_valid:L377": "ALIAS_ONLY_WEAK_MAIN_TITLE",
+    "tmdb_match_looks_valid:L380": "ALIAS_ONLY_NONFICTION_WEAK_MATCH",
+    "tmdb_match_looks_valid:L383": "ALIAS_ONLY_GENERIC_PARENTHETICAL",
+    "tmdb_match_looks_valid:L419": "SOURCE_TV_MOVIE_YEAR_MISMATCH",
+    "tmdb_match_looks_valid:L441": "TV_YEAR_DELTA_EXTREME",
+    "tmdb_match_looks_valid:L443": "TV_YEAR_DELTA_VERY_LARGE",
+    "tmdb_match_looks_valid:L445": "TV_YEAR_DELTA_LARGE_WEAK_TITLE",
+    "tmdb_match_looks_valid:L447": "TV_YEAR_DELTA_MEDIUM_WEAK_TITLE",
+    "tmdb_match_looks_valid:L450": "TV_SHORT_COMMON_YEAR_DELTA_LARGE",
+    "tmdb_match_looks_valid:L452": "TV_SHORT_COMMON_YEAR_DELTA_EXACTNESS",
+    "tmdb_match_looks_valid:L454": "TV_LATER_SEASON_COMMON_YEAR_DELTA",
+    "tmdb_match_looks_valid:L458": "TV_SEASON_COUNT_TOO_LOW",
+    "tmdb_match_looks_valid:L460": "TV_SEASON_COUNT_FAR_TOO_LOW_COMMON_QUERY",
+    "tmdb_match_looks_valid:L465": "TV_EPISODE_TOTAL_MISMATCH",
+    "tmdb_match_looks_valid:L467": "TV_EPISODE_TOTAL_MISMATCH_COMMON_QUERY",
+    "tmdb_match_looks_valid:L472": "MOVIE_GENERIC_YEAR_DELTA_LARGE",
+    "tmdb_match_looks_valid:L474": "MOVIE_GENERIC_YEAR_DELTA_WEAK_TITLE",
+    "tmdb_match_looks_valid:L476": "MOVIE_YEAR_DELTA_LARGE_WEAK_TITLE",
+    "tmdb_match_looks_valid:L478": "MOVIE_YEAR_DELTA_EXTREME_NO_EXACT",
+    "tmdb_match_looks_valid:L480": "MOVIE_YEAR_DELTA_WEAK_SUBSTRING",
+    "tmdb_match_looks_valid:L482": "MOVIE_YEAR_DELTA_ABSURD",
+    "tmdb_match_looks_valid:L486": "TV_GENERIC_YEAR_DELTA_LARGE",
+    "tmdb_match_looks_valid:L488": "TV_GENERIC_YEAR_DELTA_WEAK_TITLE",
+}
+
+
+def tmdb_validation_reason_code(reason: str) -> str:
+    normalized = compact_spaces(reason)
+    if not normalized:
+        return "VALIDATION_REJECT"
+    return TMDB_VALIDATION_REASON_CODE_MAP.get(normalized, "VALIDATION_REJECT")
+
+
 def is_anime_franchise_parent_fallback(item: Dict[str, Any], query: str, details: Dict[str, Any]) -> bool:
     source_is_tv = bool(item.get("source_episode_progress")) or str(item.get("media_type") or "") == "tv"
     if not source_is_tv:
@@ -155,6 +196,7 @@ def tmdb_match_looks_valid(item: Dict[str, Any], query: str, details: Dict[str, 
     source_is_tv = bool(item.get("source_episode_progress")) or str(item.get("media_type") or "") == "tv"
     details_media = str(details.get("media_type") or requested_media_type or "")
     details.pop("tmdb_validation_reject_reason", None)
+    details.pop("tmdb_validation_reject_code", None)
     details.pop("tmdb_validation_warnings", None)
     anime_franchise_fallback = False
     short_or_common_query = False
@@ -178,10 +220,13 @@ def tmdb_match_looks_valid(item: Dict[str, Any], query: str, details: Dict[str, 
     validation_warnings: List[str] = []
 
     def reject(reason: str) -> bool:
+        code = tmdb_validation_reason_code(reason)
         details["tmdb_validation_reject_reason"] = reason
+        details["tmdb_validation_reject_code"] = code
         try:
             log.debug(
-                "TMDB validation reject: reason=%s | query=%s | source=%s | tmdb=%s | media=%s/%s | alias_only=%s | exact=%s | substring=%s | best_overlap=%.3f | best_similarity=%.3f | best_main_overlap=%.3f | best_main_similarity=%.3f | common_tokens=%s | year_delta=%s | season_hint=%s | expected_seasons=%s | expected_episodes=%s | tmdb_seasons=%s | tmdb_episodes=%s | anime_fallback=%s | continuation=%s | revival=%s",
+                "TMDB validation reject: code=%s reason=%s | query=%s | source=%s | tmdb=%s | media=%s/%s | alias_only=%s | exact=%s | substring=%s | best_overlap=%.3f | best_similarity=%.3f | best_main_overlap=%.3f | best_main_similarity=%.3f | common_tokens=%s | year_delta=%s | season_hint=%s | expected_seasons=%s | expected_episodes=%s | tmdb_seasons=%s | tmdb_episodes=%s | anime_fallback=%s | continuation=%s | revival=%s",
+                code,
                 reason,
                 query,
                 item.get("source_title") or item.get("cleaned_title") or "",

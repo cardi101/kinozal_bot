@@ -127,6 +127,7 @@ def build_match_explanation(db: Any, item: Dict[str, Any], live_item: Optional[D
                         continue
                     stage = compact_spaces(str(event.get("stage") or "")) or "event"
                     reason = compact_spaces(str(event.get("reason") or ""))
+                    reason_code = compact_spaces(str(event.get("reason_code") or ""))
                     tmdb_id = compact_spaces(str(event.get("tmdb_id") or ""))
                     tmdb_title = compact_spaces(str(event.get("tmdb_title") or ""))
                     query = compact_spaces(str(event.get("query") or ""))
@@ -151,7 +152,9 @@ def build_match_explanation(db: Any, item: Dict[str, Any], live_item: Optional[D
                             piece += f" overlap={overlap}"
                         if year_delta:
                             piece += f" year_delta={year_delta}"
-                    if reason:
+                    if reason_code:
+                        piece += f" code={reason_code}"
+                    if reason and reason != reason_code:
                         piece += f" reason={reason}"
                     summary_parts.append(piece)
                 if summary_parts:

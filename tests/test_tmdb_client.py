@@ -286,5 +286,6 @@ def test_enrich_item_records_reject_reason_in_debug_when_unmatched(monkeypatch) 
     assert result["tmdb_match_path"] == "search_unmatched"
     assert result["tmdb_match_confidence"] == "unmatched"
     assert "tmdb_match_debug" in result and "candidate_rejected" in result["tmdb_match_debug"]
+    assert "\"reason_code\": \"TV_YEAR_DELTA_EXTREME\"" in result["tmdb_match_debug"]
     assert "candidate_ranking" in result["tmdb_match_debug"]
     assert "\"features\"" in result["tmdb_match_debug"]

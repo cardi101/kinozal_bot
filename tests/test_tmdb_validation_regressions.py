@@ -25,3 +25,29 @@ def test_tmdb_validation_allows_on_air_anime_episode_total_mismatch_as_soft_warn
 
     assert tmdb_match_looks_valid(item, "Tadaima, Ojama Saremasu!", details, "tv") is True
     assert details["tmdb_validation_warnings"] == ["episode_total_mismatch_soft"]
+
+
+def test_tmdb_validation_sets_stable_reject_code_for_large_tv_year_delta() -> None:
+    item = {
+        "source_title": "Мэтлок (2 сезон: 1-13 серии из 16) / Matlock / 2025 / ПМ (TVShows) / WEB-DL (1080p)",
+        "cleaned_title": "Мэтлок / Matlock",
+        "source_year": 2025,
+        "source_episode_progress": "2 сезон: 1-13 серии из 16",
+        "media_type": "tv",
+    }
+    details = {
+        "tmdb_id": 2093,
+        "media_type": "tv",
+        "tmdb_title": "Мэтлок",
+        "tmdb_original_title": "Matlock",
+        "search_match_title": "Matlock",
+        "search_match_original_title": "Matlock",
+        "tmdb_release_date": "1986-03-03",
+        "tmdb_number_of_seasons": 9,
+        "tmdb_number_of_episodes": 193,
+        "tmdb_status": "Ended",
+    }
+
+    assert tmdb_match_looks_valid(item, "Matlock", details, "tv") is False
+    assert details["tmdb_validation_reject_code"] == "TV_YEAR_DELTA_EXTREME"
+    assert details["tmdb_validation_reject_reason"] == "tmdb_match_looks_valid:L441"

@@ -16,7 +16,7 @@ from title_prep import clean_release_title, classify_release_segments, looks_lik
 from tmdb_aliases import is_long_latin_tmdb_query, is_short_or_common_tmdb_query, is_short_acronym_tmdb_query, manual_tmdb_override_for_item, title_search_candidates
 from item_years import extract_tv_season_hint
 from tmdb_match_features import extract_tmdb_match_features, score_tmdb_match_candidate
-from tmdb_match_validation import tmdb_match_looks_valid
+from tmdb_match_validation import tmdb_match_looks_valid, tmdb_validation_reason_code
 from anime_mapping_store import AnimeMappingStore
 from anime_title_lexicon import AnimeTitleLexicon
 from anime_resolver import resolve_anime_tmdb, should_use_anime_resolver
@@ -1349,12 +1349,19 @@ class TMDBClient:
 
                     if not tmdb_match_looks_valid(item, candidate, ranked_details_item, mt):
                         reject_reason = compact_spaces(str(ranked_details_item.get("tmdb_validation_reject_reason") or "validation_reject"))
+                        reject_code = compact_spaces(
+                            str(
+                                ranked_details_item.get("tmdb_validation_reject_code")
+                                or tmdb_validation_reason_code(reject_reason)
+                            )
+                        )
                         self.log.info(
-                            "TMDB rejected suspicious match for %s -> %s [%s / %s] reason=%s",
+                            "TMDB rejected suspicious match for %s -> %s [%s / %s] code=%s reason=%s",
                             item.get("source_title"),
                             candidate,
                             ranked_details_item.get("tmdb_title"),
                             ranked_details_item.get("tmdb_original_title"),
+                            reject_code,
                             reject_reason,
                         )
                         self._record_match_debug(
@@ -1365,6 +1372,7 @@ class TMDBClient:
                             requested_year=y,
                             tmdb_id=ranked_details_item.get("tmdb_id"),
                             tmdb_title=ranked_details_item.get("tmdb_title") or ranked_details_item.get("tmdb_original_title"),
+                            reason_code=reject_code,
                             reason=reject_reason,
                             warnings=ranked_details_item.get("tmdb_validation_warnings") or [],
                             candidate_score=candidate_entry.get("candidate_score"),
