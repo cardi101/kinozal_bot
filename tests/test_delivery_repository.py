@@ -28,6 +28,7 @@ class _FakeConn:
         self.commits = 0
         self.live_item_exists = live_item_exists
         self.deliveries = []
+        self.archive_deliveries = []
 
     def execute(self, query: str, params=None):
         params = params or ()
@@ -87,9 +88,43 @@ class _FakeConn:
         if normalized == "SELECT 1 FROM items WHERE id = ? LIMIT 1":
             return _FakeCursor({"exists": 1} if self.live_item_exists else None)
 
+        if normalized.startswith("SELECT * FROM items_archive WHERE original_item_id = ?"):
+            item_id = int(params[0])
+            return _FakeCursor(
+                {
+                    "original_item_id": item_id,
+                    "kinozal_id": "2128422",
+                    "source_uid": "kinozal:2128422",
+                    "media_type": "movie",
+                    "version_signature": "v1",
+                    "source_title": "Archived title",
+                    "merged_into_item_id": None,
+                }
+            )
+
         if normalized.startswith("INSERT INTO deliveries("):
             self.deliveries.append(tuple(params))
             return _FakeCursor()
+
+        if normalized.startswith("INSERT INTO deliveries_archive("):
+            self.archive_deliveries.append(
+                {
+                    "tg_user_id": params[1],
+                    "original_item_id": params[2],
+                    "delivery_audit_json": params[10],
+                }
+            )
+            return _FakeCursor()
+
+        if normalized.startswith("SELECT delivery_audit_json FROM deliveries WHERE tg_user_id = ? AND item_id = ? UNION ALL SELECT delivery_audit_json FROM deliveries_archive WHERE tg_user_id = ? AND original_item_id = ?"):
+            tg_user_id = int(params[0])
+            item_id = int(params[1])
+            rows = [
+                {"delivery_audit_json": row["delivery_audit_json"]}
+                for row in self.archive_deliveries
+                if int(row.get("tg_user_id") or 0) == tg_user_id and int(row.get("original_item_id") or 0) == item_id
+            ]
+            return _FakeCursorList(rows)
 
         if normalized.startswith("UPDATE delivery_claims SET status = 'sent'"):
             sent_at = params[0]
@@ -149,6 +184,17 @@ class _FakeDB:
             "source_uid": "kinozal:2128422",
             "version_signature": "v1",
         }
+
+
+class _FakeCursorList:
+    def __init__(self, rows):
+        self._rows = rows
+
+    def fetchone(self):
+        return self._rows[0] if self._rows else None
+
+    def fetchall(self):
+        return list(self._rows)
 
 
 def test_delivery_claim_is_active_only_while_lease_is_fresh() -> None:
@@ -413,3 +459,54 @@ def test_mark_delivery_claim_failed_marks_only_matching_event_key(monkeypatch) -
 
     assert conn.claim_rows["grouped:1001:tmdb:77:aaa"]["status"] == "failed"
     assert conn.claim_rows["release:1001:2128422:v1"]["status"] == "sending"
+
+
+def test_delivery_event_persisted_checks_event_key_not_item_only() -> None:
+    conn = _FakeConn(live_item_exists=False)
+    conn.archive_deliveries = [
+        {
+            "tg_user_id": 1001,
+            "original_item_id": 42,
+            "delivery_audit_json": '{"event_type":"release","event_key":"release:1001:2128422:v1"}',
+        }
+    ]
+    repository = DeliveryRepository(_FakeDB(conn))
+
+    assert repository.delivery_event_persisted(1001, 42, event_type="release", event_key="release:1001:2128422:v1") is True
+    assert repository.delivery_event_persisted(1001, 42, event_type="release_text", event_key="release_text:1001:2128422:abc") is False
+
+
+def test_record_delivery_archived_path_marks_claim_sent_for_new_event_type(monkeypatch) -> None:
+    now = 80_000
+    conn = _FakeConn(live_item_exists=False)
+    conn.archive_deliveries = [
+        {
+            "tg_user_id": 1001,
+            "original_item_id": 42,
+            "delivery_audit_json": '{"event_type":"release","event_key":"release:1001:2128422:v1"}',
+        }
+    ]
+    conn.claim_rows["release_text:1001:2128422:abc"] = {
+        "tg_user_id": 1001,
+        "item_id": 42,
+        "event_type": "release_text",
+        "event_key": "release_text:1001:2128422:abc",
+        "status": "sending",
+        "claimed_at": now,
+        "updated_at": now,
+    }
+    repository = DeliveryRepository(_FakeDB(conn))
+    monkeypatch.setattr(delivery_repo_module, "utc_ts", lambda: now + 1)
+
+    repository.record_delivery(
+        1001,
+        42,
+        7,
+        [7],
+        delivery_audit={"event_type": "release_text", "event_key": "release_text:1001:2128422:abc"},
+        event_type="release_text",
+        event_key="release_text:1001:2128422:abc",
+    )
+
+    assert conn.claim_rows["release_text:1001:2128422:abc"]["status"] == "sent"
+    assert len(conn.archive_deliveries) == 2

@@ -120,6 +120,9 @@ class WorkerRepository:
     def delivered_persisted(self, tg_user_id: int, item_id: int) -> bool:
         return self.db.delivered_persisted(tg_user_id, item_id)
 
+    def delivery_event_persisted(self, tg_user_id: int, item_id: int, *, event_type: str = "", event_key: str = "") -> bool:
+        return self.db.delivery_event_persisted(tg_user_id, item_id, event_type=event_type, event_key=event_key)
+
     def delivered_equivalent(self, tg_user_id: int, item: Dict[str, Any]) -> bool:
         return self.db.delivered_equivalent(tg_user_id, item)
 

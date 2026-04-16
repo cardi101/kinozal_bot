@@ -48,6 +48,42 @@ def _delivery_claim_is_active(row: Dict[str, Any], now: Optional[int] = None) ->
 
 
 class DeliveryRepository(BaseRepository):
+    def delivery_event_persisted(
+        self,
+        tg_user_id: int,
+        item_id: int,
+        *,
+        event_type: str = "",
+        event_key: str = "",
+    ) -> bool:
+        resolved_event_type = compact_spaces(str(event_type or ""))
+        resolved_event_key = compact_spaces(str(event_key or ""))
+        if not resolved_event_type and not resolved_event_key:
+            return self.delivered_persisted(tg_user_id, item_id)
+        with self.lock:
+            rows = self.conn.execute(
+                """
+                SELECT delivery_audit_json
+                FROM deliveries
+                WHERE tg_user_id = ? AND item_id = ?
+                UNION ALL
+                SELECT delivery_audit_json
+                FROM deliveries_archive
+                WHERE tg_user_id = ? AND original_item_id = ?
+                """,
+                (tg_user_id, item_id, tg_user_id, item_id),
+            ).fetchall()
+        for row in rows:
+            payload = dict(row)
+            audit = _load_delivery_audit(payload.get("delivery_audit_json"))
+            audit_event_key = compact_spaces(str(audit.get("event_key") or ""))
+            audit_event_type = compact_spaces(str(audit.get("event_type") or ""))
+            if resolved_event_key and audit_event_key == resolved_event_key:
+                return True
+            if not resolved_event_key and resolved_event_type and not audit_event_key and audit_event_type == resolved_event_type:
+                return True
+        return False
+
     def _delivery_claim_identity(
         self,
         tg_user_id: int,
@@ -521,47 +557,42 @@ class DeliveryRepository(BaseRepository):
                 ).fetchone()
                 if not archived_item:
                     return
-                existing_archived = self.conn.execute(
-                    """
-                    SELECT 1
-                    FROM deliveries_archive
-                    WHERE tg_user_id = ? AND original_item_id = ?
-                    LIMIT 1
-                    """,
-                    (tg_user_id, item_id),
-                ).fetchone()
-                if existing_archived:
-                    return
                 archived_payload = dict(archived_item)
                 snapshot = _item_snapshot_from_audit(delivery_audit_json)
                 delivered_at = utc_ts()
-                self.conn.execute(
-                    """
-                    INSERT INTO deliveries_archive(
-                        original_delivery_id, tg_user_id, original_item_id, kinozal_id, source_uid, media_type,
-                        version_signature, source_title, subscription_id, matched_subscription_ids,
-                        delivery_audit_json, delivered_at, archived_at, archive_reason, merged_into_item_id
+                if not self.delivery_event_persisted(
+                    tg_user_id,
+                    item_id,
+                    event_type=resolved_event_type,
+                    event_key=resolved_event_key,
+                ):
+                    self.conn.execute(
+                        """
+                        INSERT INTO deliveries_archive(
+                            original_delivery_id, tg_user_id, original_item_id, kinozal_id, source_uid, media_type,
+                            version_signature, source_title, subscription_id, matched_subscription_ids,
+                            delivery_audit_json, delivered_at, archived_at, archive_reason, merged_into_item_id
+                        )
+                        VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        (
+                            None,
+                            tg_user_id,
+                            item_id,
+                            compact_spaces(str(snapshot.get("kinozal_id") or archived_payload.get("kinozal_id") or "")) or None,
+                            snapshot.get("source_uid") or archived_payload.get("source_uid"),
+                            snapshot.get("media_type") or archived_payload.get("media_type"),
+                            snapshot.get("version_signature") or archived_payload.get("version_signature"),
+                            snapshot.get("source_title") or archived_payload.get("source_title"),
+                            sub_id,
+                            matched_ids_csv,
+                            delivery_audit_json,
+                            delivered_at,
+                            delivered_at,
+                            "delivered_from_archive",
+                            archived_payload.get("merged_into_item_id"),
+                        ),
                     )
-                    VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    """,
-                    (
-                        None,
-                        tg_user_id,
-                        item_id,
-                        compact_spaces(str(snapshot.get("kinozal_id") or archived_payload.get("kinozal_id") or "")) or None,
-                        snapshot.get("source_uid") or archived_payload.get("source_uid"),
-                        snapshot.get("media_type") or archived_payload.get("media_type"),
-                        snapshot.get("version_signature") or archived_payload.get("version_signature"),
-                        snapshot.get("source_title") or archived_payload.get("source_title"),
-                        sub_id,
-                        matched_ids_csv,
-                        delivery_audit_json,
-                        delivered_at,
-                        delivered_at,
-                        "delivered_from_archive",
-                        archived_payload.get("merged_into_item_id"),
-                    ),
-                )
                 self.conn.execute(
                     """
                     UPDATE delivery_claims

@@ -296,6 +296,7 @@ def test_build_match_debug_live_bypasses_stored_override() -> None:
     assert tmdb_service.last_payload is not None
     assert tmdb_service.last_payload["_skip_kinozal_override"] is True
     assert result["live_item"]["tmdb_id"] == 555
+    assert "_skip_kinozal_override" not in result["live_item"]
 
 
 class _ExplainConn:

@@ -1,5 +1,6 @@
 import asyncio
 
+import services.worker_service as worker_service_module
 from delivery_events import build_delivery_event_key, build_grouped_event_key
 from domain import DeliveryCandidate, ReleaseItem, SubscriptionRecord
 from services.worker_service import WorkerService
@@ -21,6 +22,9 @@ class _FakeWorkerRepository:
         self.deleted_debounce: list[tuple[int, str]] = []
         self.released_pending: list[tuple[int, str]] = []
         self.released_debounce: list[tuple[int, str, str]] = []
+        self.queued_pending: list[dict] = []
+        self.persisted_event_keys: set[str] = set()
+        self.quiet_profile = (None, None, "")
         self.subscriptions = {
             7: {
                 "id": 7,
@@ -61,6 +65,10 @@ class _FakeWorkerRepository:
     def delivered_persisted(self, tg_user_id: int, item_id: int) -> bool:
         return False
 
+    def delivery_event_persisted(self, tg_user_id: int, item_id: int, *, event_type: str = "", event_key: str = "") -> bool:
+        del tg_user_id, item_id, event_type
+        return str(event_key or "") in self.persisted_event_keys
+
     def delivered_equivalent(self, tg_user_id: int, item: dict) -> bool:
         return False
 
@@ -87,10 +95,36 @@ class _FakeWorkerRepository:
         return None, None
 
     def get_user_quiet_profile(self, tg_user_id: int):
-        return None, None, ""
+        del tg_user_id
+        return self.quiet_profile
 
     def delete_pending_delivery(self, tg_user_id: int, item_id: int, event_key: str = "") -> None:
         self.deleted.append((tg_user_id, item_id))
+
+    def queue_pending_delivery(
+        self,
+        tg_user_id: int,
+        item_id: int,
+        matched_sub_ids: str,
+        old_release_text: str,
+        is_release_text_change: bool,
+        *,
+        event_type: str = "",
+        event_key: str = "",
+        deliver_not_before_ts=None,
+    ) -> None:
+        self.queued_pending.append(
+            {
+                "tg_user_id": tg_user_id,
+                "item_id": item_id,
+                "matched_sub_ids": matched_sub_ids,
+                "old_release_text": old_release_text,
+                "is_release_text_change": is_release_text_change,
+                "event_type": event_type,
+                "event_key": event_key,
+                "deliver_not_before_ts": deliver_not_before_ts,
+            }
+        )
 
     def delete_debounce_entry(self, tg_user_id: int, kinozal_id: str) -> None:
         self.deleted_debounce.append((tg_user_id, kinozal_id))
@@ -306,6 +340,38 @@ def test_flush_due_pending_deliveries_preserves_release_text_event_identity() ->
     ]
 
 
+def test_flush_due_pending_deliveries_does_not_drop_release_text_when_base_release_already_persisted() -> None:
+    repository = _FakeWorkerRepository()
+    repository.lease_due_pending_deliveries = lambda current_ts=None: [
+        {
+            "id": 1,
+            "tg_user_id": 1001,
+            "item_id": 42,
+            "matched_sub_ids": "7",
+            "old_release_text": "old text",
+            "is_release_text_change": 1,
+            "event_type": "release_text",
+            "event_key": "release_text:1001:2128422:abc",
+            "lease_token": "pending-1",
+        }
+    ]
+    delivery_service = _FakeDeliveryService()
+    worker = WorkerService(
+        repository=repository,
+        kinozal_service=_FakeKinozalService(),
+        tmdb_service=None,
+        subscription_service=_FakeSubscriptionService(),
+        delivery_service=delivery_service,
+        bot=None,
+    )
+
+    metrics = worker._new_cycle_metrics()
+    asyncio.run(worker._flush_due_pending_deliveries(current_hour=12, cycle_metrics=metrics))
+
+    assert delivery_service.sent == [(1001, 42)]
+    assert repository.deleted == [(1001, 42)]
+
+
 def test_flush_due_debounce_uses_archived_item_payload() -> None:
     repository = _FakeWorkerRepository()
     worker = WorkerService(
@@ -489,6 +555,134 @@ def test_grouped_delivery_uses_single_group_envelope_event_key() -> None:
     assert grouped_records[0][4] != grouped_records[1][4]
     assert grouped_records[0][4].startswith("grouped:1001:tmdb:77:")
     assert grouped_records[1][4].startswith("grouped:1001:tmdb:77:")
+
+
+def test_quiet_hours_queue_preserves_grouped_event_identity() -> None:
+    repository = _FakeWorkerRepository()
+    repository.quiet_profile = (22, 8, "Europe/Berlin")
+    delivery_service = _FakeDeliveryService()
+    worker = WorkerService(
+        repository=repository,
+        kinozal_service=_FakeKinozalService(),
+        tmdb_service=None,
+        subscription_service=_FakeSubscriptionService(),
+        delivery_service=delivery_service,
+        bot=None,
+    )
+    original_quiet_window_status = worker_service_module.quiet_window_status
+    original_next_quiet_end = worker_service_module.next_quiet_window_end_ts
+    worker_service_module.quiet_window_status = lambda start_h, end_h, timezone_name: {
+        "active": True,
+        "timezone": timezone_name,
+        "local_hour": 2,
+    }
+    worker_service_module.next_quiet_window_end_ts = lambda start_h, end_h, timezone_name: 999999
+
+    item_a = ReleaseItem.from_payload(
+        {
+            "id": 42,
+            "kinozal_id": "2128422",
+            "source_uid": "kinozal:2128422",
+            "source_title": "A",
+            "media_type": "movie",
+            "tmdb_id": 77,
+            "version_signature": "v1",
+        }
+    )
+    item_b = ReleaseItem.from_payload(
+        {
+            "id": 43,
+            "kinozal_id": "2128423",
+            "source_uid": "kinozal:2128423",
+            "source_title": "B",
+            "media_type": "movie",
+            "tmdb_id": 77,
+            "version_signature": "v2",
+        }
+    )
+    deliveries = {
+        1001: [
+            DeliveryCandidate(
+                item=item_a,
+                subs=[SubscriptionRecord.from_payload({"id": 7, "tg_user_id": 1001, "name": "Sub", "is_enabled": 1})],
+                delivery_context="worker",
+                event_type="release",
+                event_key="release:1001:2128422:v1",
+            ),
+            DeliveryCandidate(
+                item=item_b,
+                subs=[SubscriptionRecord.from_payload({"id": 7, "tg_user_id": 1001, "name": "Sub", "is_enabled": 1})],
+                delivery_context="worker",
+                event_type="release",
+                event_key="release:1001:2128423:v2",
+            ),
+        ]
+    }
+
+    try:
+        metrics = worker._new_cycle_metrics()
+        asyncio.run(worker._deliver_current_cycle(deliveries, current_hour=12, cycle_metrics=metrics))
+    finally:
+        worker_service_module.quiet_window_status = original_quiet_window_status
+        worker_service_module.next_quiet_window_end_ts = original_next_quiet_end
+
+    assert len(repository.queued_pending) == 2
+    assert {row["event_type"] for row in repository.queued_pending} == {"grouped"}
+    assert repository.queued_pending[0]["event_key"] != repository.queued_pending[1]["event_key"]
+    assert repository.queued_pending[0]["event_key"].startswith("grouped:1001:tmdb:77:")
+    assert repository.queued_pending[1]["event_key"].startswith("grouped:1001:tmdb:77:")
+
+
+def test_flush_due_pending_deliveries_regroups_grouped_events() -> None:
+    repository = _FakeWorkerRepository()
+    repository.lease_due_pending_deliveries = lambda current_ts=None: [
+        {
+            "id": 1,
+            "tg_user_id": 1001,
+            "item_id": 42,
+            "matched_sub_ids": "7",
+            "old_release_text": "",
+            "is_release_text_change": 0,
+            "event_type": "grouped",
+            "event_key": "grouped:1001:tmdb:77:abcd:item:42",
+            "lease_token": "pending-1",
+        },
+        {
+            "id": 2,
+            "tg_user_id": 1001,
+            "item_id": 43,
+            "matched_sub_ids": "7",
+            "old_release_text": "",
+            "is_release_text_change": 0,
+            "event_type": "grouped",
+            "event_key": "grouped:1001:tmdb:77:abcd:item:43",
+            "lease_token": "pending-2",
+        },
+    ]
+    original_get_item_any = repository.get_item_any
+    repository.get_item_any = lambda item_id: {
+        **original_get_item_any(item_id),
+        "id": item_id,
+        "kinozal_id": "2128422" if item_id == 42 else "2128423",
+        "source_uid": "kinozal:2128422" if item_id == 42 else "kinozal:2128423",
+        "tmdb_id": 77,
+        "version_signature": "v1" if item_id == 42 else "v2",
+    }
+    delivery_service = _FakeDeliveryService()
+    worker = WorkerService(
+        repository=repository,
+        kinozal_service=_FakeKinozalService(),
+        tmdb_service=None,
+        subscription_service=_FakeSubscriptionService(),
+        delivery_service=delivery_service,
+        bot=None,
+    )
+
+    metrics = worker._new_cycle_metrics()
+    asyncio.run(worker._flush_due_pending_deliveries(current_hour=12, cycle_metrics=metrics))
+
+    assert delivery_service.grouped_sent == [(1001, (42, 43))]
+    assert delivery_service.sent == []
 
 
 class _SelectiveSubscriptionService:

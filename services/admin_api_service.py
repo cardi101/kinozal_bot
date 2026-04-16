@@ -219,6 +219,7 @@ class AdminApiService:
         def _strip_raw_tmdb_debug(payload: Any) -> Dict[str, Any]:
             cleaned = dict(payload or {})
             cleaned.pop("tmdb_match_debug", None)
+            cleaned.pop("_skip_kinozal_override", None)
             return cleaned
 
         return {

@@ -3,7 +3,7 @@ import html
 import logging
 import time
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Set
+from typing import Any, Dict, List, Sequence, Set
 
 from aiogram.enums import ParseMode
 
@@ -23,6 +23,13 @@ from source_health import note_source_cycle_failure, note_source_cycle_success
 from utils import compact_spaces, utc_ts
 
 log = logging.getLogger(__name__)
+
+
+def _grouped_event_envelope(event_key: str) -> str:
+    normalized = compact_spaces(str(event_key or ""))
+    if ":item:" in normalized:
+        return normalized.rsplit(":item:", 1)[0]
+    return normalized
 
 
 class WorkerService:
@@ -605,12 +612,36 @@ class WorkerService:
 
     async def _flush_due_pending_deliveries(self, current_hour: int, cycle_metrics: Dict[str, int]) -> None:
         del current_hour
-        for pending_delivery in self.repository.lease_due_pending_deliveries(utc_ts()):
+        leased_rows = list(self.repository.lease_due_pending_deliveries(utc_ts()))
+        grouped_pending: Dict[tuple[int, str], List[Dict[str, Any]]] = {}
+        singles: List[Dict[str, Any]] = []
+        for pending_delivery in leased_rows:
+            event_type = compact_spaces(str(pending_delivery.get("event_type") or ""))
+            event_key = compact_spaces(str(pending_delivery.get("event_key") or ""))
+            if event_type == "grouped" and event_key:
+                grouped_pending.setdefault(
+                    (int(pending_delivery["tg_user_id"]), _grouped_event_envelope(event_key)),
+                    [],
+                ).append(pending_delivery)
+            else:
+                singles.append(pending_delivery)
+
+        for pending_delivery in singles:
             flush_uid = int(pending_delivery["tg_user_id"])
             pending_item_id = int(pending_delivery["item_id"])
             lease_token = str(pending_delivery.get("lease_token") or "")
             event_key = str(pending_delivery.get("event_key") or "")
-            if self.repository.delivered_persisted(flush_uid, pending_item_id):
+            pending_is_release_text = bool(int(pending_delivery.get("is_release_text_change") or 0))
+            pending_event_type = compact_spaces(str(pending_delivery.get("event_type") or "")) or resolve_delivery_event_type(
+                "release_text_update" if pending_is_release_text else "worker",
+                is_release_text_change=pending_is_release_text,
+            )
+            if self.repository.delivery_event_persisted(
+                flush_uid,
+                pending_item_id,
+                event_type=pending_event_type,
+                event_key=event_key,
+            ):
                 self.repository.delete_pending_delivery(flush_uid, pending_item_id, event_key=event_key)
                 continue
 
@@ -645,11 +676,6 @@ class WorkerService:
                 continue
             try:
                 log.info("Flushing pending delivery item=%s to user=%s", pending_item_id, flush_uid)
-                pending_is_release_text = bool(int(pending_delivery.get("is_release_text_change") or 0))
-                pending_event_type = compact_spaces(str(pending_delivery.get("event_type") or "")) or resolve_delivery_event_type(
-                    "release_text_update" if pending_is_release_text else "worker",
-                    is_release_text_change=pending_is_release_text,
-                )
                 pending_event_key = compact_spaces(str(pending_delivery.get("event_key") or ""))
                 if not self.delivery_service.begin_delivery_claim(
                     flush_uid,
@@ -680,6 +706,104 @@ class WorkerService:
                     error=str(exc),
                 )
                 log.exception("Failed to flush pending delivery user=%s item=%s", flush_uid, pending_item_id)
+
+        for (flush_uid, group_envelope), pending_group in grouped_pending.items():
+            claimed_group: List[tuple[Dict[str, Any], ReleaseItem, Sequence[SubscriptionRecord], str]] = []
+            try:
+                for pending_delivery in pending_group:
+                    pending_item_id = int(pending_delivery["item_id"])
+                    lease_token = str(pending_delivery.get("lease_token") or "")
+                    event_key = compact_spaces(str(pending_delivery.get("event_key") or ""))
+                    if self.repository.delivery_event_persisted(
+                        flush_uid,
+                        pending_item_id,
+                        event_type="grouped",
+                        event_key=event_key,
+                    ):
+                        self.repository.delete_pending_delivery(flush_uid, pending_item_id, event_key=event_key)
+                        continue
+                    pending_item_payload = self.repository.get_item_any(pending_item_id)
+                    if not pending_item_payload:
+                        self.repository.delete_pending_delivery(flush_uid, pending_item_id, event_key=event_key)
+                        continue
+                    pending_item = ReleaseItem.from_payload(pending_item_payload)
+                    try:
+                        pending_item = await self.kinozal_service.enrich_item_with_details(pending_item)
+                    except Exception:
+                        log.warning("Failed to enrich grouped pending item=%s", pending_item_id, exc_info=True)
+                    pending_subs = self._resolve_delivery_subscriptions(
+                        flush_uid,
+                        pending_item,
+                        str(pending_delivery.get("matched_sub_ids") or ""),
+                    )
+                    if not pending_subs:
+                        self.repository.delete_pending_delivery(flush_uid, pending_item_id, event_key=event_key)
+                        continue
+                    if not self.delivery_service.begin_delivery_claim(
+                        flush_uid,
+                        pending_item,
+                        pending_subs,
+                        context="pending_flush",
+                        event_type="grouped",
+                        event_key=event_key,
+                        grouped_event_key=group_envelope,
+                    ):
+                        self.repository.release_pending_delivery_lease(int(pending_delivery["id"]), lease_token=lease_token)
+                        continue
+                    claimed_group.append((pending_delivery, pending_item, pending_subs, event_key))
+
+                if not claimed_group:
+                    continue
+                if len(claimed_group) == 1:
+                    pending_delivery, pending_item, pending_subs, event_key = claimed_group[0]
+                    await self.delivery_service.deliver_claimed_item(
+                        flush_uid,
+                        pending_item,
+                        pending_subs,
+                        context="grouped_singleton",
+                        old_release_text=str(pending_delivery.get("old_release_text") or ""),
+                        event_type="grouped",
+                        event_key=event_key,
+                        grouped_event_key=group_envelope,
+                    )
+                    self.repository.delete_pending_delivery(flush_uid, pending_item.id, event_key=event_key)
+                    cycle_metrics["deliveries_sent_total"] += 1
+                    continue
+
+                all_subs = list({sub.id: sub for _, _, subs, _ in claimed_group for sub in subs}.values())
+                await self.delivery_service.send_grouped_items(
+                    flush_uid,
+                    [pending_item for _, pending_item, _, _ in claimed_group],
+                    all_subs,
+                )
+                cycle_metrics["grouped_messages_total"] += 1
+                for _pending_delivery, pending_item, pending_subs, event_key in claimed_group:
+                    self.delivery_service.record_delivery(
+                        flush_uid,
+                        pending_item,
+                        pending_subs,
+                        context="grouped",
+                        event_type="grouped",
+                        event_key=event_key,
+                        grouped_event_key=group_envelope,
+                    )
+                    self.repository.delete_pending_delivery(flush_uid, pending_item.id, event_key=event_key)
+                    cycle_metrics["deliveries_sent_total"] += 1
+                    await asyncio.sleep(0.12)
+            except Exception as exc:
+                for pending_delivery, pending_item, _, event_key in claimed_group:
+                    self.delivery_service.mark_delivery_claim_failed(
+                        flush_uid,
+                        pending_item,
+                        error=str(exc),
+                        event_key=event_key,
+                    )
+                    self.repository.release_pending_delivery_lease(
+                        int(pending_delivery["id"]),
+                        lease_token=str(pending_delivery.get("lease_token") or ""),
+                        error=str(exc),
+                    )
+                log.exception("Failed to flush grouped pending deliveries user=%s envelope=%s", flush_uid, group_envelope)
 
     async def _flush_due_debounce(self, all_pending: Dict[int, List[DeliveryCandidate]]) -> None:
         enriched_cache: Dict[int, ReleaseItem] = {}
@@ -754,7 +878,40 @@ class WorkerService:
                 quiet_status = quiet_window_status(quiet_start, quiet_end, quiet_timezone)
                 if quiet_status["active"]:
                     deliver_not_before_ts = next_quiet_window_end_ts(quiet_start, quiet_end, quiet_timezone)
-                    for delivery in deliveries:
+                    release_text_updates = [delivery for delivery in deliveries if delivery.is_release_text_change]
+                    regular_deliveries = [delivery for delivery in deliveries if not delivery.is_release_text_change]
+                    tmdb_groups: Dict[int, List[DeliveryCandidate]] = {}
+                    passthrough_deliveries: List[tuple[DeliveryCandidate, str, str]] = []
+                    for delivery in regular_deliveries:
+                        tmdb_id = delivery.item.tmdb_id
+                        if tmdb_id:
+                            tmdb_groups.setdefault(tmdb_id, []).append(delivery)
+                        else:
+                            event_type, event_key = self.delivery_service.build_candidate_delivery_event(tg_user_id, delivery, context=delivery.delivery_context or "worker")
+                            passthrough_deliveries.append((delivery, event_type, event_key))
+                    for delivery in release_text_updates:
+                        event_type, event_key = self.delivery_service.build_candidate_delivery_event(tg_user_id, delivery, context="release_text_update")
+                        passthrough_deliveries.append((delivery, event_type, event_key))
+                    for tmdb_id, group in tmdb_groups.items():
+                        if len(group) >= 2:
+                            _, group_envelope = self.delivery_service.build_group_delivery_event(
+                                tg_user_id,
+                                [delivery.item for delivery in group],
+                                group_key=f"tmdb:{tmdb_id}",
+                            )
+                            for delivery in group:
+                                passthrough_deliveries.append(
+                                    (
+                                        delivery,
+                                        "grouped",
+                                        f"{group_envelope}:item:{delivery.item_id}",
+                                    )
+                                )
+                        else:
+                            event_type, event_key = self.delivery_service.build_candidate_delivery_event(tg_user_id, group[0], context=group[0].delivery_context or "worker")
+                            passthrough_deliveries.append((group[0], event_type, event_key))
+
+                    for delivery, queued_event_type, queued_event_key in passthrough_deliveries:
                         sub_ids_str = ",".join(str(sub.id) for sub in delivery.subs)
                         self.repository.queue_pending_delivery(
                             tg_user_id,
@@ -762,8 +919,8 @@ class WorkerService:
                             sub_ids_str,
                             delivery.old_release_text,
                             delivery.is_release_text_change,
-                            event_type=delivery.event_type,
-                            event_key=delivery.event_key,
+                            event_type=queued_event_type,
+                            event_key=queued_event_key,
                             deliver_not_before_ts=deliver_not_before_ts,
                         )
                         if delivery.debounce_kinozal_id:
