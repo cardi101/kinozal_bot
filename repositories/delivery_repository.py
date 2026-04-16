@@ -184,15 +184,36 @@ class DeliveryRepository(BaseRepository):
             self.conn.commit()
         return row is not None
 
-    def mark_delivery_claim_failed(self, tg_user_id: int, item_id: int, error: str = "") -> None:
+    def mark_delivery_claim_failed(
+        self,
+        tg_user_id: int,
+        item_id: int,
+        error: str = "",
+        *,
+        event_key: str = "",
+    ) -> None:
+        normalized_event_key = compact_spaces(str(event_key or ""))
         with self.lock:
             self.conn.execute(
                 """
                 UPDATE delivery_claims
                 SET status = 'failed', last_error = ?, updated_at = ?
-                WHERE tg_user_id = ? AND item_id = ? AND status = 'sending'
+                WHERE tg_user_id = ?
+                  AND status = 'sending'
+                  AND (
+                    (? <> '' AND COALESCE(event_key, '') = ?)
+                    OR (? = '' AND item_id = ? AND COALESCE(event_key, '') = '')
+                  )
                 """,
-                (compact_spaces(error)[:500], utc_ts(), tg_user_id, item_id),
+                (
+                    compact_spaces(error)[:500],
+                    utc_ts(),
+                    tg_user_id,
+                    normalized_event_key,
+                    normalized_event_key,
+                    normalized_event_key,
+                    item_id,
+                ),
             )
             self.conn.commit()
 
@@ -470,6 +491,9 @@ class DeliveryRepository(BaseRepository):
         sub_id: Optional[int],
         matched_sub_ids: Optional[Iterable[int]] = None,
         delivery_audit: Optional[Dict[str, Any]] = None,
+        *,
+        event_type: str = "",
+        event_key: str = "",
     ) -> None:
         matched_ids_csv = None
         if matched_sub_ids:
@@ -477,7 +501,8 @@ class DeliveryRepository(BaseRepository):
             matched_ids_csv = ",".join(str(x) for x in normalized_ids) if normalized_ids else None
         delivery_audit_json = json.dumps(delivery_audit, ensure_ascii=False, sort_keys=True) if delivery_audit else ""
         audit = _load_delivery_audit(delivery_audit_json)
-        event_key = compact_spaces(str(audit.get("event_key") or ""))
+        resolved_event_type = compact_spaces(str(event_type or audit.get("event_type") or ""))
+        resolved_event_key = compact_spaces(str(event_key or audit.get("event_key") or ""))
         with self.lock:
             live_item = self.conn.execute(
                 "SELECT 1 FROM items WHERE id = ? LIMIT 1",
@@ -541,12 +566,27 @@ class DeliveryRepository(BaseRepository):
                     """
                     UPDATE delivery_claims
                     SET status = 'sent', last_error = '', sent_at = ?, updated_at = ?
-                    WHERE tg_user_id = ? AND (
-                        (COALESCE(event_key, '') <> '' AND event_key = ?)
-                        OR item_id = ?
+                    WHERE tg_user_id = ?
+                      AND (
+                        (? <> '' AND COALESCE(event_key, '') = ?)
+                        OR (
+                            ? = ''
+                            AND item_id = ?
+                            AND COALESCE(event_type, '') = ?
+                            AND COALESCE(event_key, '') = ''
+                        )
                     )
                     """,
-                    (delivered_at, delivered_at, tg_user_id, event_key, item_id),
+                    (
+                        delivered_at,
+                        delivered_at,
+                        tg_user_id,
+                        resolved_event_key,
+                        resolved_event_key,
+                        resolved_event_key,
+                        item_id,
+                        resolved_event_type,
+                    ),
                 )
                 self.conn.commit()
                 return
@@ -563,12 +603,27 @@ class DeliveryRepository(BaseRepository):
                 """
                 UPDATE delivery_claims
                 SET status = 'sent', last_error = '', sent_at = ?, updated_at = ?
-                WHERE tg_user_id = ? AND (
-                    (COALESCE(event_key, '') <> '' AND event_key = ?)
-                    OR item_id = ?
-                )
+                WHERE tg_user_id = ?
+                  AND (
+                    (? <> '' AND COALESCE(event_key, '') = ?)
+                    OR (
+                        ? = ''
+                        AND item_id = ?
+                        AND COALESCE(event_type, '') = ?
+                        AND COALESCE(event_key, '') = ''
+                    )
+                  )
                 """,
-                (sent_at, sent_at, tg_user_id, event_key, item_id),
+                (
+                    sent_at,
+                    sent_at,
+                    tg_user_id,
+                    resolved_event_key,
+                    resolved_event_key,
+                    resolved_event_key,
+                    item_id,
+                    resolved_event_type,
+                ),
             )
             self.conn.commit()
 

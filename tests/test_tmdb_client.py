@@ -173,6 +173,66 @@ def test_enrich_item_prefers_valid_modern_matlock_candidate(monkeypatch) -> None
     assert "themoviedb.org/tv/200" in text
 
 
+def test_enrich_item_keeps_query_variants_for_same_tmdb_candidate(monkeypatch) -> None:
+    client = object.__new__(TMDBClient)
+    client.anime_title_lexicon = None
+    client.anime_mapping_store = None
+    client.cfg = SimpleNamespace(anime_resolver_enabled=False, anime_resolver_log_only=False)
+    client.db = SimpleNamespace(get_match_override=lambda kinozal_id: None)
+    client.cache = SimpleNamespace(client=None)
+    client.log = logging.getLogger("test-tmdb-client")
+    client.token = "token"
+    client.language = "en-US"
+    client.find_by_imdb = None
+    client._is_rejected_match = lambda item, details: False
+
+    async def _fake_search_ranked(query: str, media_type: str, year: int | None, limit: int = 5):
+        if media_type != "tv":
+            return []
+        return [
+            {
+                "tmdb_id": 333,
+                "media_type": "tv",
+                "tmdb_title": "Exact Show",
+                "tmdb_original_title": "Exact Show",
+                "search_match_title": "Exact Show",
+                "search_match_original_title": "Exact Show",
+                "tmdb_release_date": "2025-01-10",
+                "tmdb_number_of_seasons": 1,
+                "tmdb_number_of_episodes": 12,
+                "tmdb_rating": 7.3,
+                "tmdb_vote_count": 111,
+                "tmdb_status": "Returning Series",
+            }
+        ]
+
+    client.search_ranked = _fake_search_ranked
+    monkeypatch.setattr(tmdb_client_module, "title_search_candidates", lambda source_title, cleaned_title: ["Foo", "Exact Show"])
+    monkeypatch.setattr(tmdb_client_module, "_extract_slash_title_candidates", lambda source_title: [])
+    monkeypatch.setattr(
+        tmdb_client_module,
+        "tmdb_match_looks_valid",
+        lambda item, query, details, requested_media_type: query == "Exact Show",
+    )
+
+    item = {
+        "kinozal_id": "3010",
+        "source_uid": "kinozal:3010",
+        "source_title": "Exact Show / 2025 / WEB-DL (1080p)",
+        "source_description": "",
+        "media_type": "tv",
+        "source_year": 2025,
+        "source_format": "1080",
+    }
+
+    result = asyncio.run(client.enrich_item(item))
+
+    assert result["tmdb_id"] == 333
+    assert result["tmdb_match_path"] == "search"
+    assert "\"candidate_rejected\"" in result["tmdb_match_debug"]
+    assert "\"query\": \"Exact Show\"" in result["tmdb_match_debug"]
+
+
 def test_enrich_item_keeps_on_air_anime_match_with_soft_episode_warning(monkeypatch) -> None:
     client = object.__new__(TMDBClient)
     client.anime_title_lexicon = None
@@ -289,3 +349,78 @@ def test_enrich_item_records_reject_reason_in_debug_when_unmatched(monkeypatch) 
     assert "\"reason_code\": \"TV_YEAR_DELTA_EXTREME\"" in result["tmdb_match_debug"]
     assert "candidate_ranking" in result["tmdb_match_debug"]
     assert "\"features\"" in result["tmdb_match_debug"]
+
+
+def test_enrich_item_keeps_query_sensitive_candidate_until_validation(monkeypatch) -> None:
+    client = object.__new__(TMDBClient)
+    client.anime_title_lexicon = None
+    client.anime_mapping_store = None
+    client.cfg = SimpleNamespace(anime_resolver_enabled=False, anime_resolver_log_only=False)
+    client.db = SimpleNamespace(get_match_override=lambda kinozal_id: None)
+    client.cache = SimpleNamespace(client=None)
+    client.log = logging.getLogger("test-tmdb-client")
+    client.token = "token"
+    client.language = "en-US"
+    client.find_by_imdb = None
+    client._is_rejected_match = lambda item, details: False
+
+    async def _fake_search_ranked(query: str, media_type: str, year: int | None, limit: int = 5):
+        if media_type != "movie":
+            return []
+        return [
+            {
+                "tmdb_id": 555,
+                "media_type": "movie",
+                "tmdb_title": "Good Title",
+                "tmdb_original_title": "Good Title",
+                "search_match_title": "Good Title",
+                "search_match_original_title": "Good Title",
+                "tmdb_release_date": "2025-01-01",
+                "tmdb_rating": 7.1,
+                "tmdb_vote_count": 99,
+                "tmdb_status": "Released",
+                "search_score": 1.0,
+            }
+        ]
+
+    client.search_ranked = _fake_search_ranked
+    monkeypatch.setattr(
+        tmdb_client_module,
+        "title_search_candidates",
+        lambda source_title, cleaned_title: ["Bad Alias", "Good Title"],
+    )
+    monkeypatch.setattr(tmdb_client_module, "_extract_slash_title_candidates", lambda source_title: [])
+    monkeypatch.setattr(
+        tmdb_client_module,
+        "extract_tmdb_match_features",
+        lambda item, query, details, requested_media_type: SimpleNamespace(
+            query_used=query,
+            to_dict=lambda: {"query_used": query},
+        ),
+    )
+    monkeypatch.setattr(
+        tmdb_client_module,
+        "score_tmdb_match_candidate",
+        lambda features: 9.0 if features.query_used == "Bad Alias" else 1.0,
+    )
+    monkeypatch.setattr(
+        tmdb_client_module,
+        "tmdb_match_looks_valid",
+        lambda item, query, details, requested_media_type: query == "Good Title",
+    )
+
+    item = {
+        "kinozal_id": "3006",
+        "source_uid": "kinozal:3006",
+        "source_title": "Good Title / 2025 / WEB-DL (1080p)",
+        "source_description": "",
+        "media_type": "movie",
+        "source_year": 2025,
+    }
+
+    result = asyncio.run(client.enrich_item(item))
+
+    assert result["tmdb_id"] == 555
+    assert result["tmdb_match_path"] == "search"
+    assert "query=Good Title" in result["tmdb_match_evidence"]
+    assert "search_unmatched" not in str(result.get("tmdb_match_path") or "")

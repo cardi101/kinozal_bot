@@ -20,12 +20,14 @@ class _FakeCursor:
 
 
 class _FakeConn:
-    def __init__(self, claim_row=None):
+    def __init__(self, claim_row=None, *, live_item_exists: bool = True):
         self.claim_rows = {}
         if claim_row:
             event_key = str(claim_row.get("event_key") or "legacy")
             self.claim_rows[event_key] = dict(claim_row)
         self.commits = 0
+        self.live_item_exists = live_item_exists
+        self.deliveries = []
 
     def execute(self, query: str, params=None):
         params = params or ()
@@ -81,6 +83,53 @@ class _FakeConn:
                 for claim_row in self.claim_rows.values()
             )
             return _FakeCursor({"exists": 1} if is_active else None)
+
+        if normalized == "SELECT 1 FROM items WHERE id = ? LIMIT 1":
+            return _FakeCursor({"exists": 1} if self.live_item_exists else None)
+
+        if normalized.startswith("INSERT INTO deliveries("):
+            self.deliveries.append(tuple(params))
+            return _FakeCursor()
+
+        if normalized.startswith("UPDATE delivery_claims SET status = 'sent'"):
+            sent_at = params[0]
+            updated_at = params[1]
+            tg_user_id = params[2]
+            event_key = params[4]
+            item_id = params[6]
+            event_type = params[7]
+            for claim_row in self.claim_rows.values():
+                if int(claim_row.get("tg_user_id") or tg_user_id) != tg_user_id:
+                    continue
+                has_key = str(claim_row.get("event_key") or "") != ""
+                key_matches = has_key and str(claim_row.get("event_key") or "") == str(event_key or "")
+                legacy_matches = (not has_key) and int(claim_row.get("item_id") or 0) == int(item_id) and str(claim_row.get("event_type") or "") == str(event_type or "")
+                if key_matches or legacy_matches:
+                    claim_row["status"] = "sent"
+                    claim_row["sent_at"] = sent_at
+                    claim_row["updated_at"] = updated_at
+                    claim_row["last_error"] = ""
+            return _FakeCursor()
+
+        if normalized.startswith("UPDATE delivery_claims SET status = 'failed'"):
+            error = params[0]
+            updated_at = params[1]
+            tg_user_id = params[2]
+            event_key = params[4]
+            item_id = params[6]
+            for claim_row in self.claim_rows.values():
+                if int(claim_row.get("tg_user_id") or tg_user_id) != tg_user_id:
+                    continue
+                if str(claim_row.get("status") or "") != "sending":
+                    continue
+                has_key = str(claim_row.get("event_key") or "") != ""
+                key_matches = has_key and str(claim_row.get("event_key") or "") == str(event_key or "")
+                legacy_matches = (not has_key) and int(claim_row.get("item_id") or 0) == int(item_id)
+                if key_matches or legacy_matches:
+                    claim_row["status"] = "failed"
+                    claim_row["updated_at"] = updated_at
+                    claim_row["last_error"] = error
+            return _FakeCursor()
 
         return _FakeCursor()
 
@@ -227,3 +276,140 @@ def test_begin_delivery_claim_allows_distinct_release_text_event_for_same_item(m
 
     assert claimed_release is True
     assert claimed_release_text is True
+
+
+def test_mark_delivery_claim_failed_targets_only_matching_event_key(monkeypatch) -> None:
+    now = 60_000
+    conn = _FakeConn()
+    conn.claim_rows = {
+        "release:1001:2128422:v1": {
+            "tg_user_id": 1001,
+            "item_id": 42,
+            "event_type": "release",
+            "event_key": "release:1001:2128422:v1",
+            "status": "sending",
+            "claimed_at": now,
+            "updated_at": now,
+        },
+        "release_text:1001:2128422:abc": {
+            "tg_user_id": 1001,
+            "item_id": 42,
+            "event_type": "release_text",
+            "event_key": "release_text:1001:2128422:abc",
+            "status": "sending",
+            "claimed_at": now,
+            "updated_at": now,
+        },
+    }
+    repository = DeliveryRepository(_FakeDB(conn))
+    monkeypatch.setattr(delivery_repo_module, "utc_ts", lambda: now + 1)
+
+    repository.mark_delivery_claim_failed(1001, 42, error="boom", event_key="release_text:1001:2128422:abc")
+
+    assert conn.claim_rows["release:1001:2128422:v1"]["status"] == "sending"
+    assert conn.claim_rows["release_text:1001:2128422:abc"]["status"] == "failed"
+
+
+def test_record_delivery_marks_only_matching_event_key(monkeypatch) -> None:
+    now = 70_000
+    conn = _FakeConn()
+    conn.claim_rows = {
+        "release:1001:2128422:v1": {
+            "tg_user_id": 1001,
+            "item_id": 42,
+            "event_type": "release",
+            "event_key": "release:1001:2128422:v1",
+            "status": "sending",
+            "claimed_at": now,
+            "updated_at": now,
+        },
+        "release_text:1001:2128422:abc": {
+            "tg_user_id": 1001,
+            "item_id": 42,
+            "event_type": "release_text",
+            "event_key": "release_text:1001:2128422:abc",
+            "status": "sending",
+            "claimed_at": now,
+            "updated_at": now,
+        },
+    }
+    repository = DeliveryRepository(_FakeDB(conn))
+    monkeypatch.setattr(delivery_repo_module, "utc_ts", lambda: now + 1)
+
+    repository.record_delivery(
+        1001,
+        42,
+        7,
+        [7],
+        delivery_audit={"event_type": "release", "event_key": "release:1001:2128422:v1"},
+        event_type="release",
+        event_key="release:1001:2128422:v1",
+    )
+
+    assert conn.claim_rows["release:1001:2128422:v1"]["status"] == "sent"
+    assert conn.claim_rows["release_text:1001:2128422:abc"]["status"] == "sending"
+
+
+def test_record_delivery_marks_only_matching_event_key_as_sent(monkeypatch) -> None:
+    now = 60_000
+    conn = _FakeConn()
+    conn.claim_rows["release:1001:2128422:v1"] = {
+        "tg_user_id": 1001,
+        "item_id": 42,
+        "event_type": "release",
+        "event_key": "release:1001:2128422:v1",
+        "status": "sending",
+    }
+    conn.claim_rows["release_text:1001:2128422:abc"] = {
+        "tg_user_id": 1001,
+        "item_id": 42,
+        "event_type": "release_text",
+        "event_key": "release_text:1001:2128422:abc",
+        "status": "sending",
+    }
+    repository = DeliveryRepository(_FakeDB(conn))
+    monkeypatch.setattr(delivery_repo_module, "utc_ts", lambda: now)
+
+    repository.record_delivery(
+        1001,
+        42,
+        7,
+        [7],
+        delivery_audit={"event_type": "release", "event_key": "release:1001:2128422:v1"},
+        event_type="release",
+        event_key="release:1001:2128422:v1",
+    )
+
+    assert conn.claim_rows["release:1001:2128422:v1"]["status"] == "sent"
+    assert conn.claim_rows["release_text:1001:2128422:abc"]["status"] == "sending"
+
+
+def test_mark_delivery_claim_failed_marks_only_matching_event_key(monkeypatch) -> None:
+    now = 70_000
+    conn = _FakeConn()
+    conn.claim_rows["grouped:1001:tmdb:77:aaa"] = {
+        "tg_user_id": 1001,
+        "item_id": 42,
+        "event_type": "grouped",
+        "event_key": "grouped:1001:tmdb:77:aaa",
+        "status": "sending",
+    }
+    conn.claim_rows["release:1001:2128422:v1"] = {
+        "tg_user_id": 1001,
+        "item_id": 42,
+        "event_type": "release",
+        "event_key": "release:1001:2128422:v1",
+        "status": "sending",
+    }
+    repository = DeliveryRepository(_FakeDB(conn))
+    monkeypatch.setattr(delivery_repo_module, "utc_ts", lambda: now)
+
+    repository.mark_delivery_claim_failed(
+        1001,
+        42,
+        error="group send failed",
+        event_key="grouped:1001:tmdb:77:aaa",
+    )
+
+    assert conn.claim_rows["grouped:1001:tmdb:77:aaa"]["status"] == "failed"
+    assert conn.claim_rows["release:1001:2128422:v1"]["status"] == "sending"

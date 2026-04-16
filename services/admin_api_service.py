@@ -203,6 +203,7 @@ class AdminApiService:
         live_item = None
         if live:
             rematch_input = ReleaseItem.from_payload(_strip_existing_match_fields(item))
+            rematch_input.set("_skip_kinozal_override", True)
             live_item = (await self.tmdb_service.enrich_item(rematch_input)).to_dict()
 
         def _parse_debug_events(value: Any) -> List[Dict[str, Any]]:

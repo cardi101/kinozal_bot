@@ -251,8 +251,19 @@ class WorkerRepository:
         primary_sub_id: int,
         matched_sub_ids: List[int],
         delivery_audit: Optional[Dict[str, Any]] = None,
+        *,
+        event_type: str = "",
+        event_key: str = "",
     ) -> None:
-        self.db.record_delivery(tg_user_id, item_id, primary_sub_id, matched_sub_ids, delivery_audit=delivery_audit)
+        self.db.record_delivery(
+            tg_user_id,
+            item_id,
+            primary_sub_id,
+            matched_sub_ids,
+            delivery_audit=delivery_audit,
+            event_type=event_type,
+            event_key=event_key,
+        )
 
     def begin_delivery_claim(
         self,
@@ -276,8 +287,8 @@ class WorkerRepository:
             event_key=event_key,
         )
 
-    def mark_delivery_claim_failed(self, tg_user_id: int, item_id: int, error: str = "") -> None:
-        self.db.mark_delivery_claim_failed(tg_user_id, item_id, error=error)
+    def mark_delivery_claim_failed(self, tg_user_id: int, item_id: int, error: str = "", *, event_key: str = "") -> None:
+        self.db.mark_delivery_claim_failed(tg_user_id, item_id, error=error, event_key=event_key)
 
     def get_latest_delivered_related_item(self, tg_user_id: int, item: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         return self.db.get_latest_delivered_related_item(tg_user_id, item)

@@ -1245,7 +1245,6 @@ class TMDBClient:
 
                 seen = set()
                 candidate_pool: List[Dict[str, Any]] = []
-                pooled_by_key: Dict[Tuple[str, int], Dict[str, Any]] = {}
                 for candidate, mt, y in search_plan:
                     if _is_hard_blocked_generic_candidate(candidate):
                         self.log.info(
@@ -1294,7 +1293,6 @@ class TMDBClient:
                             candidate_score=candidate_score,
                             features=features.to_dict(),
                         )
-                        pool_key = (str(ranked_details_item.get("media_type") or mt), int(ranked_details_item.get("tmdb_id") or 0))
                         candidate_entry = {
                             "query": candidate,
                             "requested_media_type": mt,
@@ -1304,18 +1302,10 @@ class TMDBClient:
                             "candidate_score": candidate_score,
                             "search_score": float(ranked_details_item.get("search_score") or 0.0),
                         }
-                        existing_entry = pooled_by_key.get(pool_key)
-                        if existing_entry is None or (
-                            candidate_score,
-                            candidate_entry["search_score"],
-                        ) > (
-                            float(existing_entry.get("candidate_score") or 0.0),
-                            float(existing_entry.get("search_score") or 0.0),
-                        ):
-                            pooled_by_key[pool_key] = candidate_entry
+                        candidate_pool.append(candidate_entry)
 
                 candidate_pool = sorted(
-                    pooled_by_key.values(),
+                    candidate_pool,
                     key=lambda row: (
                         float(row.get("candidate_score") or 0.0),
                         float(row.get("search_score") or 0.0),

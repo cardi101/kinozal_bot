@@ -1,6 +1,7 @@
 import asyncio
 
-from domain import ReleaseItem
+from delivery_events import build_delivery_event_key, build_grouped_event_key
+from domain import DeliveryCandidate, ReleaseItem, SubscriptionRecord
 from services.worker_service import WorkerService
 
 
@@ -110,9 +111,10 @@ class _FakeKinozalService:
 class _FakeDeliveryService:
     def __init__(self) -> None:
         self.sent: list[tuple[int, int]] = []
-        self.recorded: list[tuple[int, int, str]] = []
-        self.claimed: list[tuple[int, int, str]] = []
-        self.failed: list[tuple[int, int]] = []
+        self.grouped_sent: list[tuple[int, tuple[int, ...]]] = []
+        self.recorded: list[tuple[int, int, str, str, str]] = []
+        self.claimed: list[tuple[int, int, str, str, str]] = []
+        self.failed: list[tuple[int, int, str]] = []
 
     async def send_item(self, tg_user_id: int, item: ReleaseItem, subs, old_release_text: str = "") -> None:
         self.sent.append((tg_user_id, item.id))
@@ -120,24 +122,95 @@ class _FakeDeliveryService:
     async def send_single(self, tg_user_id: int, delivery) -> None:
         await self.send_item(tg_user_id, delivery.item, delivery.subs, old_release_text=delivery.old_release_text)
 
-    def record_delivery(self, tg_user_id: int, item: ReleaseItem, subs, context: str = "worker") -> None:
-        self.recorded.append((tg_user_id, item.id, context))
+    async def send_grouped_items(self, tg_user_id: int, items, subs) -> None:
+        self.grouped_sent.append((tg_user_id, tuple(item.id for item in items)))
 
-    def begin_delivery_claim(self, tg_user_id: int, item: ReleaseItem, subs, context: str = "worker") -> bool:
-        self.claimed.append((tg_user_id, item.id, context))
+    def build_candidate_delivery_event(self, tg_user_id: int, delivery, *, context: str = "worker"):
+        return (
+            delivery.event_type or ("release_text" if delivery.is_release_text_change else "release"),
+            delivery.event_key
+            or build_delivery_event_key(
+                tg_user_id,
+                delivery.item,
+                context=context,
+                is_release_text_change=delivery.is_release_text_change,
+                release_text=delivery.old_release_text or delivery.item.get("source_release_text") or "",
+            ),
+        )
+
+    def build_group_delivery_event(self, tg_user_id: int, items, *, group_key: str = ""):
+        return "grouped", build_grouped_event_key(tg_user_id, items, group_key=group_key)
+
+    def record_delivery(
+        self,
+        tg_user_id: int,
+        item: ReleaseItem,
+        subs,
+        context: str = "worker",
+        *,
+        event_type: str = "",
+        event_key: str = "",
+        old_release_text: str = "",
+        grouped_event_key: str = "",
+    ) -> None:
+        self.recorded.append((tg_user_id, item.id, context, event_type, event_key or grouped_event_key))
+
+    def begin_delivery_claim(
+        self,
+        tg_user_id: int,
+        item: ReleaseItem,
+        subs,
+        context: str = "worker",
+        *,
+        event_type: str = "",
+        event_key: str = "",
+        old_release_text: str = "",
+        grouped_event_key: str = "",
+    ) -> bool:
+        self.claimed.append((tg_user_id, item.id, context, event_type, event_key or grouped_event_key))
         return True
 
-    def mark_delivery_claim_failed(self, tg_user_id: int, item: ReleaseItem, error: str = "") -> None:
-        self.failed.append((tg_user_id, item.id))
+    def mark_delivery_claim_failed(self, tg_user_id: int, item: ReleaseItem, error: str = "", *, event_key: str = "") -> None:
+        self.failed.append((tg_user_id, item.id, event_key))
 
-    async def deliver_claimed_item(self, tg_user_id: int, item: ReleaseItem, subs, *, context: str = "worker", old_release_text: str = "") -> None:
+    async def deliver_claimed_item(
+        self,
+        tg_user_id: int,
+        item: ReleaseItem,
+        subs,
+        *,
+        context: str = "worker",
+        old_release_text: str = "",
+        event_type: str = "",
+        event_key: str = "",
+        grouped_event_key: str = "",
+    ) -> None:
         await self.send_item(tg_user_id, item, subs, old_release_text=old_release_text)
-        self.record_delivery(tg_user_id, item, subs, context=context)
+        self.record_delivery(
+            tg_user_id,
+            item,
+            subs,
+            context=context,
+            event_type=event_type,
+            event_key=event_key,
+            grouped_event_key=grouped_event_key,
+        )
 
 
 class _ClaimBlockedDeliveryService(_FakeDeliveryService):
-    def begin_delivery_claim(self, tg_user_id: int, item: ReleaseItem, subs, context: str = "worker") -> bool:
-        self.claimed.append((tg_user_id, item.id, context))
+    def begin_delivery_claim(
+        self,
+        tg_user_id: int,
+        item: ReleaseItem,
+        subs,
+        context: str = "worker",
+        *,
+        event_type: str = "",
+        event_key: str = "",
+        old_release_text: str = "",
+        grouped_event_key: str = "",
+    ) -> bool:
+        self.claimed.append((tg_user_id, item.id, context, event_type, event_key or grouped_event_key))
         return False
 
 
@@ -167,7 +240,12 @@ def test_flush_due_pending_deliveries_uses_archived_item_payload() -> None:
     asyncio.run(worker._flush_due_pending_deliveries(current_hour=12, cycle_metrics=metrics))
 
     assert delivery_service.sent == [(1001, 42)]
-    assert delivery_service.recorded == [(1001, 42, "pending_flush")]
+    assert delivery_service.claimed == [
+        (1001, 42, "pending_flush", "release", "release:1001:2128422:v1")
+    ]
+    assert delivery_service.recorded == [
+        (1001, 42, "pending_flush", "release", "release:1001:2128422:v1")
+    ]
     assert repository.deleted == [(1001, 42)]
     assert metrics["deliveries_sent_total"] == 1
 
@@ -190,6 +268,42 @@ def test_flush_due_pending_deliveries_keeps_row_when_claim_already_exists() -> N
     assert delivery_service.sent == []
     assert repository.deleted == []
     assert repository.released_pending == [(1, "pending-1")]
+
+
+def test_flush_due_pending_deliveries_preserves_release_text_event_identity() -> None:
+    repository = _FakeWorkerRepository()
+    repository.lease_due_pending_deliveries = lambda current_ts=None: [
+        {
+            "id": 1,
+            "tg_user_id": 1001,
+            "item_id": 42,
+            "matched_sub_ids": "7",
+            "old_release_text": "old text",
+            "is_release_text_change": 1,
+            "event_type": "release_text",
+            "event_key": "release_text:1001:2128422:abc",
+            "lease_token": "pending-1",
+        }
+    ]
+    delivery_service = _FakeDeliveryService()
+    worker = WorkerService(
+        repository=repository,
+        kinozal_service=_FakeKinozalService(),
+        tmdb_service=None,
+        subscription_service=_FakeSubscriptionService(),
+        delivery_service=delivery_service,
+        bot=None,
+    )
+
+    metrics = worker._new_cycle_metrics()
+    asyncio.run(worker._flush_due_pending_deliveries(current_hour=12, cycle_metrics=metrics))
+
+    assert delivery_service.claimed == [
+        (1001, 42, "pending_flush", "release_text", "release_text:1001:2128422:abc")
+    ]
+    assert delivery_service.recorded == [
+        (1001, 42, "pending_flush", "release_text", "release_text:1001:2128422:abc")
+    ]
 
 
 def test_flush_due_debounce_uses_archived_item_payload() -> None:
@@ -305,6 +419,76 @@ def test_debounce_entry_survives_failed_delivery() -> None:
 
     assert repository.deleted_debounce == []
     assert repository.released_debounce == [(1001, "2128422", "debounce-1")]
+
+
+def test_grouped_delivery_uses_single_group_envelope_event_key() -> None:
+    repository = _FakeWorkerRepository()
+    delivery_service = _FakeDeliveryService()
+    worker = WorkerService(
+        repository=repository,
+        kinozal_service=_FakeKinozalService(),
+        tmdb_service=None,
+        subscription_service=_FakeSubscriptionService(),
+        delivery_service=delivery_service,
+        bot=None,
+    )
+
+    item_a = ReleaseItem.from_payload(
+        {
+            "id": 42,
+            "kinozal_id": "2128422",
+            "source_uid": "kinozal:2128422",
+            "source_title": "A",
+            "media_type": "movie",
+            "tmdb_id": 77,
+            "version_signature": "v1",
+        }
+    )
+    item_b = ReleaseItem.from_payload(
+        {
+            "id": 43,
+            "kinozal_id": "2128423",
+            "source_uid": "kinozal:2128423",
+            "source_title": "B",
+            "media_type": "movie",
+            "tmdb_id": 77,
+            "version_signature": "v2",
+        }
+    )
+    deliveries = {
+        1001: [
+            DeliveryCandidate(
+                item=item_a,
+                subs=[SubscriptionRecord.from_payload({"id": 7, "tg_user_id": 1001, "name": "Sub", "is_enabled": 1})],
+                delivery_context="worker",
+                event_type="release",
+                event_key="release:1001:2128422:v1",
+            ),
+            DeliveryCandidate(
+                item=item_b,
+                subs=[SubscriptionRecord.from_payload({"id": 7, "tg_user_id": 1001, "name": "Sub", "is_enabled": 1})],
+                delivery_context="worker",
+                event_type="release",
+                event_key="release:1001:2128423:v2",
+            ),
+        ]
+    }
+
+    metrics = worker._new_cycle_metrics()
+    asyncio.run(worker._deliver_current_cycle(deliveries, current_hour=12, cycle_metrics=metrics))
+
+    assert delivery_service.grouped_sent == [(1001, (42, 43))]
+    grouped_claims = [row for row in delivery_service.claimed if row[2] == "grouped"]
+    assert len(grouped_claims) == 2
+    assert grouped_claims[0][3] == "grouped"
+    assert grouped_claims[0][4] != grouped_claims[1][4]
+    assert grouped_claims[0][4].startswith("grouped:1001:tmdb:77:")
+    assert grouped_claims[1][4].startswith("grouped:1001:tmdb:77:")
+    grouped_records = [row for row in delivery_service.recorded if row[2] == "grouped"]
+    assert len(grouped_records) == 2
+    assert grouped_records[0][4] != grouped_records[1][4]
+    assert grouped_records[0][4].startswith("grouped:1001:tmdb:77:")
+    assert grouped_records[1][4].startswith("grouped:1001:tmdb:77:")
 
 
 class _SelectiveSubscriptionService:

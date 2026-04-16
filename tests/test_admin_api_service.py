@@ -271,6 +271,33 @@ def test_build_match_debug_strips_raw_tmdb_debug_from_item_payload() -> None:
     assert result["stored_tmdb_debug_events"] == [{"stage": "candidate_probe"}]
 
 
+def test_build_match_debug_live_bypasses_stored_override() -> None:
+    class _CapturingTMDBService:
+        def __init__(self) -> None:
+            self.last_payload = None
+
+        async def enrich_item(self, item: ReleaseItem) -> ReleaseItem:
+            self.last_payload = item.to_dict()
+            enriched = item.to_dict()
+            enriched["tmdb_id"] = 555
+            enriched["tmdb_title"] = "Live Match"
+            return ReleaseItem.from_payload(enriched)
+
+    tmdb_service = _CapturingTMDBService()
+    service = AdminApiService(
+        db=_FakeDB(),
+        tmdb_service=tmdb_service,
+        kinozal_service=None,
+        bot=None,
+    )
+
+    result = asyncio.run(service.build_match_debug("2128422", live=True))
+
+    assert tmdb_service.last_payload is not None
+    assert tmdb_service.last_payload["_skip_kinozal_override"] is True
+    assert result["live_item"]["tmdb_id"] == 555
+
+
 class _ExplainConn:
     def execute(self, query: str, params=None):
         del params

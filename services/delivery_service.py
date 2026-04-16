@@ -2,11 +2,12 @@ import asyncio
 import logging
 from typing import Any, List, Optional, Sequence
 
-from delivery_events import build_delivery_event_key, resolve_delivery_event_type
+from delivery_events import build_delivery_event_key, build_grouped_event_key, resolve_delivery_event_type
 from delivery_audit import build_delivery_audit
 from delivery_sender import send_grouped_items_to_user, send_item_to_user
 from domain import DeliveryCandidate, ReleaseItem, SubscriptionRecord
 from release_versioning import describe_variant_change
+from utils import compact_spaces
 
 log = logging.getLogger(__name__)
 
@@ -58,6 +59,7 @@ class DeliveryService:
         *,
         event_type: str,
         event_key: str,
+        grouped_event_key: str = "",
     ) -> dict:
         audit = build_delivery_audit(
             self.repository.db,
@@ -67,6 +69,8 @@ class DeliveryService:
         )
         audit["event_type"] = event_type
         audit["event_key"] = event_key
+        if grouped_event_key:
+            audit["grouped_event_key"] = grouped_event_key
         return audit
 
     def build_delivery_event(self, tg_user_id: int, item: ReleaseItem, *, context: str = "worker", old_release_text: str = "") -> tuple[str, str]:
@@ -91,12 +95,49 @@ class DeliveryService:
         )
         return event_type, event_key
 
-    def begin_delivery_claim(self, tg_user_id: int, item: ReleaseItem, subs: Sequence[SubscriptionRecord], context: str = "worker") -> bool:
+    def build_group_delivery_event(
+        self,
+        tg_user_id: int,
+        items: Sequence[ReleaseItem],
+        *,
+        group_key: str = "",
+    ) -> tuple[str, str]:
+        return "grouped", build_grouped_event_key(tg_user_id, items, group_key=group_key)
+
+    def begin_delivery_claim(
+        self,
+        tg_user_id: int,
+        item: ReleaseItem,
+        subs: Sequence[SubscriptionRecord],
+        context: str = "worker",
+        *,
+        event_type: str = "",
+        event_key: str = "",
+        old_release_text: str = "",
+        grouped_event_key: str = "",
+    ) -> bool:
         item_id = item.id
         primary_sub_id = subs[0].id if subs else 0
         matched_sub_ids = [sub.id for sub in subs]
-        event_type, event_key = self.build_delivery_event(tg_user_id, item, context=context)
-        delivery_audit = self._build_delivery_audit(item, subs, context, event_type=event_type, event_key=event_key)
+        resolved_event_type = compact_spaces(str(event_type or ""))
+        resolved_event_key = compact_spaces(str(event_key or ""))
+        if not resolved_event_type or not resolved_event_key:
+            computed_type, computed_key = self.build_delivery_event(
+                tg_user_id,
+                item,
+                context=context,
+                old_release_text=old_release_text,
+            )
+            resolved_event_type = resolved_event_type or computed_type
+            resolved_event_key = resolved_event_key or computed_key
+        delivery_audit = self._build_delivery_audit(
+            item,
+            subs,
+            context,
+            event_type=resolved_event_type,
+            event_key=resolved_event_key,
+            grouped_event_key=grouped_event_key,
+        )
         return self.repository.begin_delivery_claim(
             tg_user_id,
             item_id,
@@ -104,25 +145,55 @@ class DeliveryService:
             matched_sub_ids,
             delivery_audit=delivery_audit,
             context=context,
-            event_type=event_type,
-            event_key=event_key,
+            event_type=resolved_event_type,
+            event_key=resolved_event_key,
         )
 
-    def mark_delivery_claim_failed(self, tg_user_id: int, item: ReleaseItem, error: str = "") -> None:
-        self.repository.mark_delivery_claim_failed(tg_user_id, item.id, error=error)
+    def mark_delivery_claim_failed(self, tg_user_id: int, item: ReleaseItem, error: str = "", *, event_key: str = "") -> None:
+        self.repository.mark_delivery_claim_failed(tg_user_id, item.id, error=error, event_key=event_key)
 
-    def record_delivery(self, tg_user_id: int, item: ReleaseItem, subs: Sequence[SubscriptionRecord], context: str = "worker") -> None:
+    def record_delivery(
+        self,
+        tg_user_id: int,
+        item: ReleaseItem,
+        subs: Sequence[SubscriptionRecord],
+        context: str = "worker",
+        *,
+        event_type: str = "",
+        event_key: str = "",
+        old_release_text: str = "",
+        grouped_event_key: str = "",
+    ) -> None:
         item_id = item.id
         primary_sub_id = subs[0].id if subs else 0
         matched_sub_ids = [sub.id for sub in subs]
-        event_type, event_key = self.build_delivery_event(tg_user_id, item, context=context)
-        delivery_audit = self._build_delivery_audit(item, subs, context, event_type=event_type, event_key=event_key)
+        resolved_event_type = compact_spaces(str(event_type or ""))
+        resolved_event_key = compact_spaces(str(event_key or ""))
+        if not resolved_event_type or not resolved_event_key:
+            computed_type, computed_key = self.build_delivery_event(
+                tg_user_id,
+                item,
+                context=context,
+                old_release_text=old_release_text,
+            )
+            resolved_event_type = resolved_event_type or computed_type
+            resolved_event_key = resolved_event_key or computed_key
+        delivery_audit = self._build_delivery_audit(
+            item,
+            subs,
+            context,
+            event_type=resolved_event_type,
+            event_key=resolved_event_key,
+            grouped_event_key=grouped_event_key,
+        )
         self.repository.record_delivery(
             tg_user_id,
             item_id,
             primary_sub_id,
             matched_sub_ids,
             delivery_audit=delivery_audit,
+            event_type=resolved_event_type,
+            event_key=resolved_event_key,
         )
 
     async def deliver_claimed_item(
@@ -133,6 +204,9 @@ class DeliveryService:
         *,
         context: str = "worker",
         old_release_text: str = "",
+        event_type: str = "",
+        event_key: str = "",
+        grouped_event_key: str = "",
     ) -> None:
         try:
             await self.send_item(
@@ -141,10 +215,19 @@ class DeliveryService:
                 subs,
                 old_release_text=old_release_text,
             )
-            self.record_delivery(tg_user_id, item, subs, context=context)
+            self.record_delivery(
+                tg_user_id,
+                item,
+                subs,
+                context=context,
+                event_type=event_type,
+                event_key=event_key,
+                old_release_text=old_release_text,
+                grouped_event_key=grouped_event_key,
+            )
             await asyncio.sleep(0.12)
         except Exception as exc:
-            self.mark_delivery_claim_failed(tg_user_id, item, error=str(exc))
+            self.mark_delivery_claim_failed(tg_user_id, item, error=str(exc), event_key=event_key)
             raise
 
     async def send_single(self, tg_user_id: int, delivery: DeliveryCandidate) -> None:
@@ -178,7 +261,16 @@ class DeliveryService:
             )
 
         claim_context = delivery.delivery_context or "worker"
-        if not self.begin_delivery_claim(tg_user_id, item, matched_subs, context=claim_context):
+        event_type, event_key = self.build_candidate_delivery_event(tg_user_id, delivery, context=claim_context)
+        if not self.begin_delivery_claim(
+            tg_user_id,
+            item,
+            matched_subs,
+            context=claim_context,
+            event_type=event_type,
+            event_key=event_key,
+            old_release_text=delivery.old_release_text,
+        ):
             return
         await self.deliver_claimed_item(
             tg_user_id,
@@ -186,4 +278,6 @@ class DeliveryService:
             matched_subs,
             context=claim_context,
             old_release_text=delivery.old_release_text,
+            event_type=event_type,
+            event_key=event_key,
         )

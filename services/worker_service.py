@@ -645,7 +645,21 @@ class WorkerService:
                 continue
             try:
                 log.info("Flushing pending delivery item=%s to user=%s", pending_item_id, flush_uid)
-                if not self.delivery_service.begin_delivery_claim(flush_uid, pending_item, pending_subs, context="pending_flush"):
+                pending_is_release_text = bool(int(pending_delivery.get("is_release_text_change") or 0))
+                pending_event_type = compact_spaces(str(pending_delivery.get("event_type") or "")) or resolve_delivery_event_type(
+                    "release_text_update" if pending_is_release_text else "worker",
+                    is_release_text_change=pending_is_release_text,
+                )
+                pending_event_key = compact_spaces(str(pending_delivery.get("event_key") or ""))
+                if not self.delivery_service.begin_delivery_claim(
+                    flush_uid,
+                    pending_item,
+                    pending_subs,
+                    context="pending_flush",
+                    event_type=pending_event_type,
+                    event_key=pending_event_key,
+                    old_release_text=str(pending_delivery.get("old_release_text") or ""),
+                ):
                     self.repository.release_pending_delivery_lease(int(pending_delivery["id"]), lease_token=lease_token)
                     continue
                 await self.delivery_service.deliver_claimed_item(
@@ -654,6 +668,8 @@ class WorkerService:
                     pending_subs,
                     context="pending_flush",
                     old_release_text=str(pending_delivery.get("old_release_text") or ""),
+                    event_type=pending_event_type,
+                    event_key=pending_event_key,
                 )
                 cycle_metrics["deliveries_sent_total"] += 1
                 self.repository.delete_pending_delivery(flush_uid, pending_item_id, event_key=event_key)
@@ -778,13 +794,26 @@ class WorkerService:
 
                 for delivery in release_text_updates:
                     try:
+                        event_type, event_key = self.delivery_service.build_candidate_delivery_event(
+                            tg_user_id,
+                            delivery,
+                            context="release_text_update",
+                        )
                         log.info(
                             "Delivering release text update item=%s to user=%s source_uid=%s",
                             delivery.item_id,
                             tg_user_id,
                             delivery.item.source_uid,
                         )
-                        if not self.delivery_service.begin_delivery_claim(tg_user_id, delivery.item, delivery.subs, context="release_text_update"):
+                        if not self.delivery_service.begin_delivery_claim(
+                            tg_user_id,
+                            delivery.item,
+                            delivery.subs,
+                            context="release_text_update",
+                            event_type=event_type,
+                            event_key=event_key,
+                            old_release_text=delivery.old_release_text,
+                        ):
                             continue
                         await self.delivery_service.deliver_claimed_item(
                             tg_user_id,
@@ -792,6 +821,8 @@ class WorkerService:
                             delivery.subs,
                             context="release_text_update",
                             old_release_text=delivery.old_release_text,
+                            event_type=event_type,
+                            event_key=event_key,
                         )
                         if delivery.debounce_kinozal_id:
                             self.repository.delete_debounce_entry(tg_user_id, delivery.debounce_kinozal_id)
@@ -830,42 +861,72 @@ class WorkerService:
                         if not group:
                             continue
                         if len(group) >= 2:
-                            claimed_group: List[DeliveryCandidate] = []
+                            group_event_type, group_event_envelope = self.delivery_service.build_group_delivery_event(
+                                tg_user_id,
+                                [delivery.item for delivery in group],
+                                group_key=f"tmdb:{tmdb_id}",
+                            )
+                            claimed_group: List[tuple[DeliveryCandidate, str]] = []
                             for delivery in group:
-                                if self.delivery_service.begin_delivery_claim(tg_user_id, delivery.item, delivery.subs, context="grouped"):
-                                    claimed_group.append(delivery)
+                                member_event_key = f"{group_event_envelope}:item:{delivery.item_id}"
+                                if self.delivery_service.begin_delivery_claim(
+                                    tg_user_id,
+                                    delivery.item,
+                                    delivery.subs,
+                                    context="grouped",
+                                    event_type=group_event_type,
+                                    event_key=member_event_key,
+                                    grouped_event_key=group_event_envelope,
+                                ):
+                                    claimed_group.append((delivery, member_event_key))
                             if not claimed_group:
                                 continue
                             if len(claimed_group) == 1:
                                 await self.delivery_service.deliver_claimed_item(
                                     tg_user_id,
-                                    claimed_group[0].item,
-                                    claimed_group[0].subs,
+                                    claimed_group[0][0].item,
+                                    claimed_group[0][0].subs,
                                     context="grouped_singleton",
-                                    old_release_text=claimed_group[0].old_release_text,
+                                    old_release_text=claimed_group[0][0].old_release_text,
+                                    event_type=group_event_type,
+                                    event_key=claimed_group[0][1],
+                                    grouped_event_key=group_event_envelope,
                                 )
-                                if claimed_group[0].debounce_kinozal_id:
-                                    self.repository.delete_debounce_entry(tg_user_id, claimed_group[0].debounce_kinozal_id)
+                                if claimed_group[0][0].debounce_kinozal_id:
+                                    self.repository.delete_debounce_entry(tg_user_id, claimed_group[0][0].debounce_kinozal_id)
                                 cycle_metrics["deliveries_sent_total"] += 1
                                 continue
-                            all_subs = list({sub.id: sub for delivery in claimed_group for sub in delivery.subs}.values())
+                            all_subs = list({sub.id: sub for delivery, _ in claimed_group for sub in delivery.subs}.values())
                             log.info("Delivering grouped %d items tmdb=%s to user=%s", len(claimed_group), tmdb_id, tg_user_id)
                             try:
                                 await self.delivery_service.send_grouped_items(
                                     tg_user_id,
-                                    [delivery.item for delivery in claimed_group],
+                                    [delivery.item for delivery, _ in claimed_group],
                                     all_subs,
                                 )
                                 cycle_metrics["grouped_messages_total"] += 1
-                                for delivery in claimed_group:
-                                    self.delivery_service.record_delivery(tg_user_id, delivery.item, delivery.subs, context="grouped")
+                                for delivery, member_event_key in claimed_group:
+                                    self.delivery_service.record_delivery(
+                                        tg_user_id,
+                                        delivery.item,
+                                        delivery.subs,
+                                        context="grouped",
+                                        event_type=group_event_type,
+                                        event_key=member_event_key,
+                                        grouped_event_key=group_event_envelope,
+                                    )
                                     if delivery.debounce_kinozal_id:
                                         self.repository.delete_debounce_entry(tg_user_id, delivery.debounce_kinozal_id)
                                     cycle_metrics["deliveries_sent_total"] += 1
                                     await asyncio.sleep(0.12)
                             except Exception as exc:
-                                for delivery in claimed_group:
-                                    self.delivery_service.mark_delivery_claim_failed(tg_user_id, delivery.item, error=str(exc))
+                                for delivery, member_event_key in claimed_group:
+                                    self.delivery_service.mark_delivery_claim_failed(
+                                        tg_user_id,
+                                        delivery.item,
+                                        error=str(exc),
+                                        event_key=member_event_key,
+                                    )
                                     if delivery.debounce_kinozal_id and delivery.queue_lease_token:
                                         self.repository.release_debounce_lease(
                                             tg_user_id,
