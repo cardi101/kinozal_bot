@@ -7,6 +7,7 @@ from urllib.parse import quote
 
 from kinozal_http import KINOZAL_BASE, fetch_kinozal_html
 from parsing_basic import parse_imdb_id
+from parsed_release import parse_release_title
 
 log = logging.getLogger("kinozal-details")
 
@@ -41,6 +42,38 @@ def _extract_kinozal_id(link: str) -> str:
 def _extract_details_title(html: str) -> str:
     m = re.search(r"<title>(.*?)(?:\s*::\s*Кинозал\.ТВ\s*)?</title>", html or "", flags=re.I)
     return _compact(m.group(1)) if m else ""
+
+
+def _merge_missing_release_fields_from_details(item: Dict[str, Any], details_title: str) -> Dict[str, Any]:
+    normalized_title = _compact(details_title)
+    if not normalized_title:
+        return {}
+
+    try:
+        parsed = parse_release_title(normalized_title)
+    except Exception:
+        return {}
+
+    merged: Dict[str, Any] = {}
+
+    if parsed.year and not item.get("source_year"):
+        merged["source_year"] = parsed.year
+    if parsed.resolution and not item.get("source_format"):
+        merged["source_format"] = parsed.resolution
+    if parsed.audio_tracks and not item.get("source_audio_tracks"):
+        merged["source_audio_tracks"] = parsed.audio_tracks
+    if parsed.episode_progress_text and not item.get("source_episode_progress"):
+        merged["source_episode_progress"] = parsed.episode_progress_text
+    if parsed.release_type and not item.get("source_release_type"):
+        merged["source_release_type"] = parsed.release_type
+
+    if not item.get("parsed_release_json") or merged:
+        try:
+            merged["parsed_release_json"] = parsed.to_json()
+        except Exception:
+            pass
+
+    return merged
 
 
 def _build_magnet_link(info_hash: str, title: str) -> str:
@@ -551,6 +584,7 @@ async def enrich_kinozal_item_with_details(item: Dict[str, Any], force_refresh: 
         file_count = len(file_lines)
 
     details_title = _extract_details_title(main_html)
+    derived_fields = _merge_missing_release_fields_from_details(item, details_title)
 
     extra: Dict[str, Any] = {
         "source_imdb_id": source_imdb_id or "",
@@ -562,6 +596,7 @@ async def enrich_kinozal_item_with_details(item: Dict[str, Any], force_refresh: 
         "source_release_text": release_text or "",
         "details_title": details_title,
     }
+    extra.update(derived_fields)
 
     _DETAILS_CACHE[source_link] = dict(extra)
     if len(_DETAILS_CACHE) > 512:
