@@ -518,16 +518,25 @@ def tmdb_match_looks_valid(item: Dict[str, Any], query: str, details: Dict[str, 
         single_season_context = (expected_seasons in (None, 1)) and (tmdb_seasons_int in (None, 1))
         if single_season_context and expected_episodes and tmdb_episodes_int:
             episode_mismatch = abs(tmdb_episodes_int - expected_episodes)
+            anime_or_on_air_case = (
+                item_content_bucket(item) == "anime"
+                or anime_fallback_signal_score(item) >= 2
+                or str(details.get("tmdb_status") or "").lower() in {"returning series", "in production", "planned", "pilot"}
+            )
+            strongish_title_match = (
+                has_exact_normalized
+                or has_substring
+                or best_overlap >= 0.45
+                or best_similarity_norm >= 0.68
+                or best_main_overlap >= 0.40
+                or best_main_similarity >= 0.68
+            )
             soft_episode_total_case = (
                 source_is_tv
                 and details_media == "tv"
-                and (has_exact_normalized or has_substring or best_overlap >= 0.72 or best_similarity_norm >= 0.90)
+                and strongish_title_match
                 and (year_delta is None or year_delta <= 1)
-                and (
-                    item_content_bucket(item) == "anime"
-                    or anime_fallback_signal_score(item) >= 2
-                    or str(details.get("tmdb_status") or "").lower() in {"returning series", "in production", "planned", "pilot"}
-                )
+                and anime_or_on_air_case
             )
             if expected_episodes >= 8 and episode_mismatch >= max(4, int(expected_episodes * 0.60)):
                 if soft_episode_total_case:

@@ -4,12 +4,24 @@ from types import SimpleNamespace
 
 from delivery_formatting import item_message
 import tmdb_client as tmdb_client_module
-from tmdb_client import TMDBClient
+from tmdb_client import TMDBClient, _should_expand_lexicon_alias
 
 
 class _DummyDb:
     def get_all_genres_merged(self):
         return {}
+
+
+def test_should_expand_lexicon_alias_skips_weak_semantic_translation() -> None:
+    lexicon_best = SimpleNamespace(canonical_title="Tadaima, Ojamasaremasu!")
+    item = {
+        "source_title": "Я вернулась! Не помешаю? (1-2 серии из 12) / Tadaima, Ojama Saremasu! / 2026 / ЛМ (Dream Cast, DreamyVoice), СТ / HEVC / WEBRip (1080p)",
+        "cleaned_title": "Я вернулась Не помешаю / Tadaima Ojama Saremasu",
+    }
+
+    assert _should_expand_lexicon_alias(item, item["cleaned_title"], lexicon_best, "Tadaima, Ojama Saremasu!") is True
+    assert _should_expand_lexicon_alias(item, item["cleaned_title"], lexicon_best, "ただいま、おじゃまされます！") is True
+    assert _should_expand_lexicon_alias(item, item["cleaned_title"], lexicon_best, "I’m Home!") is False
 
 
 def test_stored_override_none_details_blocks_fallback_paths() -> None:

@@ -52,6 +52,35 @@ TMDB_CLEARABLE_FIELDS = {
 }
 
 
+def _normalize_source_audio_tracks(value: Any) -> List[str]:
+    current = value
+    for _ in range(4):
+        if isinstance(current, str):
+            raw = compact_spaces(current)
+            if not raw:
+                return []
+            try:
+                loaded = json.loads(raw)
+            except Exception:
+                break
+            if loaded == current:
+                break
+            current = loaded
+            continue
+        break
+
+    if isinstance(current, str):
+        return [current] if compact_spaces(current) else []
+    if isinstance(current, (list, tuple, set)):
+        normalized: List[str] = []
+        for item in current:
+            label = compact_spaces(str(item or ""))
+            if label:
+                normalized.append(label)
+        return normalized
+    return []
+
+
 def _item_snapshot_from_delivery_audit(delivery_audit_json: Any) -> Dict[str, Any]:
     raw = str(delivery_audit_json or "").strip()
     if not raw:
@@ -135,6 +164,7 @@ class ItemsRepository(BaseRepository):
         payload["archived_at"] = int(row.get("archived_at") or 0)
         payload["archive_reason"] = row.get("archive_reason") or ""
         payload["merged_into_item_id"] = row.get("merged_into_item_id")
+        payload["source_audio_tracks"] = _normalize_source_audio_tracks(payload.get("source_audio_tracks"))
         payload["tmdb_countries"] = parse_country_codes(payload.get("tmdb_countries"))
         payload["manual_country_codes"] = parse_country_codes(payload.get("manual_country_codes"))
         genre_ids = payload.get("genre_ids")
@@ -222,7 +252,7 @@ class ItemsRepository(BaseRepository):
             "source_format": item.get("source_format"),
             "source_description": item.get("source_description"),
             "source_episode_progress": item.get("source_episode_progress"),
-            "source_audio_tracks": json.dumps(item.get("source_audio_tracks", []), ensure_ascii=False),
+            "source_audio_tracks": json.dumps(_normalize_source_audio_tracks(item.get("source_audio_tracks", [])), ensure_ascii=False),
             "imdb_id": item.get("imdb_id"),
             "mal_id": item.get("mal_id"),
             "cleaned_title": item.get("cleaned_title"),
@@ -406,6 +436,7 @@ class ItemsRepository(BaseRepository):
                 (item_id,),
             ).fetchall()
             data["genre_ids"] = [int(value["genre_id"]) for value in genres]
+            data["source_audio_tracks"] = _normalize_source_audio_tracks(data.get("source_audio_tracks"))
             data["tmdb_countries"] = parse_country_codes(data.get("tmdb_countries"))
             data["manual_country_codes"] = parse_country_codes(data.get("manual_country_codes"))
             if not compact_spaces(str(data.get("kinozal_id") or "")):
@@ -857,7 +888,7 @@ class ItemsRepository(BaseRepository):
                 full_item.get("source_format"),
                 full_item.get("source_description"),
                 full_item.get("source_episode_progress"),
-                json.dumps(full_item.get("source_audio_tracks", []), ensure_ascii=False),
+                json.dumps(_normalize_source_audio_tracks(full_item.get("source_audio_tracks", [])), ensure_ascii=False),
                 full_item.get("imdb_id"),
                 full_item.get("cleaned_title"),
                 full_item.get("source_category_id"),

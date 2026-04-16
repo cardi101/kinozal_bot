@@ -23,6 +23,8 @@ def test_strip_existing_match_fields_marks_explicit_match_clear() -> None:
     assert "tmdb_id" not in cleaned
     assert "imdb_id" not in cleaned
     assert "media_type" not in cleaned
+    assert "tmdb_countries" not in cleaned
+    assert "tmdb_original_language" not in cleaned
 
 
 class _FakeDB:
@@ -75,3 +77,41 @@ def test_rematch_item_live_bypasses_and_clears_stored_override() -> None:
     assert db.deleted_override == "2128422"
     assert db.saved_payload["tmdb_id"] == 777
     assert after["tmdb_match_path"] == "search"
+
+
+class _FakeDBWithInsertedRow(_FakeDB):
+    def save_item(self, payload: dict):
+        self.saved_payload = dict(payload)
+        return (99, True, True)
+
+    def get_item(self, item_id: int):
+        if item_id == 99:
+            return {"id": 99, "kinozal_id": "2128422", "tmdb_match_path": "search", "tmdb_id": 777}
+        return {"id": item_id, "kinozal_id": "2128422", "tmdb_match_path": "search_unmatched"}
+
+    def find_item_by_kinozal_id(self, kinozal_id: str):
+        return {"id": 99, "kinozal_id": kinozal_id, "tmdb_match_path": "search", "tmdb_id": 777}
+
+
+def test_rematch_item_live_refreshes_saved_item_id_when_upsert_created_new_row() -> None:
+    db = _FakeDBWithInsertedRow()
+    tmdb = _FakeTMDB()
+    item = {
+        "id": 42,
+        "kinozal_id": "2128422",
+        "source_uid": "kinozal:2128422",
+        "source_title": "Sample",
+        "tmdb_id": 123,
+        "tmdb_match_path": "stored_override",
+        "tmdb_countries": ["KR"],
+        "tmdb_original_language": "ko",
+    }
+
+    before, after, ok = asyncio.run(rematch_item_live(db, tmdb, item))
+
+    assert ok is True
+    assert before["tmdb_id"] == 123
+    assert after["id"] == 99
+    assert after["tmdb_id"] == 777
+    assert "tmdb_countries" not in tmdb.payload
+    assert "tmdb_original_language" not in tmdb.payload

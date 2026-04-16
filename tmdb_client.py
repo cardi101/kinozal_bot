@@ -100,6 +100,50 @@ def _should_skip_generic_lexicon_expansion(item: Dict[str, Any], lexicon_best: A
     return matched_generic and not matched_specific
 
 
+def _contains_cjk_or_kana(value: str) -> bool:
+    return bool(re.search(r"[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff]", value or ""))
+
+
+def _should_expand_lexicon_alias(
+    item: Dict[str, Any],
+    fallback_cleaned_title: str,
+    lexicon_best: Any,
+    value: str,
+) -> bool:
+    value = compact_spaces(value or "")
+    if not value:
+        return False
+
+    if _contains_cjk_or_kana(value):
+        return True
+
+    value_norm = _normalize_anime_guard_text(value)
+    if not value_norm:
+        return False
+    if len(value_norm.split()) == 1 and value_norm in _GENERIC_SINGLE_TOKEN_ANIME_ALIASES:
+        return False
+
+    candidate_tokens = set(text_tokens(value_norm))
+    source_variants = [
+        fallback_cleaned_title,
+        item.get("cleaned_title") or "",
+        item.get("source_title") or "",
+        getattr(lexicon_best, "canonical_title", "") or "",
+    ]
+    for source_value in source_variants:
+        source_clean = compact_spaces(clean_release_title(source_value or "") or source_value or "")
+        source_norm = _normalize_anime_guard_text(source_clean)
+        if not source_norm:
+            continue
+        if value_norm == source_norm or value_norm in source_norm or source_norm in value_norm:
+            return True
+        if candidate_tokens and candidate_tokens & set(text_tokens(source_norm)):
+            return True
+        if similarity(value_norm, source_norm) >= 0.72:
+            return True
+    return False
+
+
 _GENERIC_CYRILLIC_SEARCH_TOKENS = {
     "дело",
     "фильм",
@@ -1145,15 +1189,11 @@ class TMDBClient:
                         expanded_candidates = []
                         for value in lexicon_best.titles[:8]:
                             value = " ".join(str(value or "").split()).strip()
-                            value_norm = _normalize_anime_guard_text(value)
                             if (
                                 value
                                 and value not in expanded_candidates
                                 and value not in candidates
-                                and not (
-                                    len(value_norm.split()) == 1
-                                    and value_norm in _GENERIC_SINGLE_TOKEN_ANIME_ALIASES
-                                )
+                                and _should_expand_lexicon_alias(item, fallback_cleaned_title, lexicon_best, value)
                             ):
                                 expanded_candidates.append(value)
 

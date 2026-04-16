@@ -22,6 +22,7 @@ def _strip_existing_match_fields(item: Dict[str, Any]) -> Dict[str, Any]:
         "tmdb_id",
         "tmdb_title",
         "tmdb_original_title",
+        "tmdb_original_language",
         "tmdb_overview",
         "tmdb_poster_url",
         "tmdb_backdrop_url",
@@ -32,6 +33,7 @@ def _strip_existing_match_fields(item: Dict[str, Any]) -> Dict[str, Any]:
         "tmdb_genres",
         "tmdb_media_type",
         "tmdb_status",
+        "tmdb_countries",
         "tmdb_episode_run_time",
         "tmdb_number_of_seasons",
         "tmdb_number_of_episodes",
@@ -237,8 +239,18 @@ async def rematch_item_live(db: Any, tmdb: Any, item: Dict[str, Any]) -> Tuple[O
         kinozal_id = compact_spaces(str(item.get("kinozal_id") or "")) or resolve_item_kinozal_id(item)
         if kinozal_id and hasattr(db, "delete_match_override"):
             db.delete_match_override(kinozal_id)
-        db.save_item(enriched)
-        refreshed = db.get_item(int(item["id"])) or db.find_item_by_kinozal_id(str(item.get("kinozal_id") or ""))
+        saved_id = int(item.get("id") or 0)
+        save_result = db.save_item(enriched)
+        if isinstance(save_result, tuple) and save_result:
+            try:
+                saved_id = int(save_result[0] or saved_id)
+            except Exception:
+                pass
+        refreshed = None
+        if kinozal_id:
+            refreshed = db.find_item_by_kinozal_id(str(item.get("kinozal_id") or ""))
+        if refreshed is None and saved_id:
+            refreshed = db.get_item(saved_id)
         if refreshed is not None and enriched.get("tmdb_match_path"):
             refreshed["tmdb_match_path"] = enriched.get("tmdb_match_path")
         return before, refreshed, True
