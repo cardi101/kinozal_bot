@@ -248,6 +248,8 @@ curl -X POST -H "X-Admin-Token: $ADMIN_HTTP_TOKEN" "http://localhost:8000/admin/
 docker compose exec -T app python scripts/audit_missing_progress_versions.py --with-users-only --limit 20
 docker compose exec -T app python scripts/repair_missing_progress_deliveries.py --limit 20
 docker compose exec -T app python scripts/repair_missing_progress_deliveries.py --apply --limit 20
+docker compose exec -T app python scripts/backfill_audio_and_version_fields.py --limit 50
+docker compose exec -T app python scripts/backfill_audio_and_version_fields.py --apply --limit 50
 ```
 
 `repair_missing_progress_deliveries.py` по умолчанию работает безопасно:
@@ -255,6 +257,8 @@ docker compose exec -T app python scripts/repair_missing_progress_deliveries.py 
 - берёт только `latest_gap` кандидатов
 - смотрит только пользователей, у которых релиз реально доставлялся раньше
 - перед replay повторно прогоняет `explain_delivery`, поэтому без `ready`-статуса ничего не досылает
+
+`backfill_audio_and_version_fields.py` пересчитывает только derived audio/version поля in place и по умолчанию работает в dry-run.
 
 ---
 

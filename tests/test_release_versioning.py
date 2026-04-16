@@ -3,6 +3,7 @@ from release_versioning import (
     classify_episode_progress_change,
     compare_episode_progress,
     extract_kinozal_id,
+    get_item_variant_components,
     normalize_audio_tracks_signature,
     parse_episode_progress,
     refresh_item_version_fields,
@@ -116,3 +117,45 @@ def test_normalize_audio_tracks_signature_keeps_track_multiplicity() -> None:
 
 def test_parse_audio_tracks_supports_suffix_multiplier() -> None:
     assert parse_audio_tracks("Sample / 2026 / ДБ x2, СТ ×2 / WEB-DL (1080p)") == ["ДБ", "ДБ", "СТ", "СТ"]
+
+
+def test_refresh_item_version_fields_derives_professional_single_voice_audio_from_title() -> None:
+    item = {
+        "source_uid": "kinozal:3002",
+        "media_type": "tv",
+        "source_title": "Секреты дикой природы (Дикие тайны Китая) (1 сезон: 1-5 серии из 5) / China's Wild Secrets / 2025 / ПО / WEB-DL (1080p)",
+        "source_episode_progress": "1 сезон: 1-5 серии из 5",
+        "source_format": "1080",
+        "source_audio_tracks": [],
+    }
+
+    refreshed = refresh_item_version_fields(item)
+
+    assert refreshed["variant_components"]["audio"] == "по"
+    assert refreshed["version_signature"]
+    assert refreshed["variant_signature"]
+
+
+def test_variant_components_distinguish_audio_labels() -> None:
+    db_item = {
+        "source_uid": "kinozal:5001",
+        "media_type": "movie",
+        "source_title": "Последствия / Outcome / 2026 / ДБ / WEB-DL (1080p)",
+        "source_format": "1080",
+        "source_audio_tracks": ["ДБ"],
+    }
+    po_item = {
+        "source_uid": "kinozal:5001",
+        "media_type": "movie",
+        "source_title": "Последствия / Outcome / 2026 / ПО / WEB-DL (1080p)",
+        "source_format": "1080",
+        "source_audio_tracks": ["ПО"],
+    }
+
+    db_refreshed = refresh_item_version_fields(db_item)
+    po_refreshed = refresh_item_version_fields(po_item)
+
+    assert get_item_variant_components(db_refreshed)["audio"] == "дб"
+    assert get_item_variant_components(po_refreshed)["audio"] == "по"
+    assert db_refreshed["variant_signature"] != po_refreshed["variant_signature"]
+    assert db_refreshed["version_signature"] != po_refreshed["version_signature"]

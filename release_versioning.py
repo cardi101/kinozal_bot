@@ -2,6 +2,7 @@ import json
 import re
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
+from parsing_audio import parse_audio_tracks
 from utils import compact_spaces, sha1_text
 
 
@@ -221,6 +222,13 @@ def normalize_audio_tracks_signature(value: Any) -> str:
     return ",".join(normalized)
 
 
+def _resolved_audio_tracks(source_audio_tracks: Any, source_title: Any) -> Any:
+    if normalize_audio_tracks_signature(source_audio_tracks):
+        return source_audio_tracks
+    parsed = parse_audio_tracks(compact_spaces(str(source_title or "")))
+    return parsed or source_audio_tracks
+
+
 def version_release_type_signature(source_title: Any) -> str:
     title = compact_spaces(str(source_title or "")).lower()
     if not title:
@@ -242,7 +250,7 @@ def build_variant_signature(
     progress_sig = normalize_episode_progress_signature(source_episode_progress) or "noprogress"
     format_sig = compact_spaces(str(source_format or "")).lower() or "nofmt"
     release_sig = version_release_type_signature(source_title) or "norelease"
-    audio_sig = normalize_audio_tracks_signature(source_audio_tracks) or "noaudio"
+    audio_sig = normalize_audio_tracks_signature(_resolved_audio_tracks(source_audio_tracks, source_title)) or "noaudio"
     if media == "tv":
         return sha1_text(f"tv|{progress_sig}|{format_sig}|{release_sig}|{audio_sig}")
     if media == "movie":
@@ -296,12 +304,13 @@ def get_variant_components(
     source_audio_tracks: Any,
 ) -> Dict[str, str]:
     media = compact_spaces(str(media_type or "movie")).lower() or "movie"
+    resolved_audio_tracks = _resolved_audio_tracks(source_audio_tracks, source_title)
     return {
         "media": media,
         "progress": normalize_episode_progress_signature(source_episode_progress) or "noprogress",
         "format": compact_spaces(str(source_format or "")).lower() or "nofmt",
         "release": version_release_type_signature(source_title) or "norelease",
-        "audio": normalize_audio_tracks_signature(source_audio_tracks) or "noaudio",
+        "audio": normalize_audio_tracks_signature(resolved_audio_tracks) or "noaudio",
     }
 
 

@@ -1,5 +1,6 @@
 from title_prep import (
     clean_release_title,
+    extract_title_aliases_from_text,
     is_bad_tmdb_candidate,
     looks_like_structured_numeric_title,
     split_title_parts,
@@ -74,3 +75,18 @@ def test_split_title_parts_empty():
     ru, en = split_title_parts("")
     assert ru == ""
     assert en == ""
+
+
+def test_extract_title_aliases_ignores_audio_studio_parentheses() -> None:
+    aliases = extract_title_aliases_from_text(
+        "Я вернулась! Не помешаю? (1-2 серии из 12) / Tadaima, Ojama Saremasu! / 2026 / ЛМ (Dream Cast, DreamyVoice), СТ / HEVC / WEBRip (1080p)"
+    )
+
+    assert "Dream Cast, DreamyVoice" not in aliases
+    assert "Tadaima, Ojama Saremasu!" not in aliases
+
+
+def test_clean_release_title_keeps_only_title_segments_for_release_line() -> None:
+    assert clean_release_title(
+        "Мэтлок (2 сезон: 1-13 серии из 16) / Matlock / 2025 / ПМ (TVShows) / WEB-DL (1080p)"
+    ) == "Мэтлок / Matlock"

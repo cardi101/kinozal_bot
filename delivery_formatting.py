@@ -135,6 +135,10 @@ def _audio_change_label(label: str) -> str:
         return "многоголосая дорожка"
     if upper.startswith(("ЛД", "ДВО", "DVO")):
         return "двухголосая дорожка"
+    if upper.startswith("ПО"):
+        return "одноголосая дорожка"
+    if upper.startswith("ПД"):
+        return "профессиональная дорожка"
     if upper.startswith(("ДБ", "AVO", "РУ")):
         return "новая аудиодорожка"
     if upper.startswith(("СТ", "SUB")):

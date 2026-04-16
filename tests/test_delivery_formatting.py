@@ -152,6 +152,25 @@ def test_item_message_writes_full_audio_list_without_compact_suffix() -> None:
     assert "+2" not in text
 
 
+def test_item_message_shows_professional_single_voice_audio_line() -> None:
+    db = _DummyDb()
+    item = {
+        "kinozal_id": "3002",
+        "source_title": "Первый брак Джорджи и Мэнди (2 сезон: 1-15 серии из 22) / Georgie and Mandy's First Marriage / 2025 / ПО (Кураж-Бамбей) / WEB-DL (1080p)",
+        "tmdb_title": "Первый брак Джорджи и Мэнди",
+        "tmdb_original_title": "Georgie and Mandy's First Marriage",
+        "media_type": "tv",
+        "tmdb_release_date": "2024-10-17",
+        "source_format": "1080",
+        "source_episode_progress": "2 сезон: 1-15 серии из 22",
+        "tmdb_id": 235412,
+    }
+
+    text = item_message(db, item, matched_subs=[{"name": "🌍 Новинки — мир"}])
+
+    assert "Озвучка: ПО (Кураж-Бамбей)" in text
+
+
 def test_item_message_hides_low_vote_tmdb_rating() -> None:
     db = _DummyDb()
     item = {

@@ -1,5 +1,6 @@
 import html
 import logging
+import json
 from typing import Any, Dict, List, Optional, Tuple
 
 from content_buckets import resolve_item_content_bucket
@@ -112,6 +113,35 @@ def build_match_explanation(db: Any, item: Dict[str, Any], live_item: Optional[D
     match_path = compact_spaces(str(display_item.get("tmdb_match_path") or item.get("tmdb_match_path") or "")) or "—"
     match_confidence = compact_spaces(str(display_item.get("tmdb_match_confidence") or item.get("tmdb_match_confidence") or "")) or "—"
     match_evidence = compact_spaces(str(display_item.get("tmdb_match_evidence") or item.get("tmdb_match_evidence") or "")) or "—"
+    match_debug_raw = compact_spaces(str(display_item.get("tmdb_match_debug") or item.get("tmdb_match_debug") or ""))
+    match_debug_summary = "—"
+    if match_debug_raw:
+        try:
+            debug_events = json.loads(match_debug_raw)
+            if isinstance(debug_events, list):
+                summary_parts: List[str] = []
+                for event in debug_events[-6:]:
+                    if not isinstance(event, dict):
+                        continue
+                    stage = compact_spaces(str(event.get("stage") or "")) or "event"
+                    reason = compact_spaces(str(event.get("reason") or ""))
+                    tmdb_id = compact_spaces(str(event.get("tmdb_id") or ""))
+                    tmdb_title = compact_spaces(str(event.get("tmdb_title") or ""))
+                    query = compact_spaces(str(event.get("query") or ""))
+                    piece = stage
+                    if query:
+                        piece += f" q={query}"
+                    if tmdb_id:
+                        piece += f" id={tmdb_id}"
+                    if tmdb_title:
+                        piece += f" title={tmdb_title}"
+                    if reason:
+                        piece += f" reason={reason}"
+                    summary_parts.append(piece)
+                if summary_parts:
+                    match_debug_summary = " | ".join(summary_parts)
+        except Exception:
+            match_debug_summary = match_debug_raw
 
     matched_subs: List[Dict[str, Any]] = []
     rejected_subs: List[Tuple[Dict[str, Any], str]] = []
@@ -166,6 +196,7 @@ def build_match_explanation(db: Any, item: Dict[str, Any], live_item: Optional[D
         f"TMDB match path: {html.escape(match_path)}",
         f"TMDB confidence: {html.escape(match_confidence)}",
         f"TMDB evidence: {html.escape(match_evidence)}",
+        f"TMDB debug: {html.escape(match_debug_summary)}",
         f"Подходящих подписок сейчас: {len(matched_subs)}",
     ])
 

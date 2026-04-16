@@ -154,6 +154,8 @@ def is_tv_revival_reset_match(
 def tmdb_match_looks_valid(item: Dict[str, Any], query: str, details: Dict[str, Any], requested_media_type: str) -> bool:
     source_is_tv = bool(item.get("source_episode_progress")) or str(item.get("media_type") or "") == "tv"
     details_media = str(details.get("media_type") or requested_media_type or "")
+    details.pop("tmdb_validation_reject_reason", None)
+    details.pop("tmdb_validation_warnings", None)
     anime_franchise_fallback = False
     short_or_common_query = False
     query_norm = ""
@@ -173,8 +175,10 @@ def tmdb_match_looks_valid(item: Dict[str, Any], query: str, details: Dict[str, 
     tmdb_episodes_int = None
     tv_continuation_parent_match = False
     tv_revival_reset_match = False
+    validation_warnings: List[str] = []
 
     def reject(reason: str) -> bool:
+        details["tmdb_validation_reject_reason"] = reason
         try:
             log.debug(
                 "TMDB validation reject: reason=%s | query=%s | source=%s | tmdb=%s | media=%s/%s | alias_only=%s | exact=%s | substring=%s | best_overlap=%.3f | best_similarity=%.3f | best_main_overlap=%.3f | best_main_similarity=%.3f | common_tokens=%s | year_delta=%s | season_hint=%s | expected_seasons=%s | expected_episodes=%s | tmdb_seasons=%s | tmdb_episodes=%s | anime_fallback=%s | continuation=%s | revival=%s",
@@ -205,6 +209,11 @@ def tmdb_match_looks_valid(item: Dict[str, Any], query: str, details: Dict[str, 
         except Exception:
             pass
         return False
+
+    def warn(reason: str) -> None:
+        if reason not in validation_warnings:
+            validation_warnings.append(reason)
+        details["tmdb_validation_warnings"] = list(validation_warnings)
     if source_is_tv and details_media == "movie":
         return reject("tmdb_match_looks_valid:L208")
 
@@ -508,8 +517,23 @@ def tmdb_match_looks_valid(item: Dict[str, Any], query: str, details: Dict[str, 
 
         single_season_context = (expected_seasons in (None, 1)) and (tmdb_seasons_int in (None, 1))
         if single_season_context and expected_episodes and tmdb_episodes_int:
-            if expected_episodes >= 8 and abs(tmdb_episodes_int - expected_episodes) >= max(4, int(expected_episodes * 0.60)):
-                return reject("tmdb_match_looks_valid:L465")
+            episode_mismatch = abs(tmdb_episodes_int - expected_episodes)
+            soft_episode_total_case = (
+                source_is_tv
+                and details_media == "tv"
+                and (has_exact_normalized or has_substring or best_overlap >= 0.72 or best_similarity_norm >= 0.90)
+                and (year_delta is None or year_delta <= 1)
+                and (
+                    item_content_bucket(item) == "anime"
+                    or anime_fallback_signal_score(item) >= 2
+                    or str(details.get("tmdb_status") or "").lower() in {"returning series", "in production", "planned", "pilot"}
+                )
+            )
+            if expected_episodes >= 8 and episode_mismatch >= max(4, int(expected_episodes * 0.60)):
+                if soft_episode_total_case:
+                    warn("episode_total_mismatch_soft")
+                else:
+                    return reject("tmdb_match_looks_valid:L465")
             if short_or_common_query and expected_episodes >= 6 and abs(tmdb_episodes_int - expected_episodes) >= max(4, int(expected_episodes * 0.75)) and not has_exact_normalized:
                 return reject("tmdb_match_looks_valid:L467")
 
@@ -534,4 +558,6 @@ def tmdb_match_looks_valid(item: Dict[str, Any], query: str, details: Dict[str, 
         if year_delta >= 4 and best_overlap < 0.90 and best_similarity_norm < 0.96 and not tv_continuation_parent_match:
             return reject("tmdb_match_looks_valid:L488")
 
+    if validation_warnings:
+        details["tmdb_validation_warnings"] = list(validation_warnings)
     return True

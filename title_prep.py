@@ -1,6 +1,8 @@
 import re
 from typing import Any, Dict, List, Tuple
 
+from parsing_audio import AUDIO_TAGS, NON_TITLE_TECH_TAGS, infer_release_type, parse_audio_variants
+from release_versioning import parse_episode_progress
 from utils import compact_spaces, strip_html
 
 
@@ -26,58 +28,226 @@ RELEASE_GROUP_PATTERNS: List[str] = [
 ]
 
 
+def _token_pattern(token: str) -> str:
+    return re.escape(token).replace(r"\-", r"[\-\s]?").replace(r"\ ", r"\s+")
+
+
+_AUDIO_TOKEN_RE = r"(?:%s)" % "|".join(_token_pattern(tag) for tag in sorted(AUDIO_TAGS, key=len, reverse=True))
+_TECH_TOKEN_RE = r"(?:%s)" % "|".join(_token_pattern(tag) for tag in sorted(NON_TITLE_TECH_TAGS, key=len, reverse=True))
+_AUDIO_LABEL_RE = re.compile(
+    r'(?:(\d{1,2})\s*[xх×]\s*)?'
+    rf'(?<!\w)({_AUDIO_TOKEN_RE})(?!\w)'
+    r'(?:\s*\(([^)]{1,120})\))?'
+    r'(?:\s*[xх×]\s*(\d{1,2}))?',
+    flags=re.I,
+)
+
 TECH_ONLY_CANDIDATE_PATTERNS: List[str] = [
-    r"^(?:mp3|flac|ape|alac|fb2|epub|mobi|pdf)$",
-    r"^(?:webrip|web[\-\s]?dl(?:rip)?|bdrip|dvdrip|bluray|blu[\-\s]?ray|remux)$",
-    r"^(?:hdtv(?:rip)?|iptv|dvb(?:rip)?|sat(?:rip)?)$",
-    r"^(?:2160p?|1080p?|1080i|720p?|4k|uhd|hdr10\+?|hdr|sdr|hevc|avc|x264|x265|h264|h265)$",
-    r"^(?:ру|rus|sub|subs|ст|дб|пм|лм|пд|по)$",
+    rf"^{_TECH_TOKEN_RE}$",
+    rf"^{_AUDIO_TOKEN_RE}$",
+    r"^(?:subs?)$",
 ]
 
 
-def clean_release_title(text: str) -> str:
-    text = compact_spaces(strip_html(text or ""))
-    if not text:
+def split_release_segments(text: str) -> List[str]:
+    raw = compact_spaces(strip_html(text or ""))
+    if not raw:
+        return []
+
+    parts: List[str] = []
+    buf: List[str] = []
+    paren_depth = 0
+    bracket_depth = 0
+
+    for ch in raw:
+        if ch == "(":
+            paren_depth += 1
+        elif ch == ")" and paren_depth > 0:
+            paren_depth -= 1
+        elif ch == "[":
+            bracket_depth += 1
+        elif ch == "]" and bracket_depth > 0:
+            bracket_depth -= 1
+
+        if ch == "/" and paren_depth == 0 and bracket_depth == 0:
+            segment = compact_spaces("".join(buf)).strip(" /.-")
+            if segment:
+                parts.append(segment)
+            buf = []
+            continue
+        buf.append(ch)
+
+    tail = compact_spaces("".join(buf)).strip(" /.-")
+    if tail:
+        parts.append(tail)
+    return parts
+
+
+def _compact_segment(value: str) -> str:
+    value = compact_spaces(value or "")
+    value = re.sub(r"(?:\s+-\s+){2,}", " - ", value)
+    value = re.sub(r"^(?:-\s*)+", "", value)
+    value = re.sub(r"(?:\s*-)+$", "", value)
+    return compact_spaces(value).strip(" /.-")
+
+
+def _looks_like_year_segment(segment: str) -> bool:
+    return bool(re.fullmatch(r"(?:19\d{2}|20\d{2})(?:\s*[-/]\s*(?:19\d{2}|20\d{2}|\d{2}))?", compact_spaces(segment or "")))
+
+
+def _looks_like_audio_segment(segment: str) -> bool:
+    segment = compact_spaces(segment or "")
+    if not segment:
+        return False
+    if not parse_audio_variants(segment):
+        return False
+    residual = _AUDIO_LABEL_RE.sub(" ", segment)
+    residual = re.sub(r"[\s,;+&|]+", " ", residual)
+    residual = compact_spaces(residual).strip(" /.-")
+    return residual == ""
+
+
+def _looks_like_tech_segment(segment: str) -> bool:
+    value = compact_spaces(segment or "")
+    if not value:
+        return False
+    lowered = value.lower()
+    if any(re.fullmatch(pattern, lowered, flags=re.I) for pattern in TECH_ONLY_CANDIDATE_PATTERNS):
+        return True
+    tokens = [token for token in re.split(r"[\s,;:+/&|()\[\]]+", lowered) if token]
+    if not tokens:
+        return False
+    tech_tokens = {
+        token.lower().replace(" ", "").replace("-", "")
+        for token in NON_TITLE_TECH_TAGS
+    } | {"sub", "subs", "aac", "ac3", "dts", "dolby", "vision"}
+    normalized = [token.replace("-", "") for token in tokens]
+    return all(token in tech_tokens or token.isdigit() for token in normalized)
+
+
+def _clean_plain_title_text(text: str) -> str:
+    value = compact_spaces(text or "")
+    if not value:
         return ""
 
-    text = re.sub(r"\s+/\s+", " / ", text)
     replacements = [
         r"\[[^\]]+\]",
         r"\([^\)]*\)",
         r"\b(?:19\d{2}|20\d{2})\s*[-/]\s*(?:19\d{2}|20\d{2}|\d{2})\b",
-        r"\b\d+\s*[xх]\s*\b",
+        r"\b\d+\s*[xх×]\s*\b",
         r"\b(19\d{2}|20\d{2})\b",
         r"\b(сезон|season)\s*\d+\b",
         r"\b\d+\s*\-\s*\d+\s*серии\s*из\s*\d+\b",
         r"\b\d+\s*серии\s*из\s*\d+\b",
         r"\b(s\d{1,2}e\d{1,3})\b",
-        r"\b(дб|пм|лм|ст|пд|по|ру|укр|озвучка|sub|subs?|tvshows|lostfilm|hdrezka|coldfilm|newstudio|baibako|red\s*head\s*sound|dragon\s*money\s*studio|greb&creative|dezidenizi)\b",
-        r"\b(2160p?|1080p?|1080i|720p?|4k|uhd|hdr10\+?|hdr|sdr|dolby\s*vision|dolby|vision|hevc|avc|x264|x265|h264|h265|aac|ac3|dts)\b",
-        r"\b(web\-dlrip|web\-dl|webrip|hdtvrip|hdtv|iptv|dvb(?:rip)?|sat(?:rip)?|bluray\s*remux|blu\-ray\s*remux|bluray|blu\-ray|bdrip|dvdrip|remux|rip)\b",
-        r"\b(mp3|flac|ape|alac|fb2|epub|mobi|pdf)\b",
+        rf"\b(?:{_AUDIO_TOKEN_RE}|tvshows|lostfilm|hdrezka|coldfilm|newstudio|baibako|red\s*head\s*sound|dragon\s*money\s*studio|greb\s*&\s*creative|dezidenizi)\b",
+        rf"\b(?:{_TECH_TOKEN_RE}|subs?|dolby\s*vision|dolby|vision|aac|ac3|dts)\b",
         r"\b(portable|windows|linux|macos|pc)\b",
     ]
     for pattern in replacements:
-        text = re.sub(pattern, " ", text, flags=re.I)
+        value = re.sub(pattern, " ", value, flags=re.I)
 
-    text = re.sub(r"[^\w\dА-Яа-яЁё&:\-'\. /]+", " ", text)
-    text = re.sub(r"\s*[-–—]\s*", " - ", text)
-    text = re.sub(r"\s*/\s*", " / ", text)
-    text = compact_spaces(text)
+    value = re.sub(r"[^\w\dА-Яа-яЁё&:\-'\. /]+", " ", value)
+    value = re.sub(r"\s*[-–—]\s*", " - ", value)
+    value = re.sub(r"\s*/\s*", " / ", value)
+    value = compact_spaces(value)
 
-    segments = [segment.strip(" /.-") for segment in re.split(r"\s*/\s*", text) if segment.strip(" /.-")]
-    cleaned_segments: List[str] = []
-    for segment in segments:
-        segment = re.sub(r"(?:\s+-\s+){2,}", " - ", segment)
-        segment = re.sub(r"^(?:-\s*)+", "", segment)
-        segment = re.sub(r"(?:\s*-)+$", "", segment)
-        segment = compact_spaces(segment).strip(" /.-")
-        if segment and segment != "-":
-            cleaned_segments.append(segment)
+    cleaned_segments = [_compact_segment(segment) for segment in split_release_segments(value)]
+    cleaned_segments = [segment for segment in cleaned_segments if segment and segment != "-"]
+    return compact_spaces(" / ".join(cleaned_segments)).strip(" /.-")
 
-    text = " / ".join(cleaned_segments)
-    text = compact_spaces(text)
-    return text.strip(" /.-")
+
+def _title_aliases_from_segment(segment: str) -> List[str]:
+    aliases: List[str] = []
+
+    def add(value: str) -> None:
+        candidate = compact_spaces(clean_release_title(value) or value).strip(" /.-")
+        if not candidate:
+            return
+        if is_release_group_candidate(candidate):
+            return
+        if not looks_like_structured_numeric_title(candidate) and is_bad_tmdb_candidate(candidate):
+            return
+        if candidate not in aliases:
+            aliases.append(candidate)
+
+    for match in re.finditer(r"\(([^()]{1,80})\)", segment):
+        inner = compact_spaces(match.group(1))
+        if not inner:
+            continue
+        if _looks_like_year_segment(inner):
+            continue
+        if parse_episode_progress(inner):
+            continue
+        if _looks_like_audio_segment(inner):
+            continue
+        if infer_release_type(inner):
+            continue
+        if _looks_like_tech_segment(inner):
+            continue
+        if is_release_group_candidate(inner):
+            continue
+        add(inner)
+    return aliases
+
+
+def _clean_title_segment(segment: str) -> str:
+    cleaned = compact_spaces(segment or "")
+    cleaned = re.sub(r"\[[^\]]+\]", " ", cleaned)
+    cleaned = re.sub(r"\([^\)]*\)", " ", cleaned)
+    cleaned = compact_spaces(cleaned)
+    if parse_episode_progress(cleaned):
+        cleaned = re.sub(r"\b(?:\d+\s*сезон\s*:\s*)?\d+\s*(?:-\s*\d+\s*)?(?:сер(?:ия|ии|ий)|выпуск(?:а|ов)?)\s*(?:из\s*\d+)?\b", " ", cleaned, flags=re.I)
+        cleaned = re.sub(r"\b(?:s\d{1,2}\s*e\d{1,3}(?:\s*-\s*e\d{1,3})?|\d{1,2}x\d{1,3}(?:\s*-\s*(?:\d{1,2}x)?\d{1,3})?)\b", " ", cleaned, flags=re.I)
+    cleaned = _clean_plain_title_text(cleaned)
+    return compact_spaces(cleaned).strip(" /.-")
+
+
+def classify_release_segments(text: str) -> List[Dict[str, Any]]:
+    segments: List[Dict[str, Any]] = []
+    for raw in split_release_segments(text):
+        segment = compact_spaces(raw)
+        info: Dict[str, Any] = {
+            "raw": segment,
+            "kind": "title_ru",
+            "title": "",
+            "aliases": [],
+            "episode_progress": parse_episode_progress(segment) or "",
+        }
+
+        if _looks_like_year_segment(segment):
+            info["kind"] = "year"
+        elif _looks_like_audio_segment(segment):
+            info["kind"] = "audio"
+        elif infer_release_type(segment):
+            info["kind"] = "release_type"
+        elif _looks_like_tech_segment(segment):
+            info["kind"] = "tech"
+        elif info["episode_progress"] and not _clean_title_segment(segment):
+            info["kind"] = "episode_progress"
+        else:
+            title = _clean_title_segment(segment) or _compact_segment(segment)
+            info["title"] = title
+            info["aliases"] = _title_aliases_from_segment(segment)
+            info["kind"] = "title_en" if _latin_letter_count(title) > _cyrillic_letter_count(title) else "title_ru"
+        segments.append(info)
+    return segments
+
+
+def clean_release_title(text: str) -> str:
+    base = compact_spaces(strip_html(text or ""))
+    if not base:
+        return ""
+
+    title_segments = [
+        compact_spaces(segment.get("title") or "")
+        for segment in classify_release_segments(base)
+        if str(segment.get("kind") or "").startswith("title")
+    ]
+    deduped = [segment for segment in dict.fromkeys(title_segments) if segment]
+    if deduped:
+        return compact_spaces(" / ".join(deduped)).strip(" /.-")
+    return _clean_plain_title_text(base)
 
 
 def looks_like_structured_numeric_title(text: str) -> bool:
@@ -152,20 +322,10 @@ def extract_title_aliases_from_text(text: str) -> List[str]:
         return []
 
     aliases: List[str] = []
-    metadata_re = re.compile(
-        r"\b(?:19\d{2}|20\d{2}|season|сезон|серия|серии|серий|эпизод|эпизоды|эпизодов|выпуск|выпуски|выпусков|"
-        r"web(?:\-dlrip|\-dl|rip)?|hdtv(?:rip)?|iptv|dvb(?:rip)?|sat(?:rip)?|"
-        r"1080p?|1080i|720p?|2160p?|4k|uhd|hdr10\+?|hdr|sdr|hevc|avc|x264|x265|h264|h265|"
-        r"bdrip|bluray|blu\-ray|remux|"
-        r"дб|пм|лм|ст|пд|по|ру|укр)\b",
-        flags=re.I,
-    )
 
     def add(value: str) -> None:
         value = compact_spaces(value or "").strip(" /.-")
         if not value:
-            return
-        if metadata_re.search(value):
             return
         if is_release_group_candidate(value):
             return
@@ -181,10 +341,11 @@ def extract_title_aliases_from_text(text: str) -> List[str]:
         if candidate not in aliases:
             aliases.append(candidate)
 
-    for match in re.finditer(r"\(([^()]{1,80})\)", base):
-        inner = compact_spaces(match.group(1))
-        if inner:
-            add(inner)
+    for segment in classify_release_segments(base):
+        if not str(segment.get("kind") or "").startswith("title"):
+            continue
+        for alias in segment.get("aliases") or []:
+            add(str(alias))
 
     return aliases
 
@@ -198,28 +359,21 @@ def _cyrillic_letter_count(text: str) -> int:
 
 
 def _strip_title_part_metadata(part: str) -> str:
-    part = compact_spaces(part or "")
-    part = re.sub(r"\([^\)]*\)", " ", part)
-    part = re.split(
-        r"\b(?:19\d{2}|20\d{2}|ДБ|ПМ|ЛМ|ПД|ПО|СТ|РУ|УКР|WEB\-DL|WEB\-DLRip|WEBRip|Blu|BDRip|Remux|Rip|HDR10\+?|HDR|SDR|HEVC|AVC|HDTV|HDTVRip|IPTV|DVB|DVBRip|SATRip|MP3|FLAC|FB2|EPUB|MOBI|PDF)\b",
-        part,
-        maxsplit=1,
-        flags=re.I,
-    )[0]
-    part = compact_spaces(part).strip(" /.-")
-    if part and is_bad_tmdb_candidate(part):
-        cleaned = clean_release_title(part)
-        if cleaned and not is_bad_tmdb_candidate(cleaned):
-            part = cleaned
-    return compact_spaces(part).strip(" /.-")
+    cleaned = _clean_title_segment(part)
+    if cleaned and is_bad_tmdb_candidate(cleaned):
+        fallback = clean_release_title(cleaned)
+        if fallback and not is_bad_tmdb_candidate(fallback):
+            cleaned = fallback
+    return compact_spaces(cleaned).strip(" /.-")
 
 
 def split_title_parts(source_title: str) -> Tuple[str, str]:
     source_title = compact_spaces(strip_html(source_title or ""))
-    raw_parts = [compact_spaces(p).strip(" /.-") for p in re.split(r"\s*/\s*", source_title) if compact_spaces(p).strip(" /.-")]
     parts: List[str] = []
-    for part in raw_parts:
-        cleaned = _strip_title_part_metadata(part)
+    for segment in classify_release_segments(source_title):
+        if not str(segment.get("kind") or "").startswith("title"):
+            continue
+        cleaned = _strip_title_part_metadata(str(segment.get("title") or segment.get("raw") or ""))
         if cleaned:
             parts.append(cleaned)
 

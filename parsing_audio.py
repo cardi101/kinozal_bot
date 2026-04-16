@@ -4,24 +4,87 @@ from typing import Any, Dict, List, Optional
 from utils import compact_spaces
 
 
-AUDIO_TAGS = [
-    "ДБ", "ПМ", "ЛМ", "ЛД", "СТ", "РУ", "БП", "АП",
-    "МВО", "ДВО", "AVO", "DVO", "MVO", "VO", "SUB", "Оригинал",
-]
+CANONICAL_AUDIO_TAGS = (
+    "ДБ",
+    "ПМ",
+    "ЛМ",
+    "ЛД",
+    "ПО",
+    "ПД",
+    "СТ",
+    "РУ",
+    "БП",
+    "АП",
+    "МВО",
+    "ДВО",
+    "AVO",
+    "DVO",
+    "MVO",
+    "VO",
+    "SUB",
+    "Оригинал",
+)
+
+AUDIO_TAGS = list(CANONICAL_AUDIO_TAGS)
+
+NON_TITLE_TECH_TAGS = (
+    "WEB-DL",
+    "WEB-DLRIP",
+    "WEBRIP",
+    "BDRIP",
+    "BLURAY",
+    "BLU-RAY",
+    "REMUX",
+    "DVDRIP",
+    "HDTV",
+    "HDTVRIP",
+    "IPTV",
+    "DVB",
+    "DVBRIP",
+    "SATRIP",
+    "2160P",
+    "1080P",
+    "1080I",
+    "720P",
+    "4K",
+    "UHD",
+    "HDR10+",
+    "HDR10",
+    "HDR",
+    "SDR",
+    "HEVC",
+    "AVC",
+    "X264",
+    "X265",
+    "H264",
+    "H265",
+    "MP3",
+    "FLAC",
+    "APE",
+    "ALAC",
+    "FB2",
+    "EPUB",
+    "MOBI",
+    "PDF",
+)
+
+NON_TITLE_METADATA_TAGS = tuple(dict.fromkeys([*CANONICAL_AUDIO_TAGS, *NON_TITLE_TECH_TAGS]))
+
+_AUDIO_LABEL_RE = re.compile(
+    r'(?:(\d{1,2})\s*[xх×]\s*)?'
+    r'(?<!\w)(' + "|".join(re.escape(tag) for tag in AUDIO_TAGS) + r')(?!\w)'
+    r'(?:\s*\(([^)]{1,120})\))?'
+    r'(?:\s*[xх×]\s*(\d{1,2}))?',
+    flags=re.I,
+)
 
 
 def parse_audio_variants(source_title: str) -> List[Dict[str, Any]]:
     title = compact_spaces(source_title or "")
     variants: List[Dict[str, Any]] = []
     positions: Dict[str, int] = {}
-    pattern = (
-        r'(?:(\d{1,2})\s*[xх×]\s*)?'
-        r'(?<!\w)(' + "|".join(re.escape(tag) for tag in AUDIO_TAGS) + r')(?!\w)'
-        r'(?:\s*\(([^)]{1,120})\))?'
-        r'(?:\s*[xх×]\s*(\d{1,2}))?'
-    )
 
-    for match in re.finditer(pattern, title, flags=re.I):
+    for match in _AUDIO_LABEL_RE.finditer(title):
         prefix_count = int(match.group(1) or 0)
         suffix_count = int(match.group(4) or 0)
         count = prefix_count or suffix_count or 1
