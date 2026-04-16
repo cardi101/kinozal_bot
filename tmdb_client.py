@@ -15,6 +15,7 @@ from parsing_basic import parse_year
 from title_prep import clean_release_title, classify_release_segments, looks_like_structured_numeric_title, normalize_structured_numeric_title, should_skip_tmdb_lookup, is_bad_tmdb_candidate
 from tmdb_aliases import is_long_latin_tmdb_query, is_short_or_common_tmdb_query, is_short_acronym_tmdb_query, manual_tmdb_override_for_item, title_search_candidates
 from item_years import extract_tv_season_hint
+from tmdb_match_features import extract_tmdb_match_features, score_tmdb_match_candidate
 from tmdb_match_validation import tmdb_match_looks_valid
 from anime_mapping_store import AnimeMappingStore
 from anime_title_lexicon import AnimeTitleLexicon
@@ -520,6 +521,7 @@ class TMDBClient:
                     continue
                 if self._is_rejected_match(item, probe):
                     continue
+                features = extract_tmdb_match_features(item, candidate, probe, target_media_type)
                 confidence, evidence = _search_match_confidence(item, probe)
                 results.append(
                     {
@@ -531,6 +533,8 @@ class TMDBClient:
                         "query": candidate,
                         "confidence": confidence,
                         "evidence": evidence,
+                        "candidate_score": score_tmdb_match_candidate(features),
+                        "features": features.to_dict(),
                     }
                 )
                 seen.add(key)
@@ -1240,6 +1244,8 @@ class TMDBClient:
                 )
 
                 seen = set()
+                candidate_pool: List[Dict[str, Any]] = []
+                pooled_by_key: Dict[Tuple[str, int], Dict[str, Any]] = {}
                 for candidate, mt, y in search_plan:
                     if _is_hard_blocked_generic_candidate(candidate):
                         self.log.info(
@@ -1273,6 +1279,8 @@ class TMDBClient:
                         continue
 
                     for ranked_details_item in ranked_details:
+                        features = extract_tmdb_match_features(item, candidate, ranked_details_item, mt)
+                        candidate_score = score_tmdb_match_candidate(features)
                         self._record_match_debug(
                             item,
                             "candidate_probe",
@@ -1283,112 +1291,174 @@ class TMDBClient:
                             tmdb_title=ranked_details_item.get("tmdb_title") or ranked_details_item.get("tmdb_original_title"),
                             tmdb_year=parse_year(str(ranked_details_item.get("tmdb_release_date") or "")),
                             score=ranked_details_item.get("search_score"),
+                            candidate_score=candidate_score,
+                            features=features.to_dict(),
                         )
+                        pool_key = (str(ranked_details_item.get("media_type") or mt), int(ranked_details_item.get("tmdb_id") or 0))
+                        candidate_entry = {
+                            "query": candidate,
+                            "requested_media_type": mt,
+                            "requested_year": y,
+                            "details": ranked_details_item,
+                            "features": features,
+                            "candidate_score": candidate_score,
+                            "search_score": float(ranked_details_item.get("search_score") or 0.0),
+                        }
+                        existing_entry = pooled_by_key.get(pool_key)
+                        if existing_entry is None or (
+                            candidate_score,
+                            candidate_entry["search_score"],
+                        ) > (
+                            float(existing_entry.get("candidate_score") or 0.0),
+                            float(existing_entry.get("search_score") or 0.0),
+                        ):
+                            pooled_by_key[pool_key] = candidate_entry
 
-                        if not tmdb_match_looks_valid(item, candidate, ranked_details_item, mt):
-                            reject_reason = compact_spaces(str(ranked_details_item.get("tmdb_validation_reject_reason") or "validation_reject"))
-                            self.log.info(
-                                "TMDB rejected suspicious match for %s -> %s [%s / %s] reason=%s",
-                                item.get("source_title"),
-                                candidate,
-                                ranked_details_item.get("tmdb_title"),
-                                ranked_details_item.get("tmdb_original_title"),
-                                reject_reason,
-                            )
-                            self._record_match_debug(
-                                item,
-                                "candidate_rejected",
-                                query=candidate,
-                                media_type=mt,
-                                requested_year=y,
-                                tmdb_id=ranked_details_item.get("tmdb_id"),
-                                tmdb_title=ranked_details_item.get("tmdb_title") or ranked_details_item.get("tmdb_original_title"),
-                                reason=reject_reason,
-                                warnings=ranked_details_item.get("tmdb_validation_warnings") or [],
-                            )
-                            continue
+                candidate_pool = sorted(
+                    pooled_by_key.values(),
+                    key=lambda row: (
+                        float(row.get("candidate_score") or 0.0),
+                        float(row.get("search_score") or 0.0),
+                    ),
+                    reverse=True,
+                )
 
-                        if self._is_rejected_match(item, ranked_details_item):
-                            self.log.info(
-                                "TMDB search match rejected by memory for %s -> %s [tmdb_id=%s]",
-                                item.get("source_title"),
-                                candidate,
-                                ranked_details_item.get("tmdb_id"),
-                            )
-                            self._record_match_debug(
-                                item,
-                                "candidate_rejected",
-                                query=candidate,
-                                media_type=mt,
-                                requested_year=y,
-                                tmdb_id=ranked_details_item.get("tmdb_id"),
-                                tmdb_title=ranked_details_item.get("tmdb_title") or ranked_details_item.get("tmdb_original_title"),
-                                reason="memory_rejected_match",
-                            )
-                            continue
+                if candidate_pool:
+                    self._record_match_debug(
+                        item,
+                        "candidate_ranking",
+                        candidates=[
+                            {
+                                "query": str(entry.get("query") or ""),
+                                "media_type": str(entry.get("requested_media_type") or ""),
+                                "tmdb_id": int(entry["details"].get("tmdb_id") or 0),
+                                "tmdb_title": entry["details"].get("tmdb_title") or entry["details"].get("tmdb_original_title") or "",
+                                "candidate_score": round(float(entry.get("candidate_score") or 0.0), 3),
+                                "search_score": round(float(entry.get("search_score") or 0.0), 3),
+                            }
+                            for entry in candidate_pool[:12]
+                        ],
+                    )
 
-                        if (ranked_details_item.get("media_type") or mt) == "movie" and not item.get("source_imdb_id"):
-                            source_year = parse_year(str(item.get("source_year") or ""))
-                            matched_year = parse_year(str(ranked_details_item.get("tmdb_release_date") or ""))
-                            if source_year and matched_year and abs(source_year - matched_year) > 2:
-                                self.log.info(
-                                    "TMDB rejected movie search match by year delta for %s -> %s [source_year=%s tmdb_year=%s]",
-                                    item.get("source_title"),
-                                    candidate,
-                                    source_year,
-                                    matched_year,
-                                )
-                                self._record_match_debug(
-                                    item,
-                                    "candidate_rejected",
-                                    query=candidate,
-                                    media_type=mt,
-                                    requested_year=y,
-                                    tmdb_id=ranked_details_item.get("tmdb_id"),
-                                    tmdb_title=ranked_details_item.get("tmdb_title") or ranked_details_item.get("tmdb_original_title"),
-                                    reason="movie_year_mismatch",
-                                    source_year=source_year,
-                                    tmdb_year=matched_year,
-                                )
-                                continue
+                for candidate_entry in candidate_pool:
+                    candidate = str(candidate_entry.get("query") or "")
+                    mt = str(candidate_entry.get("requested_media_type") or "")
+                    y = candidate_entry.get("requested_year")
+                    ranked_details_item = candidate_entry["details"]
+                    features = candidate_entry["features"]
 
-                        details = ranked_details_item
-                        matched_media_type = details.get("media_type") or mt
-                        matched_year = parse_year(str(details.get("tmdb_release_date") or ""))
-                        tmdb_match_path = "search"
-                        confidence, evidence = _search_match_confidence(item, details)
-                        warnings = details.get("tmdb_validation_warnings") or []
-                        warning_suffix = f"; warnings={','.join(str(value) for value in warnings)}" if warnings else ""
-                        self._apply_match_metadata(
-                            item,
-                            details,
-                            path=tmdb_match_path,
-                            confidence=confidence,
-                            evidence=f"query={candidate}; media={matched_media_type}; {evidence}{warning_suffix}",
+                    if not tmdb_match_looks_valid(item, candidate, ranked_details_item, mt):
+                        reject_reason = compact_spaces(str(ranked_details_item.get("tmdb_validation_reject_reason") or "validation_reject"))
+                        self.log.info(
+                            "TMDB rejected suspicious match for %s -> %s [%s / %s] reason=%s",
+                            item.get("source_title"),
+                            candidate,
+                            ranked_details_item.get("tmdb_title"),
+                            ranked_details_item.get("tmdb_original_title"),
+                            reject_reason,
                         )
                         self._record_match_debug(
                             item,
-                            "candidate_accepted",
+                            "candidate_rejected",
                             query=candidate,
-                            media_type=matched_media_type,
+                            media_type=mt,
                             requested_year=y,
-                            tmdb_id=details.get("tmdb_id"),
-                            tmdb_title=details.get("tmdb_title") or details.get("tmdb_original_title"),
-                            tmdb_year=matched_year,
-                            warnings=warnings,
+                            tmdb_id=ranked_details_item.get("tmdb_id"),
+                            tmdb_title=ranked_details_item.get("tmdb_title") or ranked_details_item.get("tmdb_original_title"),
+                            reason=reject_reason,
+                            warnings=ranked_details_item.get("tmdb_validation_warnings") or [],
+                            candidate_score=candidate_entry.get("candidate_score"),
+                            features=features.to_dict(),
                         )
+                        continue
+
+                    if self._is_rejected_match(item, ranked_details_item):
                         self.log.info(
-                            "TMDB matched %s -> %s [%s, tmdb_year=%s, tmdb_id=%s]",
+                            "TMDB search match rejected by memory for %s -> %s [tmdb_id=%s]",
                             item.get("source_title"),
                             candidate,
-                            matched_media_type,
-                            matched_year,
-                            details.get("tmdb_id"),
+                            ranked_details_item.get("tmdb_id"),
                         )
-                        break
+                        self._record_match_debug(
+                            item,
+                            "candidate_rejected",
+                            query=candidate,
+                            media_type=mt,
+                            requested_year=y,
+                            tmdb_id=ranked_details_item.get("tmdb_id"),
+                            tmdb_title=ranked_details_item.get("tmdb_title") or ranked_details_item.get("tmdb_original_title"),
+                            reason="memory_rejected_match",
+                            candidate_score=candidate_entry.get("candidate_score"),
+                            features=features.to_dict(),
+                        )
+                        continue
 
-                    if details:
-                        break
+                    if (ranked_details_item.get("media_type") or mt) == "movie" and not item.get("source_imdb_id"):
+                        source_year = parse_year(str(item.get("source_year") or ""))
+                        matched_year = parse_year(str(ranked_details_item.get("tmdb_release_date") or ""))
+                        if source_year and matched_year and abs(source_year - matched_year) > 2:
+                            self.log.info(
+                                "TMDB rejected movie search match by year delta for %s -> %s [source_year=%s tmdb_year=%s]",
+                                item.get("source_title"),
+                                candidate,
+                                source_year,
+                                matched_year,
+                            )
+                            self._record_match_debug(
+                                item,
+                                "candidate_rejected",
+                                query=candidate,
+                                media_type=mt,
+                                requested_year=y,
+                                tmdb_id=ranked_details_item.get("tmdb_id"),
+                                tmdb_title=ranked_details_item.get("tmdb_title") or ranked_details_item.get("tmdb_original_title"),
+                                reason="movie_year_mismatch",
+                                source_year=source_year,
+                                tmdb_year=matched_year,
+                                candidate_score=candidate_entry.get("candidate_score"),
+                                features=features.to_dict(),
+                            )
+                            continue
+
+                    details = ranked_details_item
+                    matched_media_type = details.get("media_type") or mt
+                    matched_year = parse_year(str(details.get("tmdb_release_date") or ""))
+                    tmdb_match_path = "search"
+                    confidence, evidence = _search_match_confidence(item, details)
+                    warnings = details.get("tmdb_validation_warnings") or []
+                    warning_suffix = f"; warnings={','.join(str(value) for value in warnings)}" if warnings else ""
+                    self._apply_match_metadata(
+                        item,
+                        details,
+                        path=tmdb_match_path,
+                        confidence=confidence,
+                        evidence=(
+                            f"query={candidate}; media={matched_media_type}; scorer={float(candidate_entry.get('candidate_score') or 0.0):.3f}; "
+                            f"{evidence}{warning_suffix}"
+                        ),
+                    )
+                    self._record_match_debug(
+                        item,
+                        "candidate_accepted",
+                        query=candidate,
+                        media_type=matched_media_type,
+                        requested_year=y,
+                        tmdb_id=details.get("tmdb_id"),
+                        tmdb_title=details.get("tmdb_title") or details.get("tmdb_original_title"),
+                        tmdb_year=matched_year,
+                        warnings=warnings,
+                        candidate_score=candidate_entry.get("candidate_score"),
+                        features=features.to_dict(),
+                    )
+                    self.log.info(
+                        "TMDB matched %s -> %s [%s, tmdb_year=%s, tmdb_id=%s]",
+                        item.get("source_title"),
+                        candidate,
+                        matched_media_type,
+                        matched_year,
+                        details.get("tmdb_id"),
+                    )
+                    break
 
                 if not details:
                     if not candidates:

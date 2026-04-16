@@ -1,0 +1,2 @@
+ALTER TABLE items ADD COLUMN IF NOT EXISTS parsed_release_json TEXT NOT NULL DEFAULT '';
+ALTER TABLE items_archive ADD COLUMN IF NOT EXISTS parsed_release_json TEXT NOT NULL DEFAULT '';

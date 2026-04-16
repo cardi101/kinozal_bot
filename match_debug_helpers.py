@@ -130,6 +130,8 @@ def build_match_explanation(db: Any, item: Dict[str, Any], live_item: Optional[D
                     tmdb_id = compact_spaces(str(event.get("tmdb_id") or ""))
                     tmdb_title = compact_spaces(str(event.get("tmdb_title") or ""))
                     query = compact_spaces(str(event.get("query") or ""))
+                    candidate_score = compact_spaces(str(event.get("candidate_score") or ""))
+                    features = event.get("features") if isinstance(event.get("features"), dict) else {}
                     piece = stage
                     if query:
                         piece += f" q={query}"
@@ -137,6 +139,18 @@ def build_match_explanation(db: Any, item: Dict[str, Any], live_item: Optional[D
                         piece += f" id={tmdb_id}"
                     if tmdb_title:
                         piece += f" title={tmdb_title}"
+                    if candidate_score:
+                        piece += f" score={candidate_score}"
+                    if features:
+                        similarity = compact_spaces(str(features.get("title_similarity") or ""))
+                        overlap = compact_spaces(str(features.get("title_overlap") or ""))
+                        year_delta = compact_spaces(str(features.get("year_delta") or ""))
+                        if similarity:
+                            piece += f" sim={similarity}"
+                        if overlap:
+                            piece += f" overlap={overlap}"
+                        if year_delta:
+                            piece += f" year_delta={year_delta}"
                     if reason:
                         piece += f" reason={reason}"
                     summary_parts.append(piece)

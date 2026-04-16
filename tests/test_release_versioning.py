@@ -159,3 +159,38 @@ def test_variant_components_distinguish_audio_labels() -> None:
     assert get_item_variant_components(po_refreshed)["audio"] == "по"
     assert db_refreshed["variant_signature"] != po_refreshed["variant_signature"]
     assert db_refreshed["version_signature"] != po_refreshed["version_signature"]
+
+
+def test_refresh_item_version_fields_persists_parsed_release_json() -> None:
+    item = {
+        "source_uid": "kinozal:7001",
+        "media_type": "tv",
+        "source_title": "Первый брак Джорджи и Мэнди (2 сезон: 1-15 серии из 22) / Georgie and Mandy's First Marriage / 2025 / ПО (Кураж-Бамбей) / WEB-DL (1080p)",
+        "source_episode_progress": "2 сезон: 1-15 серии из 22",
+        "source_format": "1080",
+        "source_audio_tracks": ["ПО (Кураж-Бамбей)"],
+    }
+
+    refreshed = refresh_item_version_fields(item)
+
+    assert '"title_local": "Первый брак Джорджи и Мэнди"' in refreshed["parsed_release_json"]
+    assert '"episode_total": 22' in refreshed["parsed_release_json"]
+
+
+def test_refresh_item_version_fields_backfills_legacy_source_fields_from_parsed_release() -> None:
+    item = {
+        "source_uid": "kinozal:8001",
+        "media_type": "tv",
+        "source_title": "Мэтлок (2 сезон: 1-13 серии из 16) / Matlock / 2025 / ПМ (TVShows) / WEB-DL (1080p)",
+        "source_year": None,
+        "source_episode_progress": "",
+        "source_format": "",
+        "source_audio_tracks": [],
+    }
+
+    refreshed = refresh_item_version_fields(item)
+
+    assert refreshed["source_year"] == 2025
+    assert refreshed["source_episode_progress"] == "2 сезон: 1-13 серии из 16"
+    assert refreshed["source_format"] == "1080"
+    assert refreshed["source_audio_tracks"] == ["ПМ (TVShows)"]

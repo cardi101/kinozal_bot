@@ -3,7 +3,7 @@ from typing import Any, Dict, Iterable
 from content_buckets import item_content_bucket
 from country_helpers import parse_country_codes
 from release_versioning import format_variant_summary
-from subscription_matching import explain_subscription_match
+from subscription_matching import explain_subscription_match_details
 from utils import compact_spaces
 
 
@@ -29,6 +29,19 @@ def _item_snapshot(item: Dict[str, Any]) -> Dict[str, Any]:
         "tmdb_id": item.get("tmdb_id"),
         "tmdb_title": compact_spaces(str(item.get("tmdb_title") or item.get("tmdb_original_title") or "")),
         "imdb_id": compact_spaces(str(item.get("imdb_id") or "")),
+    }
+
+
+def _matched_subscription_audit(db: Any, sub: Dict[str, Any], item: Dict[str, Any]) -> Dict[str, Any]:
+    details = explain_subscription_match_details(db, sub, item)
+    return {
+        "id": int(sub.get("id") or 0),
+        "name": compact_spaces(str(sub.get("name") or "")),
+        "preset_key": compact_spaces(str(sub.get("preset_key") or "")),
+        "content_filter": compact_spaces(str(sub.get("content_filter") or "")),
+        "reason": details.get("summary") or "",
+        "explain": details.get("checks") or [],
+        "compiled_subscription": details.get("compiled_subscription_snapshot") or {},
     }
 
 
@@ -61,13 +74,7 @@ def build_delivery_audit(
         "anomaly_flags": list(item.get("anomaly_flags") or []),
         "item_snapshot": _item_snapshot(item),
         "matched_subscriptions": [
-            {
-                "id": int(sub.get("id") or 0),
-                "name": compact_spaces(str(sub.get("name") or "")),
-                "preset_key": compact_spaces(str(sub.get("preset_key") or "")),
-                "content_filter": compact_spaces(str(sub.get("content_filter") or "")),
-                "reason": explain_subscription_match(db, sub, item),
-            }
+            _matched_subscription_audit(db, sub, item)
             for sub in sub_payloads
         ],
     }

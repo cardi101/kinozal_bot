@@ -18,6 +18,8 @@ class _FakeWorkerRepository:
     def __init__(self) -> None:
         self.deleted: list[tuple[int, int]] = []
         self.deleted_debounce: list[tuple[int, str]] = []
+        self.released_pending: list[tuple[int, str]] = []
+        self.released_debounce: list[tuple[int, str, str]] = []
         self.subscriptions = {
             7: {
                 "id": 7,
@@ -27,25 +29,28 @@ class _FakeWorkerRepository:
             }
         }
 
-    def pop_due_pending_deliveries(self, current_hour: int):
-        return {
-            1001: [
-                {
-                    "item_id": 42,
-                    "matched_sub_ids": "7",
-                    "old_release_text": "",
-                    "is_release_text_change": 0,
-                }
-            ]
-        }
+    def lease_due_pending_deliveries(self, current_ts=None):
+        return [
+            {
+                "id": 1,
+                "tg_user_id": 1001,
+                "item_id": 42,
+                "matched_sub_ids": "7",
+                "old_release_text": "",
+                "is_release_text_change": 0,
+                "event_key": "release:1001:2128422:v1",
+                "lease_token": "pending-1",
+            }
+        ]
 
-    def pop_due_debounce(self):
+    def lease_due_debounce_entries(self, current_ts=None):
         return [
             {
                 "tg_user_id": 1001,
                 "item_id": 42,
                 "kinozal_id": "2128422",
                 "matched_sub_ids": "7",
+                "lease_token": "debounce-1",
             }
         ]
 
@@ -80,11 +85,20 @@ class _FakeWorkerRepository:
     def get_user_quiet_hours(self, tg_user_id: int):
         return None, None
 
-    def delete_pending_delivery(self, tg_user_id: int, item_id: int) -> None:
+    def get_user_quiet_profile(self, tg_user_id: int):
+        return None, None, ""
+
+    def delete_pending_delivery(self, tg_user_id: int, item_id: int, event_key: str = "") -> None:
         self.deleted.append((tg_user_id, item_id))
 
     def delete_debounce_entry(self, tg_user_id: int, kinozal_id: str) -> None:
         self.deleted_debounce.append((tg_user_id, kinozal_id))
+
+    def release_pending_delivery_lease(self, pending_id: int, *, lease_token: str, error: str = "", deliver_not_before_ts=None) -> None:
+        self.released_pending.append((pending_id, lease_token))
+
+    def release_debounce_lease(self, tg_user_id: int, kinozal_id: str, *, lease_token: str, error: str = "", deliver_after_ts=None) -> None:
+        self.released_debounce.append((tg_user_id, kinozal_id, lease_token))
 
 
 class _FakeKinozalService:
@@ -175,6 +189,7 @@ def test_flush_due_pending_deliveries_keeps_row_when_claim_already_exists() -> N
 
     assert delivery_service.sent == []
     assert repository.deleted == []
+    assert repository.released_pending == [(1, "pending-1")]
 
 
 def test_flush_due_debounce_uses_archived_item_payload() -> None:
@@ -289,6 +304,7 @@ def test_debounce_entry_survives_failed_delivery() -> None:
     asyncio.run(worker._deliver_current_cycle(pending, current_hour=12, cycle_metrics=metrics))
 
     assert repository.deleted_debounce == []
+    assert repository.released_debounce == [(1001, "2128422", "debounce-1")]
 
 
 class _SelectiveSubscriptionService:

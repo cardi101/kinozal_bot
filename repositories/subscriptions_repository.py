@@ -8,6 +8,36 @@ from .base import BaseRepository
 
 
 class SubscriptionsRepository(BaseRepository):
+    def _hydrate_subscription_rows(self, rows: Iterable[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        payloads = [dict(row) for row in rows]
+        if not payloads:
+            return []
+
+        sub_ids = [int(payload["id"]) for payload in payloads if payload.get("id") is not None]
+        genres_by_sub_id: Dict[int, List[int]] = {sub_id: [] for sub_id in sub_ids}
+        if sub_ids:
+            placeholders = ", ".join("?" for _ in sub_ids)
+            genre_rows = self.conn.execute(
+                f"""
+                SELECT subscription_id, genre_id
+                FROM subscription_genres
+                WHERE subscription_id IN ({placeholders})
+                ORDER BY subscription_id ASC, genre_id ASC
+                """,
+                tuple(sub_ids),
+            ).fetchall()
+            for row in genre_rows:
+                genres_by_sub_id.setdefault(int(row["subscription_id"]), []).append(int(row["genre_id"]))
+
+        hydrated: List[Dict[str, Any]] = []
+        for payload in payloads:
+            sub_id = int(payload.get("id") or 0)
+            payload["genre_ids"] = genres_by_sub_id.get(sub_id, [])
+            payload["country_codes_list"] = parse_country_codes(payload.get("country_codes"))
+            payload["exclude_country_codes_list"] = parse_country_codes(payload.get("exclude_country_codes"))
+            hydrated.append(payload)
+        return hydrated
+
     def create_subscription(self, tg_user_id: int, name: Optional[str] = None) -> Dict[str, Any]:
         ts = utc_ts()
         if not name:
@@ -38,7 +68,7 @@ class SubscriptionsRepository(BaseRepository):
                 """,
                 (tg_user_id,),
             ).fetchall()
-            return [dict(x) for x in rows]
+            return self._hydrate_subscription_rows(rows)
 
     def list_enabled_subscriptions(self) -> List[Dict[str, Any]]:
         with self.lock:
@@ -55,7 +85,7 @@ class SubscriptionsRepository(BaseRepository):
                 """,
                 (utc_ts(),),
             ).fetchall()
-            return [dict(x) for x in rows]
+            return self._hydrate_subscription_rows(rows)
 
     def rollout_existing_preset_subscriptions(self, rollout_version: str) -> int:
         rollout_version = compact_spaces(str(rollout_version or ""))
@@ -91,11 +121,8 @@ class SubscriptionsRepository(BaseRepository):
             ).fetchone()
             if not row:
                 return None
-            data = dict(row)
-            data["genre_ids"] = self.db.get_subscription_genres(sub_id)
-            data["country_codes_list"] = self.db.get_subscription_country_codes(sub_id)
-            data["exclude_country_codes_list"] = self.db.get_subscription_exclude_country_codes(sub_id)
-            return data
+            hydrated = self._hydrate_subscription_rows([dict(row)])
+            return hydrated[0] if hydrated else None
 
     def subscription_belongs_to(self, sub_id: int, tg_user_id: int) -> bool:
         with self.lock:

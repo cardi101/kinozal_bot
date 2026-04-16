@@ -4,7 +4,8 @@ import time
 from typing import Any, Dict, Optional, Sequence
 
 from db_migrations import apply_schema_migrations
-from psycopg import InterfaceError, OperationalError, connect
+from psycopg import Error, InterfaceError, OperationalError, connect
+from psycopg.errors import FeatureNotSupported
 from psycopg.rows import dict_row
 
 from config import CFG
@@ -18,6 +19,19 @@ from repositories import (
 )
 
 log = logging.getLogger("kinozal-news-bot")
+
+
+def is_retryable_db_error(exc: BaseException) -> bool:
+    if isinstance(exc, (OperationalError, InterfaceError)):
+        return True
+    if isinstance(exc, FeatureNotSupported):
+        message = str(exc).lower()
+        if "cached plan must not change result type" in message:
+            return True
+    pgcode = getattr(exc, "sqlstate", "") or getattr(exc, "pgcode", "")
+    if pgcode == "0A000" and "cached plan must not change result type" in str(exc).lower():
+        return True
+    return False
 
 
 class DummyCursor:
@@ -89,8 +103,11 @@ class PGCompatConnection:
                 cur = self.raw.cursor()
                 cur.execute(sql, bind)
                 return cur
-            except (OperationalError, InterfaceError) as exc:
+            except Error as exc:
+                if not is_retryable_db_error(exc):
+                    raise
                 last_error = exc
+                log.warning("Retryable DB execute error, reconnecting: %s", exc)
                 self.reconnect()
                 time.sleep(0.2)
 
@@ -107,8 +124,11 @@ class PGCompatConnection:
                 with self.raw.cursor() as cur:
                     cur.executemany(norm_sql, seq)
                 return DummyCursor()
-            except (OperationalError, InterfaceError) as exc:
+            except Error as exc:
+                if not is_retryable_db_error(exc):
+                    raise
                 last_error = exc
+                log.warning("Retryable DB executemany error, reconnecting: %s", exc)
                 self.reconnect()
                 time.sleep(0.2)
         if last_error is not None:

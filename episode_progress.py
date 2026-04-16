@@ -1,0 +1,38 @@
+import re
+from typing import Optional
+
+from utils import compact_spaces
+
+
+def parse_episode_progress(text: str) -> Optional[str]:
+    text = compact_spaces(text or "")
+    patterns = [
+        r"(\d+\s*сезон:\s*\d+\s*-\s*\d+\s*сер(?:ия|ии|ий)\s*из\s*\d+)",
+        r"(\d+\s*сезон:\s*\d+\s*сер(?:ия|ии|ий)\s*из\s*\d+)",
+        r"(\d+\s*сезон:\s*\d+\s*-\s*\d+\s*выпуск(?:а|ов)?\s*из\s*\d+)",
+        r"(\d+\s*сезон:\s*\d+\s*выпуск(?:а|ов)?\s*из\s*\d+)",
+        r"(\d+\s*-\s*\d+\s*сер(?:ия|ии|ий)\s*из\s*\d+)",
+        r"(\d+\s*сер(?:ия|ии|ий)\s*из\s*\d+)",
+        r"(\d+\s*-\s*\d+\s*выпуск(?:а|ов)?\s*из\s*\d+)",
+        r"(\d+\s*выпуск(?:а|ов)?\s*из\s*\d+)",
+        r"(\d+\s*сезон:\s*\d+\s*-\s*\d+\s*сер(?:ия|ии|ий))",
+        r"(\d+\s*сезон:\s*\d+\s*сер(?:ия|ии|ий))",
+        r"(\d+\s*сезон:\s*\d+\s*-\s*\d+\s*выпуск(?:а|ов)?)",
+        r"(\d+\s*сезон:\s*\d+\s*выпуск(?:а|ов)?)",
+        r"(\d+\s*-\s*\d+\s*сер(?:ия|ии|ий))",
+        r"(\d+\s*сер(?:ия|ии|ий))",
+        r"(\d+\s*-\s*\d+\s*выпуск(?:а|ов)?)",
+        r"(\d+\s*выпуск(?:а|ов)?)",
+        r"(s\d{1,2}\s*e\d{1,3}\s*-\s*e\d{1,3})",
+        r"(s\d{1,2}\s*e\d{1,3})",
+        r"(\d{1,2}x\d{1,3}\s*-\s*\d{1,2}x\d{1,3})",
+        r"(\d{1,2}x\d{1,3}\s*-\s*\d{1,3})",
+        r"(\d{1,2}x\d{1,3})",
+        r"(\d+\s*-\s*\d+\s*из\s*\d+)",
+        r"(\d+\s*из\s*\d+)",
+    ]
+    for pattern in patterns:
+        m = re.search(pattern, text, flags=re.I)
+        if m:
+            return compact_spaces(m.group(1))
+    return None

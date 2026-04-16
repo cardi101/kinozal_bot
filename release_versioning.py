@@ -2,8 +2,14 @@ import json
 import re
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
+from episode_progress import parse_episode_progress
 from parsing_audio import parse_audio_tracks
+from parsed_release import ParsedRelease, coerce_parsed_release
 from utils import compact_spaces, sha1_text
+
+__all__ = [
+    "parse_episode_progress",
+]
 
 
 VERSION_RELEASE_TYPE_TOKENS: List[Tuple[str, str]] = [
@@ -19,41 +25,6 @@ VERSION_RELEASE_TYPE_TOKENS: List[Tuple[str, str]] = [
     ("hdtv", "hdtv"),
     ("remux", "remux"),
 ]
-
-
-def parse_episode_progress(text: str) -> Optional[str]:
-    text = compact_spaces(text or "")
-    patterns = [
-        r"(\d+\s*сезон:\s*\d+\s*-\s*\d+\s*сер(?:ия|ии|ий)\s*из\s*\d+)",
-        r"(\d+\s*сезон:\s*\d+\s*сер(?:ия|ии|ий)\s*из\s*\d+)",
-        r"(\d+\s*сезон:\s*\d+\s*-\s*\d+\s*выпуск(?:а|ов)?\s*из\s*\d+)",
-        r"(\d+\s*сезон:\s*\d+\s*выпуск(?:а|ов)?\s*из\s*\d+)",
-        r"(\d+\s*-\s*\d+\s*сер(?:ия|ии|ий)\s*из\s*\d+)",
-        r"(\d+\s*сер(?:ия|ии|ий)\s*из\s*\d+)",
-        r"(\d+\s*-\s*\d+\s*выпуск(?:а|ов)?\s*из\s*\d+)",
-        r"(\d+\s*выпуск(?:а|ов)?\s*из\s*\d+)",
-        r"(\d+\s*сезон:\s*\d+\s*-\s*\d+\s*сер(?:ия|ии|ий))",
-        r"(\d+\s*сезон:\s*\d+\s*сер(?:ия|ии|ий))",
-        r"(\d+\s*сезон:\s*\d+\s*-\s*\d+\s*выпуск(?:а|ов)?)",
-        r"(\d+\s*сезон:\s*\d+\s*выпуск(?:а|ов)?)",
-        r"(\d+\s*-\s*\d+\s*сер(?:ия|ии|ий))",
-        r"(\d+\s*сер(?:ия|ии|ий))",
-        r"(\d+\s*-\s*\d+\s*выпуск(?:а|ов)?)",
-        r"(\d+\s*выпуск(?:а|ов)?)",
-        r"(s\d{1,2}\s*e\d{1,3}\s*-\s*e\d{1,3})",
-        r"(s\d{1,2}\s*e\d{1,3})",
-        r"(\d{1,2}x\d{1,3}\s*-\s*\d{1,2}x\d{1,3})",
-        r"(\d{1,2}x\d{1,3}\s*-\s*\d{1,3})",
-        r"(\d{1,2}x\d{1,3})",
-        r"(\d+\s*-\s*\d+\s*из\s*\d+)",
-        r"(\d+\s*из\s*\d+)",
-    ]
-    for pattern in patterns:
-        m = re.search(pattern, text, flags=re.I)
-        if m:
-            return compact_spaces(m.group(1))
-    return None
-
 
 def _episode_progress_parts(value: Any) -> Optional[Dict[str, int | None]]:
     text = compact_spaces(str(value or "")).lower().replace("ё", "е")
@@ -225,11 +196,16 @@ def normalize_audio_tracks_signature(value: Any) -> str:
 def _resolved_audio_tracks(source_audio_tracks: Any, source_title: Any) -> Any:
     if normalize_audio_tracks_signature(source_audio_tracks):
         return source_audio_tracks
-    parsed = parse_audio_tracks(compact_spaces(str(source_title or "")))
+    parsed = coerce_parsed_release(source_title).audio_tracks if compact_spaces(str(source_title or "")) else []
+    if not parsed:
+        parsed = parse_audio_tracks(compact_spaces(str(source_title or "")))
     return parsed or source_audio_tracks
 
 
-def version_release_type_signature(source_title: Any) -> str:
+def version_release_type_signature(source_title: Any, parsed_release_json: Any = "") -> str:
+    parsed = coerce_parsed_release(source_title, parsed_release_json=parsed_release_json)
+    if parsed.release_type:
+        return compact_spaces(parsed.release_type).lower()
     title = compact_spaces(str(source_title or "")).lower()
     if not title:
         return ""
@@ -245,12 +221,14 @@ def build_variant_signature(
     source_episode_progress: Any,
     source_format: Any,
     source_audio_tracks: Any,
+    parsed_release_json: Any = "",
 ) -> str:
     media = compact_spaces(str(media_type or "movie")).lower() or "movie"
-    progress_sig = normalize_episode_progress_signature(source_episode_progress) or "noprogress"
-    format_sig = compact_spaces(str(source_format or "")).lower() or "nofmt"
-    release_sig = version_release_type_signature(source_title) or "norelease"
-    audio_sig = normalize_audio_tracks_signature(_resolved_audio_tracks(source_audio_tracks, source_title)) or "noaudio"
+    parsed = coerce_parsed_release(source_title, media, parsed_release_json=parsed_release_json)
+    progress_sig = normalize_episode_progress_signature(parsed.episode_progress_text or source_episode_progress) or "noprogress"
+    format_sig = compact_spaces(str(parsed.resolution or source_format or "")).lower() or "nofmt"
+    release_sig = version_release_type_signature(source_title, parsed_release_json=parsed_release_json) or "norelease"
+    audio_sig = normalize_audio_tracks_signature(parsed.audio_tracks or _resolved_audio_tracks(source_audio_tracks, source_title)) or "noaudio"
     if media == "tv":
         return sha1_text(f"tv|{progress_sig}|{format_sig}|{release_sig}|{audio_sig}")
     if media == "movie":
@@ -265,19 +243,51 @@ def build_item_variant_signature(item: Dict[str, Any]) -> str:
         source_episode_progress=item.get("source_episode_progress"),
         source_format=item.get("source_format"),
         source_audio_tracks=item.get("source_audio_tracks"),
+        parsed_release_json=item.get("parsed_release_json"),
     )
 
 
 def refresh_item_version_fields(item: Dict[str, Any]) -> Dict[str, Any]:
     refreshed = dict(item)
+    parsed: Optional[ParsedRelease] = None
+    try:
+        parsed = coerce_parsed_release(
+            refreshed.get("source_title"),
+            refreshed.get("media_type"),
+            refreshed.get("parsed_release_json"),
+        )
+        refreshed["parsed_release_json"] = parsed.to_json()
+    except Exception:
+        refreshed["parsed_release_json"] = ""
+        parsed = None
+
+    if parsed is not None:
+        refreshed["source_year"] = parsed.year or refreshed.get("source_year")
+        refreshed["source_format"] = parsed.resolution or refreshed.get("source_format") or ""
+        refreshed["source_episode_progress"] = parsed.episode_progress_text or refreshed.get("source_episode_progress") or ""
+        refreshed["source_audio_tracks"] = parsed.audio_tracks or refreshed.get("source_audio_tracks") or []
 
     try:
-        refreshed["variant_signature"] = build_item_variant_signature(refreshed)
+        refreshed["variant_signature"] = build_variant_signature(
+            media_type=refreshed.get("media_type"),
+            source_title=refreshed.get("source_title"),
+            source_episode_progress=refreshed.get("source_episode_progress"),
+            source_format=refreshed.get("source_format"),
+            source_audio_tracks=refreshed.get("source_audio_tracks"),
+            parsed_release_json=refreshed.get("parsed_release_json"),
+        )
     except Exception:
         refreshed["variant_signature"] = ""
 
     try:
-        refreshed["variant_components"] = get_item_variant_components(refreshed)
+        refreshed["variant_components"] = get_variant_components(
+            media_type=refreshed.get("media_type"),
+            source_title=refreshed.get("source_title"),
+            source_episode_progress=refreshed.get("source_episode_progress"),
+            source_format=refreshed.get("source_format"),
+            source_audio_tracks=refreshed.get("source_audio_tracks"),
+            parsed_release_json=refreshed.get("parsed_release_json"),
+        )
     except Exception:
         refreshed["variant_components"] = {}
 
@@ -302,14 +312,16 @@ def get_variant_components(
     source_episode_progress: Any,
     source_format: Any,
     source_audio_tracks: Any,
+    parsed_release_json: Any = "",
 ) -> Dict[str, str]:
     media = compact_spaces(str(media_type or "movie")).lower() or "movie"
-    resolved_audio_tracks = _resolved_audio_tracks(source_audio_tracks, source_title)
+    parsed = coerce_parsed_release(source_title, media, parsed_release_json=parsed_release_json)
+    resolved_audio_tracks = parsed.audio_tracks or _resolved_audio_tracks(source_audio_tracks, source_title)
     return {
         "media": media,
-        "progress": normalize_episode_progress_signature(source_episode_progress) or "noprogress",
-        "format": compact_spaces(str(source_format or "")).lower() or "nofmt",
-        "release": version_release_type_signature(source_title) or "norelease",
+        "progress": normalize_episode_progress_signature(parsed.episode_progress_text or source_episode_progress) or "noprogress",
+        "format": compact_spaces(str(parsed.resolution or source_format or "")).lower() or "nofmt",
+        "release": version_release_type_signature(source_title, parsed_release_json=parsed_release_json) or "norelease",
         "audio": normalize_audio_tracks_signature(resolved_audio_tracks) or "noaudio",
     }
 
@@ -321,6 +333,7 @@ def get_item_variant_components(item: Dict[str, Any]) -> Dict[str, str]:
         source_episode_progress=item.get("source_episode_progress"),
         source_format=item.get("source_format"),
         source_audio_tracks=item.get("source_audio_tracks"),
+        parsed_release_json=item.get("parsed_release_json"),
     )
 
 

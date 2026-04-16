@@ -5,9 +5,10 @@ from typing import Any, Dict, List, Optional
 from urllib.parse import urljoin
 
 from kinozal_http import close_kinozal_http, fetch_kinozal_html
+from episode_progress import parse_episode_progress
 from parsing_audio import infer_release_type, parse_audio_tracks
 from parsing_basic import parse_format, parse_year
-from release_versioning import parse_episode_progress
+from parsed_release import parse_release_title
 from source_categories import normalize_source_category_id, resolve_source_category_name
 
 log = logging.getLogger("kinozal-source")
@@ -44,12 +45,14 @@ def _normalize_category_fields(category_id: Any) -> Dict[str, Any]:
 
 def _enrich_title_fields(title: str) -> Dict[str, Any]:
     title = _compact(title)
+    parsed = parse_release_title(title)
     return {
-        "source_year": parse_year(title),
-        "source_format": parse_format(title) or "",
-        "source_audio_tracks": parse_audio_tracks(title),
-        "source_episode_progress": parse_episode_progress(title) or "",
-        "source_release_type": infer_release_type(title) or "",
+        "source_year": parsed.year or parse_year(title),
+        "source_format": parsed.resolution or parse_format(title) or "",
+        "source_audio_tracks": parsed.audio_tracks or parse_audio_tracks(title),
+        "source_episode_progress": parsed.episode_progress_text or parse_episode_progress(title) or "",
+        "source_release_type": parsed.release_type or infer_release_type(title) or "",
+        "parsed_release_json": parsed.to_json(),
     }
 
 

@@ -2,6 +2,7 @@ import asyncio
 import logging
 from typing import Any, List, Optional, Sequence
 
+from delivery_events import build_delivery_event_key, resolve_delivery_event_type
 from delivery_audit import build_delivery_audit
 from delivery_sender import send_grouped_items_to_user, send_item_to_user
 from domain import DeliveryCandidate, ReleaseItem, SubscriptionRecord
@@ -49,19 +50,53 @@ class DeliveryService:
             [sub.to_dict() for sub in subs] if subs else None,
         )
 
-    def _build_delivery_audit(self, item: ReleaseItem, subs: Sequence[SubscriptionRecord], context: str) -> dict:
-        return build_delivery_audit(
+    def _build_delivery_audit(
+        self,
+        item: ReleaseItem,
+        subs: Sequence[SubscriptionRecord],
+        context: str,
+        *,
+        event_type: str,
+        event_key: str,
+    ) -> dict:
+        audit = build_delivery_audit(
             self.repository.db,
             item.to_dict(),
             [sub.to_dict() for sub in subs],
             context=context,
         )
+        audit["event_type"] = event_type
+        audit["event_key"] = event_key
+        return audit
+
+    def build_delivery_event(self, tg_user_id: int, item: ReleaseItem, *, context: str = "worker", old_release_text: str = "") -> tuple[str, str]:
+        event_type = resolve_delivery_event_type(context, is_release_text_change=(context == "release_text_update"))
+        event_key = build_delivery_event_key(
+            tg_user_id,
+            item,
+            context=context,
+            is_release_text_change=(event_type == "release_text"),
+            release_text=old_release_text or item.get("source_release_text") or "",
+        )
+        return event_type, event_key
+
+    def build_candidate_delivery_event(self, tg_user_id: int, delivery: DeliveryCandidate, *, context: str = "worker") -> tuple[str, str]:
+        event_type = delivery.event_type or resolve_delivery_event_type(context, is_release_text_change=delivery.is_release_text_change)
+        event_key = delivery.event_key or build_delivery_event_key(
+            tg_user_id,
+            delivery.item,
+            context=context,
+            is_release_text_change=delivery.is_release_text_change,
+            release_text=delivery.old_release_text or delivery.item.get("source_release_text") or "",
+        )
+        return event_type, event_key
 
     def begin_delivery_claim(self, tg_user_id: int, item: ReleaseItem, subs: Sequence[SubscriptionRecord], context: str = "worker") -> bool:
         item_id = item.id
         primary_sub_id = subs[0].id if subs else 0
         matched_sub_ids = [sub.id for sub in subs]
-        delivery_audit = self._build_delivery_audit(item, subs, context)
+        event_type, event_key = self.build_delivery_event(tg_user_id, item, context=context)
+        delivery_audit = self._build_delivery_audit(item, subs, context, event_type=event_type, event_key=event_key)
         return self.repository.begin_delivery_claim(
             tg_user_id,
             item_id,
@@ -69,6 +104,8 @@ class DeliveryService:
             matched_sub_ids,
             delivery_audit=delivery_audit,
             context=context,
+            event_type=event_type,
+            event_key=event_key,
         )
 
     def mark_delivery_claim_failed(self, tg_user_id: int, item: ReleaseItem, error: str = "") -> None:
@@ -78,7 +115,8 @@ class DeliveryService:
         item_id = item.id
         primary_sub_id = subs[0].id if subs else 0
         matched_sub_ids = [sub.id for sub in subs]
-        delivery_audit = self._build_delivery_audit(item, subs, context)
+        event_type, event_key = self.build_delivery_event(tg_user_id, item, context=context)
+        delivery_audit = self._build_delivery_audit(item, subs, context, event_type=event_type, event_key=event_key)
         self.repository.record_delivery(
             tg_user_id,
             item_id,
@@ -139,12 +177,13 @@ class DeliveryService:
                 item.source_uid,
             )
 
-        if not self.begin_delivery_claim(tg_user_id, item, matched_subs, context="worker"):
+        claim_context = delivery.delivery_context or "worker"
+        if not self.begin_delivery_claim(tg_user_id, item, matched_subs, context=claim_context):
             return
         await self.deliver_claimed_item(
             tg_user_id,
             item,
             matched_subs,
-            context="worker",
+            context=claim_context,
             old_release_text=delivery.old_release_text,
         )

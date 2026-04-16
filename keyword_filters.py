@@ -22,6 +22,11 @@ TECH_KEYWORD_PATTERNS: Dict[str, List[str]] = {
     "remux": [r"remux"],
 }
 
+TECH_KEYWORD_REGEXES: Dict[str, Tuple[re.Pattern[str], ...]] = {
+    token: tuple(re.compile(pattern, flags=re.I) for pattern in patterns)
+    for token, patterns in TECH_KEYWORD_PATTERNS.items()
+}
+
 
 def parse_rating(text: str) -> Optional[float]:
     if not text:
@@ -54,6 +59,14 @@ def normalize_keywords_input(text: str) -> Tuple[str, str]:
         elif token.startswith("-") and len(token) > 1:
             exclude.append(token[1:])
     return ",".join(include), ",".join(exclude)
+
+
+def split_keyword_tokens(value: Any) -> Tuple[str, ...]:
+    return tuple(
+        token.strip().lower()
+        for token in str(value or "").split(",")
+        if token.strip()
+    )
 
 
 def build_keyword_haystacks(item: Dict[str, Any]) -> Tuple[str, str]:
@@ -94,9 +107,9 @@ def keyword_matches_item(token: str, item: Dict[str, Any], text_haystack: Option
     if text_haystack is None or tech_haystack is None:
         text_haystack, tech_haystack = build_keyword_haystacks(item)
 
-    special_patterns = TECH_KEYWORD_PATTERNS.get(token)
+    special_patterns = TECH_KEYWORD_REGEXES.get(token)
     if special_patterns:
-        return any(re.search(pattern, tech_haystack, flags=re.I) for pattern in special_patterns)
+        return any(pattern.search(tech_haystack) for pattern in special_patterns)
 
     if len(token) <= 3 and re.fullmatch(r"[\w\-\+]+", token, flags=re.I):
         return re.search(rf"(?<!\w){re.escape(token)}(?!\w)", text_haystack, flags=re.I) is not None

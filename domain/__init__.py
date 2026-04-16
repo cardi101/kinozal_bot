@@ -1,3 +1,3 @@
-from .models import DeliveryCandidate, ReleaseItem, SubscriptionRecord
+from .models import CompiledSubscription, DeliveryCandidate, ReleaseItem, SubscriptionRecord
 
-__all__ = ["DeliveryCandidate", "ReleaseItem", "SubscriptionRecord"]
+__all__ = ["CompiledSubscription", "DeliveryCandidate", "ReleaseItem", "SubscriptionRecord"]

@@ -1,7 +1,12 @@
 from typing import Any, List
 
-from domain import ReleaseItem, SubscriptionRecord
-from subscription_matching import match_subscription
+from domain import CompiledSubscription, ReleaseItem, SubscriptionRecord
+from subscription_matching import (
+    compile_subscription,
+    explain_subscription_match,
+    explain_subscription_match_details,
+    match_subscription,
+)
 
 
 class SubscriptionService:
@@ -9,11 +14,23 @@ class SubscriptionService:
         self.repository = repository
 
     def list_enabled(self) -> List[SubscriptionRecord]:
-        enabled_subs = [
-            self.repository.get_subscription(int(sub["id"]))
+        return [SubscriptionRecord.from_payload(sub) for sub in self.repository.list_enabled_subscriptions() if sub]
+
+    def list_enabled_compiled(self) -> List[CompiledSubscription]:
+        return [
+            compile_subscription(self.repository, sub)
             for sub in self.repository.list_enabled_subscriptions()
+            if sub
         ]
-        return [SubscriptionRecord.from_payload(sub) for sub in enabled_subs if sub]
+
+    def compile(self, sub: SubscriptionRecord | dict | CompiledSubscription) -> CompiledSubscription:
+        return compile_subscription(self.repository, sub)
 
     def matches(self, sub: SubscriptionRecord, item: ReleaseItem) -> bool:
-        return match_subscription(self.repository, sub.to_dict(), item.to_dict())
+        return match_subscription(self.repository, sub, item)
+
+    def explain(self, sub: SubscriptionRecord | dict | CompiledSubscription, item: ReleaseItem) -> str:
+        return explain_subscription_match(self.repository, sub, item)
+
+    def explain_details(self, sub: SubscriptionRecord | dict | CompiledSubscription, item: ReleaseItem) -> dict:
+        return explain_subscription_match_details(self.repository, sub, item)

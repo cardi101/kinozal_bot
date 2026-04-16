@@ -7,7 +7,7 @@ from typing import Any, Dict, List, Optional, Sequence
 import httpx
 from aiogram import Bot
 from aiogram.enums import ParseMode
-from aiogram.exceptions import TelegramRetryAfter
+from aiogram.exceptions import TelegramNetworkError, TelegramRetryAfter, TelegramServerError
 from aiogram.types import BufferedInputFile, InlineKeyboardMarkup
 
 from config import CFG
@@ -23,6 +23,8 @@ log = logging.getLogger("kinozal-news-bot")
 _ALLOWED_TAGS = {"b", "strong", "i", "em", "u", "ins", "s", "strike", "del", "code", "pre", "a"}
 
 _MAX_RETRIES = 3
+_RETRYABLE_SEND_ERRORS = (TelegramRetryAfter, TelegramNetworkError, TelegramServerError)
+_GENERIC_RETRY_BACKOFF_SECONDS = (1, 3, 7)
 
 _VOID_TAGS = {"br"}
 
@@ -37,6 +39,18 @@ async def _tg_retry(coro_fn, *args, **kwargs):
             wait = min(e.retry_after + 1, 60)
             log.warning("Telegram rate limit, retry_after=%ss, attempt=%d/%d",
                         e.retry_after, attempt + 1, _MAX_RETRIES)
+            await asyncio.sleep(wait)
+        except (TelegramNetworkError, TelegramServerError) as exc:
+            if attempt == _MAX_RETRIES - 1:
+                raise
+            wait = _GENERIC_RETRY_BACKOFF_SECONDS[min(attempt, len(_GENERIC_RETRY_BACKOFF_SECONDS) - 1)]
+            log.warning(
+                "Telegram transient send error=%s attempt=%d/%d wait=%ss",
+                exc.__class__.__name__,
+                attempt + 1,
+                _MAX_RETRIES,
+                wait,
+            )
             await asyncio.sleep(wait)
 
 
@@ -343,13 +357,21 @@ async def send_item_to_user(
     main_sent = False
 
     if poster_url:
-        poster_file = await _build_poster_file(str(poster_url), item.get("id"))
-        if poster_file:
-            caption_html = _safe_truncate_html(text, 1000)
+        caption_html = _safe_truncate_html(text, 1000)
+        cache_key = f"poster:{poster_url}"
+        cached_file_id = None
+        cache_getter = getattr(db, "get_telegram_file_cache", None)
+        if cache_getter:
             try:
-                await _tg_retry(bot.send_photo,
+                cached_file_id = cache_getter(cache_key)
+            except Exception:
+                cached_file_id = None
+        if cached_file_id:
+            try:
+                await _tg_retry(
+                    bot.send_photo,
                     tg_user_id,
-                    photo=poster_file,
+                    photo=cached_file_id,
                     caption=caption_html,
                     parse_mode=ParseMode.HTML,
                     reply_markup=action_kb,
@@ -357,11 +379,38 @@ async def send_item_to_user(
                 main_sent = True
             except Exception:
                 log.warning(
-                    "send_photo(uploaded poster) failed for user=%s item=%s",
+                    "send_photo(cached file_id) failed for user=%s item=%s",
                     tg_user_id,
                     item.get("id"),
                     exc_info=True,
                 )
+        if not main_sent:
+            poster_file = await _build_poster_file(str(poster_url), item.get("id"))
+            if poster_file:
+                try:
+                    message = await _tg_retry(bot.send_photo,
+                        tg_user_id,
+                        photo=poster_file,
+                        caption=caption_html,
+                        parse_mode=ParseMode.HTML,
+                        reply_markup=action_kb,
+                    )
+                    if message and getattr(message, "photo", None):
+                        best_photo = message.photo[-1]
+                        cache_setter = getattr(db, "set_telegram_file_cache", None)
+                        if cache_setter and getattr(best_photo, "file_id", ""):
+                            try:
+                                cache_setter(cache_key, str(best_photo.file_id), str(getattr(best_photo, "file_unique_id", "") or ""))
+                            except Exception:
+                                log.warning("failed to persist telegram poster cache item=%s", item.get("id"), exc_info=True)
+                    main_sent = True
+                except Exception:
+                    log.warning(
+                        "send_photo(uploaded poster) failed for user=%s item=%s",
+                        tg_user_id,
+                        item.get("id"),
+                        exc_info=True,
+                    )
 
     if not main_sent:
         try:
@@ -423,20 +472,50 @@ async def send_grouped_items_to_user(
     poster_url = first.get("tmdb_poster_url")
     sent = False
     if poster_url:
-        poster_file = await _build_poster_file(str(poster_url), first.get("id"))
-        if poster_file:
-            caption_html = _safe_truncate_html(text, 1000)
+        caption_html = _safe_truncate_html(text, 1000)
+        cache_key = f"poster:{poster_url}"
+        cached_file_id = None
+        cache_getter = getattr(db, "get_telegram_file_cache", None)
+        if cache_getter:
             try:
-                await _tg_retry(bot.send_photo,
+                cached_file_id = cache_getter(cache_key)
+            except Exception:
+                cached_file_id = None
+        if cached_file_id:
+            try:
+                await _tg_retry(
+                    bot.send_photo,
                     tg_user_id,
-                    photo=poster_file,
+                    photo=cached_file_id,
                     caption=caption_html,
                     parse_mode=ParseMode.HTML,
                     reply_markup=action_kb,
                 )
                 sent = True
             except Exception:
-                log.warning("send_photo failed for grouped delivery user=%s", tg_user_id, exc_info=True)
+                log.warning("send_photo(cached file_id) failed for grouped delivery user=%s", tg_user_id, exc_info=True)
+        if not sent:
+            poster_file = await _build_poster_file(str(poster_url), first.get("id"))
+            if poster_file:
+                try:
+                    message = await _tg_retry(bot.send_photo,
+                        tg_user_id,
+                        photo=poster_file,
+                        caption=caption_html,
+                        parse_mode=ParseMode.HTML,
+                        reply_markup=action_kb,
+                    )
+                    if message and getattr(message, "photo", None):
+                        best_photo = message.photo[-1]
+                        cache_setter = getattr(db, "set_telegram_file_cache", None)
+                        if cache_setter and getattr(best_photo, "file_id", ""):
+                            try:
+                                cache_setter(cache_key, str(best_photo.file_id), str(getattr(best_photo, "file_unique_id", "") or ""))
+                            except Exception:
+                                log.warning("failed to persist telegram poster cache tmdb=%s", tmdb_id, exc_info=True)
+                    sent = True
+                except Exception:
+                    log.warning("send_photo failed for grouped delivery user=%s", tg_user_id, exc_info=True)
     if not sent:
         try:
             await _tg_retry(bot.send_message,

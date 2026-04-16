@@ -1,8 +1,8 @@
 import re
 from typing import Any, Dict, List, Tuple
 
+from episode_progress import parse_episode_progress
 from parsing_audio import AUDIO_TAGS, NON_TITLE_TECH_TAGS, infer_release_type, parse_audio_variants
-from release_versioning import parse_episode_progress
 from utils import compact_spaces, strip_html
 
 

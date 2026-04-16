@@ -1,13 +1,15 @@
-from datetime import datetime, timezone
+import json
 from typing import Any, Dict, List
 
 from delivery_audit import build_delivery_audit
+from delivery_events import build_delivery_event_key
 from delivery_sender import send_item_to_user
 from domain import ReleaseItem
+from episode_progress import parse_episode_progress
 from match_debug_helpers import _strip_existing_match_fields, build_match_explanation
 from metrics_registry import build_metrics_payload
-from release_versioning import parse_episode_progress
-from subscription_matching import explain_subscription_match, match_subscription
+from quiet_hours import quiet_window_status
+from subscription_matching import explain_subscription_match, explain_subscription_match_details, match_subscription
 
 
 class AdminApiService:
@@ -203,10 +205,27 @@ class AdminApiService:
             rematch_input = ReleaseItem.from_payload(_strip_existing_match_fields(item))
             live_item = (await self.tmdb_service.enrich_item(rematch_input)).to_dict()
 
+        def _parse_debug_events(value: Any) -> List[Dict[str, Any]]:
+            raw = str(value or "").strip()
+            if not raw:
+                return []
+            try:
+                decoded = json.loads(raw)
+            except Exception:
+                return []
+            return decoded if isinstance(decoded, list) else []
+
+        def _strip_raw_tmdb_debug(payload: Any) -> Dict[str, Any]:
+            cleaned = dict(payload or {})
+            cleaned.pop("tmdb_match_debug", None)
+            return cleaned
+
         return {
             "kinozal_id": str(kinozal_id),
-            "stored_item": item,
-            "live_item": live_item,
+            "stored_item": _strip_raw_tmdb_debug(item),
+            "live_item": _strip_raw_tmdb_debug(live_item) if live_item else None,
+            "stored_tmdb_debug_events": _parse_debug_events(item.get("tmdb_match_debug")),
+            "live_tmdb_debug_events": _parse_debug_events((live_item or {}).get("tmdb_match_debug")),
             "explanation_html": build_match_explanation(self.db, item, live_item),
         }
 
@@ -293,11 +312,14 @@ class AdminApiService:
                     }
                 )
                 continue
-            reason = explain_subscription_match(self.db, sub_full, item)
+            details = explain_subscription_match_details(self.db, sub_full, item)
+            reason = str(details.get("summary") or "")
             payload = {
                 "id": int(sub_full["id"]),
                 "name": str(sub_full.get("name") or ""),
                 "reason": reason,
+                "explain": details.get("checks") or [],
+                "compiled_subscription": details.get("compiled_subscription_snapshot") or {},
             }
             if reason == "passed":
                 matched_subscriptions.append(payload)
@@ -312,18 +334,32 @@ class AdminApiService:
             kinozal_id and self.db.recently_delivered_kinozal_id(int(tg_user_id), str(kinozal_id), cooldown_seconds)
         )
 
-        quiet_start, quiet_end = self.db.get_user_quiet_hours(int(tg_user_id))
-        current_hour = datetime.now(timezone.utc).hour
-        quiet_active = False
-        if quiet_start is not None and quiet_end is not None:
-            if quiet_start < quiet_end:
-                quiet_active = quiet_start <= current_hour < quiet_end
-            else:
-                quiet_active = current_hour >= quiet_start or current_hour < quiet_end
+        profile_getter = getattr(self.db, "get_user_quiet_profile", None)
+        if profile_getter:
+            quiet_start, quiet_end, quiet_timezone = profile_getter(int(tg_user_id))
+        else:
+            quiet_start, quiet_end = self.db.get_user_quiet_hours(int(tg_user_id))
+            quiet_timezone = ""
+        quiet_status = quiet_window_status(quiet_start, quiet_end, quiet_timezone)
+        quiet_active = bool(quiet_status["active"])
+        computed_release_event_key = build_delivery_event_key(
+            int(tg_user_id),
+            item,
+            context="worker",
+            is_release_text_change=False,
+            release_text=str(item.get("source_release_text") or ""),
+        )
+        computed_release_text_event_key = build_delivery_event_key(
+            int(tg_user_id),
+            item,
+            context="release_text_update",
+            is_release_text_change=True,
+            release_text=str(item.get("source_release_text") or ""),
+        )
 
         pending_delivery = self.db.conn.execute(
             """
-            SELECT item_id, matched_sub_ids, old_release_text, is_release_text_change, queued_at
+            SELECT item_id, matched_sub_ids, old_release_text, is_release_text_change, queued_at, event_type, event_key, deliver_not_before_ts, lease_expires_at, attempt_count, last_error
             FROM pending_deliveries
             WHERE tg_user_id = ? AND item_id = ?
             LIMIT 1
@@ -332,13 +368,23 @@ class AdminApiService:
         ).fetchone()
         debounce_entry = self.db.conn.execute(
             """
-            SELECT tg_user_id, kinozal_id, item_id, matched_sub_ids, deliver_after_ts, reset_count
+            SELECT tg_user_id, kinozal_id, item_id, matched_sub_ids, deliver_after_ts, reset_count, event_key, lease_expires_at, attempt_count, last_error
             FROM debounce_queue
             WHERE tg_user_id = ? AND kinozal_id = ?
             LIMIT 1
             """,
             (int(tg_user_id), str(kinozal_id)),
         ).fetchone()
+        delivery_claim_rows = self.db.conn.execute(
+            """
+            SELECT event_type, event_key, status, delivery_context, claimed_at, updated_at, sent_at, last_error
+            FROM delivery_claims
+            WHERE tg_user_id = ? AND item_id = ?
+            ORDER BY COALESCE(updated_at, claimed_at) DESC
+            LIMIT 10
+            """,
+            (int(tg_user_id), int(item["id"])),
+        ).fetchall()
 
         anomalies = [
             anomaly
@@ -395,13 +441,25 @@ class AdminApiService:
             "cooldown_active": cooldown_active,
             "cooldown_seconds": int(cooldown_seconds),
             "quiet_hours": {
-                "start_hour_utc": quiet_start,
-                "end_hour_utc": quiet_end,
+                "start_hour": quiet_start,
+                "end_hour": quiet_end,
+                "timezone": quiet_status["timezone"],
                 "active_now": quiet_active,
-                "current_hour_utc": current_hour,
+                "current_hour_local": quiet_status["local_hour"],
+            },
+            "computed_delivery_events": {
+                "release": {
+                    "event_type": "release",
+                    "event_key": computed_release_event_key,
+                },
+                "release_text": {
+                    "event_type": "release_text",
+                    "event_key": computed_release_text_event_key,
+                },
             },
             "pending_delivery": dict(pending_delivery) if pending_delivery else None,
             "debounce_entry": dict(debounce_entry) if debounce_entry else None,
+            "delivery_claims": [dict(row) for row in delivery_claim_rows],
             "pending_match_review": pending_match_review,
             "open_anomalies": anomalies,
         }
@@ -437,6 +495,7 @@ class AdminApiService:
                         "id": int(sub_full["id"]),
                         "name": str(sub_full.get("name") or ""),
                         "reason": explain_subscription_match(self.db, sub_full, item),
+                        "explain": explain_subscription_match_details(self.db, sub_full, item).get("checks") or [],
                     }
                 )
 

@@ -3,21 +3,36 @@ VENV ?= .venv
 VENV_PYTHON := $(VENV)/bin/python
 PIP := $(VENV_PYTHON) -m pip
 
-.PHONY: install lint test check smoke monitoring-up monitoring-down
+.PHONY: install lint typecheck test test-cov check smoke monitoring-up monitoring-down
 
 $(VENV_PYTHON):
 	$(PYTHON) -m venv $(VENV)
 
 install: $(VENV_PYTHON)
-	$(PIP) install -r requirements.txt pytest ruff
+	$(PIP) install -r requirements.txt pytest ruff mypy pytest-cov
 
 lint: $(VENV_PYTHON)
 	$(VENV_PYTHON) -m ruff check .
 
+typecheck: $(VENV_PYTHON)
+	$(VENV_PYTHON) -m mypy
+
 test: $(VENV_PYTHON)
 	$(VENV_PYTHON) -m pytest -q
 
-check: lint test
+test-cov: $(VENV_PYTHON)
+	$(VENV_PYTHON) -m pytest tests/ -q \
+		--cov=subscription_matching \
+		--cov=services.subscription_service \
+		--cov=delivery_audit \
+		--cov=delivery_events \
+		--cov=quiet_hours \
+		--cov=parsed_release \
+		--cov=tmdb_match_features \
+		--cov-report=term-missing \
+		--cov-fail-under=75
+
+check: lint typecheck test
 
 smoke:
 	docker compose config --quiet
@@ -36,6 +51,7 @@ smoke:
 	docker compose exec -T api python smoke_bootstrap.py api
 	docker compose exec -T api python smoke_bootstrap.py app
 	docker compose exec -T api python smoke_repositories.py
+	docker compose exec -T api python smoke_worker.py
 	docker compose exec -T postgres psql -U postgres -d kinozal_news -c "select version, name from schema_migrations order by version;"
 
 monitoring-up:

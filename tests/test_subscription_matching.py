@@ -1,4 +1,9 @@
-from subscription_matching import explain_subscription_match, match_subscription
+from subscription_matching import (
+    compile_subscription,
+    explain_subscription_match,
+    explain_subscription_match_details,
+    match_subscription,
+)
 
 
 class FakeDB:
@@ -81,3 +86,25 @@ def test_custom_excluded_countries_keep_strict_any_intersection_behavior() -> No
 
     assert match_subscription(db, sub, item) is False
     assert explain_subscription_match(db, sub, item) == "excluded_country:['JP']"
+
+
+def test_compiled_subscription_keeps_matching_semantics() -> None:
+    db = FakeDB()
+    sub = make_world_subscription()
+    compiled = compile_subscription(db, sub)
+    item = make_regular_item("JP", "US")
+
+    assert match_subscription(db, compiled, item) is True
+    assert explain_subscription_match(db, compiled, item) == "passed"
+
+
+def test_explain_subscription_match_details_contains_structured_checks() -> None:
+    db = FakeDB()
+    sub = make_world_subscription()
+    item = make_regular_item("JP")
+
+    details = explain_subscription_match_details(db, sub, item)
+
+    assert details["summary"] == "excluded_country:['JP']"
+    assert details["compiled_subscription_snapshot"]["exclude_country_codes"]
+    assert any(check["check"] == "excluded_country" and check["passed"] is False for check in details["checks"])

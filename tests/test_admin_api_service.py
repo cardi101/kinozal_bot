@@ -86,7 +86,17 @@ class _FakeReplayDB:
     def delivered(self, tg_user_id: int, item_id: int) -> bool:
         return False
 
-    def begin_delivery_claim(self, tg_user_id: int, item_id: int, sub_id: int, matched_ids, delivery_audit=None, context: str = ""):
+    def begin_delivery_claim(
+        self,
+        tg_user_id: int,
+        item_id: int,
+        sub_id: int,
+        matched_ids,
+        delivery_audit=None,
+        context: str = "",
+        event_type: str = "",
+        event_key: str = "",
+    ):
         return True
 
     def record_delivery(self, tg_user_id: int, item_id: int, sub_id: int, matched_ids, delivery_audit=None):
@@ -103,6 +113,9 @@ class _FakeReplayDB:
 
     def get_user_quiet_hours(self, tg_user_id: int):
         return None, None
+
+    def get_user_quiet_profile(self, tg_user_id: int):
+        return None, None, ""
 
     def list_release_anomalies(self, kinozal_id: str, limit: int = 10):
         return []
@@ -235,6 +248,89 @@ def test_build_match_debug_uses_archive_aware_lookup() -> None:
 
     assert result["stored_item"]["id"] == 77
     assert result["live_item"] is None
+
+
+def test_build_match_debug_strips_raw_tmdb_debug_from_item_payload() -> None:
+    class _DebugDB(_FakeDB):
+        def find_item_by_kinozal_id(self, kinozal_id: str):
+            item = super().find_item_by_kinozal_id(kinozal_id)
+            item["tmdb_match_debug"] = '[{"stage":"candidate_probe"}]'
+            return item
+
+    db = _DebugDB()
+    service = AdminApiService(
+        db=db,
+        tmdb_service=None,
+        kinozal_service=None,
+        bot=None,
+    )
+
+    result = asyncio.run(service.build_match_debug("2128422", live=False))
+
+    assert "tmdb_match_debug" not in result["stored_item"]
+    assert result["stored_tmdb_debug_events"] == [{"stage": "candidate_probe"}]
+
+
+class _ExplainConn:
+    def execute(self, query: str, params=None):
+        del params
+
+        class _Cursor:
+            def __init__(self, rows):
+                self._rows = rows
+
+            def fetchone(self):
+                return self._rows[0] if self._rows else None
+
+            def fetchall(self):
+                return self._rows
+
+        if "FROM delivery_claims" in query:
+            return _Cursor(
+                [
+                    {
+                        "event_type": "release",
+                        "event_key": "release:1001:2128422:v1",
+                        "status": "sent",
+                        "delivery_context": "worker",
+                        "claimed_at": 1,
+                        "updated_at": 2,
+                        "sent_at": 2,
+                        "last_error": "",
+                    }
+                ]
+            )
+        return _Cursor([])
+
+
+class _ExplainDB(_FakeReplayDB):
+    def __init__(self) -> None:
+        super().__init__()
+        self.conn = _ExplainConn()
+
+
+def test_explain_delivery_returns_semantic_event_debug(monkeypatch) -> None:
+    db = _ExplainDB()
+    service = AdminApiService(
+        db=db,
+        tmdb_service=None,
+        kinozal_service=None,
+        bot=None,
+    )
+
+    monkeypatch.setattr(
+        admin_api_module,
+        "explain_subscription_match_details",
+        lambda db, sub, item: {"summary": "passed", "checks": [{"check": "media", "passed": True}], "compiled_subscription_snapshot": {"id": int(sub["id"])}},
+    )
+
+    result = service.explain_delivery("2128422", 1001)
+
+    assert result["status"] in {"ready", "delivered"}
+    assert result["computed_delivery_events"]["release"]["event_key"].startswith("release:1001:2128422:")
+    assert result["computed_delivery_events"]["release_text"]["event_key"].startswith("release_text:1001:2128422:")
+    assert result["delivery_claims"][0]["event_key"] == "release:1001:2128422:v1"
+    assert result["matched_subscriptions"][0]["compiled_subscription"] == {"id": 7}
 
 
 def test_reparse_release_uses_archive_aware_lookup() -> None:

@@ -32,6 +32,25 @@ jobs:
       - name: Ruff check
         run: ruff check .
 
+  typecheck:
+    name: Typecheck
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install -r requirements.txt mypy
+
+      - name: Run mypy
+        run: python -m mypy
+
   test:
     name: Test
     runs-on: ubuntu-latest
@@ -46,10 +65,20 @@ jobs:
       - name: Install dependencies
         run: |
           pip install --upgrade pip
-          pip install -r requirements.txt pytest
+          pip install -r requirements.txt pytest pytest-cov
 
       - name: Run tests
-        run: python -m pytest tests/ -v
+        run: |
+          python -m pytest tests/ -v \
+            --cov=subscription_matching \
+            --cov=services.subscription_service \
+            --cov=delivery_audit \
+            --cov=delivery_events \
+            --cov=quiet_hours \
+            --cov=parsed_release \
+            --cov=tmdb_match_features \
+            --cov-report=term-missing \
+            --cov-fail-under=75
 
   docker-build:
     name: Docker Build
@@ -132,6 +161,7 @@ jobs:
           docker compose exec -T api python smoke_bootstrap.py api
           docker compose exec -T api python smoke_bootstrap.py app
           docker compose exec -T api python smoke_repositories.py
+          docker compose exec -T api python smoke_worker.py
 
       - name: Dump compose logs on failure
         if: failure()

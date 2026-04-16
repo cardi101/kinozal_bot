@@ -3,12 +3,14 @@ from typing import Any, Dict, Iterable, List, Optional
 
 from psycopg import IntegrityError
 
+from delivery_events import build_delivery_event_key, resolve_delivery_event_type
 from release_versioning import extract_kinozal_id
 from utils import compact_spaces, utc_ts
 
 from .base import BaseRepository
 
 DELIVERY_CLAIM_LEASE_SECONDS = 900
+DELIVERY_QUEUE_LEASE_SECONDS = 300
 
 
 def _load_delivery_audit(delivery_audit_json: Any) -> Dict[str, Any]:
@@ -46,23 +48,52 @@ def _delivery_claim_is_active(row: Dict[str, Any], now: Optional[int] = None) ->
 
 
 class DeliveryRepository(BaseRepository):
-    def _delivery_claim_identity(self, item_id: int, delivery_audit_json: str = "") -> Dict[str, Any]:
+    def _delivery_claim_identity(
+        self,
+        tg_user_id: int,
+        item_id: int,
+        delivery_audit_json: str = "",
+        *,
+        context: str = "",
+        event_type: str = "",
+        event_key: str = "",
+    ) -> Dict[str, Any]:
         snapshot = _item_snapshot_from_audit(delivery_audit_json)
+        resolved_event_type = compact_spaces(event_type) or compact_spaces(str(_load_delivery_audit(delivery_audit_json).get("event_type") or "")) or resolve_delivery_event_type(context)
+        resolved_event_key = compact_spaces(event_key) or compact_spaces(str(_load_delivery_audit(delivery_audit_json).get("event_key") or ""))
         if snapshot:
             kinozal_id = compact_spaces(str(snapshot.get("kinozal_id") or "")) or extract_kinozal_id(snapshot.get("source_uid")) or extract_kinozal_id(snapshot.get("source_link"))
+            if not resolved_event_key:
+                resolved_event_key = build_delivery_event_key(
+                    tg_user_id,
+                    snapshot,
+                    context=context,
+                    is_release_text_change=(resolved_event_type == "release_text"),
+                )
             return {
                 "kinozal_id": kinozal_id or None,
                 "source_uid": compact_spaces(str(snapshot.get("source_uid") or "")) or None,
                 "version_signature": compact_spaces(str(snapshot.get("version_signature") or "")) or None,
+                "event_type": resolved_event_type or "release",
+                "event_key": resolved_event_key,
             }
         payload = self.db.get_item_any(int(item_id)) if hasattr(self.db, "get_item_any") else None
         if not payload:
-            return {"kinozal_id": None, "source_uid": None, "version_signature": None}
+            return {"kinozal_id": None, "source_uid": None, "version_signature": None, "event_type": resolved_event_type or "release", "event_key": resolved_event_key}
         kinozal_id = compact_spaces(str(payload.get("kinozal_id") or "")) or extract_kinozal_id(payload.get("source_uid")) or extract_kinozal_id(payload.get("source_link"))
+        if not resolved_event_key:
+            resolved_event_key = build_delivery_event_key(
+                tg_user_id,
+                payload,
+                context=context,
+                is_release_text_change=(resolved_event_type == "release_text"),
+            )
         return {
             "kinozal_id": kinozal_id or None,
             "source_uid": compact_spaces(str(payload.get("source_uid") or "")) or None,
             "version_signature": compact_spaces(str(payload.get("version_signature") or "")) or None,
+            "event_type": resolved_event_type or "release",
+            "event_key": resolved_event_key,
         }
 
     def begin_delivery_claim(
@@ -73,13 +104,22 @@ class DeliveryRepository(BaseRepository):
         matched_sub_ids: Optional[Iterable[int]] = None,
         delivery_audit: Optional[Dict[str, Any]] = None,
         context: str = "",
+        event_type: str = "",
+        event_key: str = "",
     ) -> bool:
         matched_ids_csv = None
         if matched_sub_ids:
             normalized_ids = sorted({int(x) for x in matched_sub_ids})
             matched_ids_csv = ",".join(str(x) for x in normalized_ids) if normalized_ids else None
         delivery_audit_json = json.dumps(delivery_audit, ensure_ascii=False, sort_keys=True) if delivery_audit else ""
-        identity = self._delivery_claim_identity(item_id, delivery_audit_json)
+        identity = self._delivery_claim_identity(
+            tg_user_id,
+            item_id,
+            delivery_audit_json,
+            context=context,
+            event_type=event_type,
+            event_key=event_key,
+        )
         now = utc_ts()
         stale_cutoff = now - DELIVERY_CLAIM_LEASE_SECONDS
         with self.lock:
@@ -87,15 +127,17 @@ class DeliveryRepository(BaseRepository):
                 row = self.conn.execute(
                     """
                     INSERT INTO delivery_claims(
-                        tg_user_id, item_id, kinozal_id, source_uid, version_signature, subscription_id,
+                        tg_user_id, item_id, kinozal_id, source_uid, version_signature, event_type, event_key, subscription_id,
                         matched_subscription_ids, delivery_context, delivery_audit_json, status, last_error,
                         claimed_at, updated_at, sent_at
                     )
-                    VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, 'sending', '', ?, ?, NULL)
-                    ON CONFLICT (tg_user_id, item_id) DO UPDATE SET
+                    VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'sending', '', ?, ?, NULL)
+                    ON CONFLICT (tg_user_id, event_key) DO UPDATE SET
+                        item_id = EXCLUDED.item_id,
                         kinozal_id = EXCLUDED.kinozal_id,
                         source_uid = EXCLUDED.source_uid,
                         version_signature = EXCLUDED.version_signature,
+                        event_type = EXCLUDED.event_type,
                         subscription_id = EXCLUDED.subscription_id,
                         matched_subscription_ids = EXCLUDED.matched_subscription_ids,
                         delivery_context = EXCLUDED.delivery_context,
@@ -125,6 +167,8 @@ class DeliveryRepository(BaseRepository):
                         identity["kinozal_id"],
                         identity["source_uid"],
                         identity["version_signature"],
+                        identity["event_type"],
+                        identity["event_key"],
                         sub_id,
                         matched_ids_csv,
                         compact_spaces(context),
@@ -432,6 +476,8 @@ class DeliveryRepository(BaseRepository):
             normalized_ids = sorted({int(x) for x in matched_sub_ids})
             matched_ids_csv = ",".join(str(x) for x in normalized_ids) if normalized_ids else None
         delivery_audit_json = json.dumps(delivery_audit, ensure_ascii=False, sort_keys=True) if delivery_audit else ""
+        audit = _load_delivery_audit(delivery_audit_json)
+        event_key = compact_spaces(str(audit.get("event_key") or ""))
         with self.lock:
             live_item = self.conn.execute(
                 "SELECT 1 FROM items WHERE id = ? LIMIT 1",
@@ -495,9 +541,12 @@ class DeliveryRepository(BaseRepository):
                     """
                     UPDATE delivery_claims
                     SET status = 'sent', last_error = '', sent_at = ?, updated_at = ?
-                    WHERE tg_user_id = ? AND item_id = ?
+                    WHERE tg_user_id = ? AND (
+                        (COALESCE(event_key, '') <> '' AND event_key = ?)
+                        OR item_id = ?
+                    )
                     """,
-                    (delivered_at, delivered_at, tg_user_id, item_id),
+                    (delivered_at, delivered_at, tg_user_id, event_key, item_id),
                 )
                 self.conn.commit()
                 return
@@ -514,9 +563,12 @@ class DeliveryRepository(BaseRepository):
                 """
                 UPDATE delivery_claims
                 SET status = 'sent', last_error = '', sent_at = ?, updated_at = ?
-                WHERE tg_user_id = ? AND item_id = ?
+                WHERE tg_user_id = ? AND (
+                    (COALESCE(event_key, '') <> '' AND event_key = ?)
+                    OR item_id = ?
+                )
                 """,
-                (sent_at, sent_at, tg_user_id, item_id),
+                (sent_at, sent_at, tg_user_id, event_key, item_id),
             )
             self.conn.commit()
 
@@ -604,15 +656,17 @@ class DeliveryRepository(BaseRepository):
         item_id: int,
         matched_sub_ids: str,
         delay_seconds: int,
+        event_key: str = "",
     ) -> None:
         after_ts = utc_ts() + delay_seconds
         with self.lock:
             self.conn.execute(
-                """INSERT INTO debounce_queue (tg_user_id, kinozal_id, item_id, matched_sub_ids, deliver_after_ts, reset_count)
-                   VALUES (?, ?, ?, ?, ?, 0)
+                """INSERT INTO debounce_queue (tg_user_id, kinozal_id, item_id, matched_sub_ids, deliver_after_ts, reset_count, event_key)
+                   VALUES (?, ?, ?, ?, ?, 0, ?)
                    ON CONFLICT (tg_user_id, kinozal_id) DO UPDATE SET
                        item_id = excluded.item_id,
                        matched_sub_ids = excluded.matched_sub_ids,
+                       event_key = excluded.event_key,
                        deliver_after_ts = CASE
                            WHEN debounce_queue.reset_count < 2 THEN excluded.deliver_after_ts
                            ELSE debounce_queue.deliver_after_ts
@@ -621,7 +675,7 @@ class DeliveryRepository(BaseRepository):
                            WHEN debounce_queue.reset_count < 2 THEN debounce_queue.reset_count + 1
                            ELSE debounce_queue.reset_count
                        END""",
-                (tg_user_id, kinozal_id, item_id, matched_sub_ids or "", after_ts),
+                (tg_user_id, kinozal_id, item_id, matched_sub_ids or "", after_ts, compact_spaces(event_key) or f"debounce:{tg_user_id}:{compact_spaces(str(kinozal_id or ''))}"),
             )
             self.conn.commit()
 
@@ -633,6 +687,71 @@ class DeliveryRepository(BaseRepository):
                 (now,),
             ).fetchall()
             return [dict(row) for row in rows]
+
+    def lease_due_debounce_entries(
+        self,
+        current_ts: Optional[int] = None,
+        *,
+        lease_seconds: int = DELIVERY_QUEUE_LEASE_SECONDS,
+    ) -> List[Dict[str, Any]]:
+        now = int(current_ts or utc_ts())
+        lease_token = f"debounce-{now}"
+        lease_expires_at = now + int(lease_seconds)
+        with self.lock:
+            rows = self.conn.execute(
+                """
+                UPDATE debounce_queue dq
+                SET lease_token = ?,
+                    lease_expires_at = ?,
+                    attempt_count = COALESCE(dq.attempt_count, 0) + 1
+                FROM (
+                    SELECT tg_user_id, kinozal_id
+                    FROM debounce_queue
+                    WHERE deliver_after_ts <= ?
+                      AND COALESCE(lease_expires_at, 0) <= ?
+                    ORDER BY deliver_after_ts ASC
+                    FOR UPDATE SKIP LOCKED
+                ) picked
+                WHERE dq.tg_user_id = picked.tg_user_id
+                  AND dq.kinozal_id = picked.kinozal_id
+                RETURNING dq.*
+                """,
+                (lease_token, lease_expires_at, now, now),
+            ).fetchall()
+            self.conn.commit()
+        return [dict(row) for row in rows]
+
+    def release_debounce_lease(
+        self,
+        tg_user_id: int,
+        kinozal_id: str,
+        *,
+        lease_token: str,
+        error: str = "",
+        deliver_after_ts: Optional[int] = None,
+    ) -> None:
+        assignments = [
+            "lease_token = ''",
+            "lease_expires_at = 0",
+            "last_error = ?",
+        ]
+        params: List[Any] = [compact_spaces(error)[:500]]
+        if deliver_after_ts is not None:
+            assignments.append("deliver_after_ts = ?")
+            params.append(int(deliver_after_ts))
+        params.extend([int(tg_user_id), compact_spaces(str(kinozal_id or "")), compact_spaces(str(lease_token or ""))])
+        with self.lock:
+            self.conn.execute(
+                f"""
+                UPDATE debounce_queue
+                SET {', '.join(assignments)}
+                WHERE tg_user_id = ?
+                  AND kinozal_id = ?
+                  AND COALESCE(lease_token, '') = ?
+                """,
+                tuple(params),
+            )
+            self.conn.commit()
 
     def delete_debounce_entry(self, tg_user_id: int, kinozal_id: str) -> None:
         with self.lock:
@@ -789,18 +908,29 @@ class DeliveryRepository(BaseRepository):
         matched_sub_ids: str,
         old_release_text: str,
         is_release_text_change: bool,
+        *,
+        event_type: str = "",
+        event_key: str = "",
+        deliver_not_before_ts: Optional[int] = None,
     ) -> None:
         ts = utc_ts()
         with self.lock:
             self.conn.execute(
                 """INSERT INTO pending_deliveries
-                   (tg_user_id, item_id, matched_sub_ids, old_release_text, is_release_text_change, queued_at)
-                   VALUES (?, ?, ?, ?, ?, ?)
-                   ON CONFLICT (tg_user_id, item_id) DO UPDATE SET
+                   (tg_user_id, item_id, matched_sub_ids, old_release_text, is_release_text_change, queued_at,
+                    event_type, event_key, deliver_not_before_ts, lease_token, lease_expires_at, attempt_count, last_error)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, '', 0, 0, '')
+                   ON CONFLICT (tg_user_id, event_key) DO UPDATE SET
+                       item_id = excluded.item_id,
                        matched_sub_ids = excluded.matched_sub_ids,
                        old_release_text = excluded.old_release_text,
                        is_release_text_change = excluded.is_release_text_change,
-                       queued_at = excluded.queued_at""",
+                       queued_at = excluded.queued_at,
+                       event_type = excluded.event_type,
+                       deliver_not_before_ts = excluded.deliver_not_before_ts,
+                       lease_token = '',
+                       lease_expires_at = 0,
+                       last_error = ''""",
                 (
                     tg_user_id,
                     item_id,
@@ -808,7 +938,72 @@ class DeliveryRepository(BaseRepository):
                     old_release_text or "",
                     1 if is_release_text_change else 0,
                     ts,
+                    compact_spaces(event_type) or ("release_text" if is_release_text_change else "release"),
+                    compact_spaces(event_key) or f"pending:{tg_user_id}:{item_id}:{'release_text' if is_release_text_change else 'release'}",
+                    int(deliver_not_before_ts or ts),
                 ),
+            )
+            self.conn.commit()
+
+    def lease_due_pending_deliveries(
+        self,
+        current_ts: Optional[int] = None,
+        *,
+        lease_seconds: int = DELIVERY_QUEUE_LEASE_SECONDS,
+    ) -> List[Dict[str, Any]]:
+        now = int(current_ts or utc_ts())
+        lease_token = f"pending-{now}"
+        lease_expires_at = now + int(lease_seconds)
+        with self.lock:
+            rows = self.conn.execute(
+                """
+                UPDATE pending_deliveries pd
+                SET lease_token = ?,
+                    lease_expires_at = ?,
+                    attempt_count = COALESCE(pd.attempt_count, 0) + 1
+                FROM (
+                    SELECT id
+                    FROM pending_deliveries
+                    WHERE COALESCE(deliver_not_before_ts, queued_at) <= ?
+                      AND COALESCE(lease_expires_at, 0) <= ?
+                    ORDER BY queued_at ASC
+                    FOR UPDATE SKIP LOCKED
+                ) picked
+                WHERE pd.id = picked.id
+                RETURNING pd.*
+                """,
+                (lease_token, lease_expires_at, now, now),
+            ).fetchall()
+            self.conn.commit()
+        return [dict(row) for row in rows]
+
+    def release_pending_delivery_lease(
+        self,
+        pending_id: int,
+        *,
+        lease_token: str,
+        error: str = "",
+        deliver_not_before_ts: Optional[int] = None,
+    ) -> None:
+        assignments = [
+            "lease_token = ''",
+            "lease_expires_at = 0",
+            "last_error = ?",
+        ]
+        params: List[Any] = [compact_spaces(error)[:500]]
+        if deliver_not_before_ts is not None:
+            assignments.append("deliver_not_before_ts = ?")
+            params.append(int(deliver_not_before_ts))
+        params.extend([int(pending_id), compact_spaces(str(lease_token or ""))])
+        with self.lock:
+            self.conn.execute(
+                f"""
+                UPDATE pending_deliveries
+                SET {', '.join(assignments)}
+                WHERE id = ?
+                  AND COALESCE(lease_token, '') = ?
+                """,
+                tuple(params),
             )
             self.conn.commit()
 
@@ -836,10 +1031,16 @@ class DeliveryRepository(BaseRepository):
             result.setdefault(pending["tg_user_id"], []).append(pending)
         return result
 
-    def delete_pending_delivery(self, tg_user_id: int, item_id: int) -> None:
+    def delete_pending_delivery(self, tg_user_id: int, item_id: int, event_key: str = "") -> None:
         with self.lock:
-            self.conn.execute(
-                "DELETE FROM pending_deliveries WHERE tg_user_id = ? AND item_id = ?",
-                (tg_user_id, item_id),
-            )
+            if compact_spaces(event_key):
+                self.conn.execute(
+                    "DELETE FROM pending_deliveries WHERE tg_user_id = ? AND item_id = ? AND event_key = ?",
+                    (tg_user_id, item_id, compact_spaces(event_key)),
+                )
+            else:
+                self.conn.execute(
+                    "DELETE FROM pending_deliveries WHERE tg_user_id = ? AND item_id = ?",
+                    (tg_user_id, item_id),
+                )
             self.conn.commit()

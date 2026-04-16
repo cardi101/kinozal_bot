@@ -229,3 +229,22 @@ class UsersRepository(BaseRepository):
             if not row:
                 return (None, None)
             return (row["quiet_start_hour"], row["quiet_end_hour"])
+
+    def set_user_quiet_timezone(self, tg_user_id: int, timezone_name: Any) -> None:
+        ts = utc_ts()
+        with self.lock:
+            self.conn.execute(
+                "UPDATE users SET quiet_timezone = ?, updated_at = ? WHERE tg_user_id = ?",
+                (str(timezone_name or ""), ts, tg_user_id),
+            )
+            self.conn.commit()
+
+    def get_user_quiet_profile(self, tg_user_id: int) -> tuple[Optional[int], Optional[int], str]:
+        with self.lock:
+            row = self.conn.execute(
+                "SELECT quiet_start_hour, quiet_end_hour, quiet_timezone FROM users WHERE tg_user_id = ?",
+                (tg_user_id,),
+            ).fetchone()
+            if not row:
+                return (None, None, "")
+            return (row["quiet_start_hour"], row["quiet_end_hour"], str(row.get("quiet_timezone") or ""))

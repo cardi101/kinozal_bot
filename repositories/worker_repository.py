@@ -143,23 +143,83 @@ class WorkerRepository:
         item_id: int,
         matched_sub_ids: str,
         delay_seconds: int,
+        event_key: str = "",
     ) -> None:
-        self.db.upsert_debounce(tg_user_id, kinozal_id, item_id, matched_sub_ids, delay_seconds=delay_seconds)
+        self.db.upsert_debounce(tg_user_id, kinozal_id, item_id, matched_sub_ids, delay_seconds=delay_seconds, event_key=event_key)
 
     def pop_due_pending_deliveries(self, current_hour: int) -> Dict[int, List[Dict[str, Any]]]:
         return self.db.pop_due_pending_deliveries(current_hour)
 
-    def delete_pending_delivery(self, tg_user_id: int, item_id: int) -> None:
-        self.db.delete_pending_delivery(tg_user_id, item_id)
+    def lease_due_pending_deliveries(self, current_ts: Optional[int] = None) -> List[Dict[str, Any]]:
+        getter = getattr(self.db, "lease_due_pending_deliveries", None)
+        if getter:
+            return getter(current_ts)
+        grouped = self.db.pop_due_pending_deliveries(0)
+        rows: List[Dict[str, Any]] = []
+        for deliveries in grouped.values():
+            rows.extend(deliveries)
+        return rows
+
+    def delete_pending_delivery(self, tg_user_id: int, item_id: int, event_key: str = "") -> None:
+        self.db.delete_pending_delivery(tg_user_id, item_id, event_key=event_key)
+
+    def release_pending_delivery_lease(
+        self,
+        pending_id: int,
+        *,
+        lease_token: str,
+        error: str = "",
+        deliver_not_before_ts: Optional[int] = None,
+    ) -> None:
+        releaser = getattr(self.db, "release_pending_delivery_lease", None)
+        if releaser:
+            releaser(
+                pending_id,
+                lease_token=lease_token,
+                error=error,
+                deliver_not_before_ts=deliver_not_before_ts,
+            )
 
     def pop_due_debounce(self) -> List[Dict[str, Any]]:
+        return self.db.pop_due_debounce()
+
+    def lease_due_debounce_entries(self, current_ts: Optional[int] = None) -> List[Dict[str, Any]]:
+        getter = getattr(self.db, "lease_due_debounce_entries", None)
+        if getter:
+            return getter(current_ts)
         return self.db.pop_due_debounce()
 
     def delete_debounce_entry(self, tg_user_id: int, kinozal_id: str) -> None:
         self.db.delete_debounce_entry(tg_user_id, kinozal_id)
 
+    def release_debounce_lease(
+        self,
+        tg_user_id: int,
+        kinozal_id: str,
+        *,
+        lease_token: str,
+        error: str = "",
+        deliver_after_ts: Optional[int] = None,
+    ) -> None:
+        releaser = getattr(self.db, "release_debounce_lease", None)
+        if releaser:
+            releaser(
+                tg_user_id,
+                kinozal_id,
+                lease_token=lease_token,
+                error=error,
+                deliver_after_ts=deliver_after_ts,
+            )
+
     def get_user_quiet_hours(self, tg_user_id: int) -> Tuple[Optional[int], Optional[int]]:
         return self.db.get_user_quiet_hours(tg_user_id)
+
+    def get_user_quiet_profile(self, tg_user_id: int) -> Tuple[Optional[int], Optional[int], str]:
+        getter = getattr(self.db, "get_user_quiet_profile", None)
+        if getter:
+            return getter(tg_user_id)
+        start_h, end_h = self.db.get_user_quiet_hours(tg_user_id)
+        return start_h, end_h, ""
 
     def queue_pending_delivery(
         self,
@@ -168,6 +228,10 @@ class WorkerRepository:
         matched_sub_ids: str,
         old_release_text: str,
         is_release_text_change: bool,
+        *,
+        event_type: str = "",
+        event_key: str = "",
+        deliver_not_before_ts: Optional[int] = None,
     ) -> None:
         self.db.queue_pending_delivery(
             tg_user_id,
@@ -175,6 +239,9 @@ class WorkerRepository:
             matched_sub_ids,
             old_release_text,
             is_release_text_change,
+            event_type=event_type,
+            event_key=event_key,
+            deliver_not_before_ts=deliver_not_before_ts,
         )
 
     def record_delivery(
@@ -195,6 +262,8 @@ class WorkerRepository:
         matched_sub_ids: List[int],
         delivery_audit: Optional[Dict[str, Any]] = None,
         context: str = "",
+        event_type: str = "",
+        event_key: str = "",
     ) -> bool:
         return self.db.begin_delivery_claim(
             tg_user_id,
@@ -203,6 +272,8 @@ class WorkerRepository:
             matched_sub_ids,
             delivery_audit=delivery_audit,
             context=context,
+            event_type=event_type,
+            event_key=event_key,
         )
 
     def mark_delivery_claim_failed(self, tg_user_id: int, item_id: int, error: str = "") -> None:

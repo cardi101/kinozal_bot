@@ -25,7 +25,7 @@ Telegram-бот для мониторинга новых релизов на [Ki
 - **TMDB-обогащение** — постер, рейтинг, обзор, статус сериала, дата следующей серии
 - **Отслеживание изменений** — при изменении описания раздачи приходит обновление с выделенными строками (➕/➖)
 - **Группировка** — несколько версий одного тайтла (разные озвучки, качество) объединяются в одно сообщение
-- **Тихий режим** — настраиваемое окно тишины по UTC; уведомления накапливаются и доставляются после его окончания
+- **Тихий режим** — настраиваемое окно тишины по локальной timezone пользователя; если timezone не задана, используется безопасный fallback `UTC`
 - **Mute по названию** — кнопка 🔕 на каждом уведомлении, управление списком через меню
 - **История доставок** — последние уведомления с датами и ссылками (`/history`)
 - **Тест подписки** — предпросмотр совпадений на реальных данных без ожидания поллинга
@@ -79,14 +79,15 @@ docker compose up -d --build
 ```bash
 make install
 make lint
+make typecheck
 make test
 make check
 make smoke
 make monitoring-up
 ```
 
-`make install` создаёт локальный `.venv` и ставит runtime-зависимости проекта вместе с `pytest` и `ruff`.
-`make smoke` поднимает `postgres + redis + api`, проверяет `/health`, `schema_migrations`, bootstrap-пути `app`/`api` и repository CRUD smoke внутри контейнера.
+`make install` создаёт локальный `.venv` и ставит runtime-зависимости проекта вместе с `pytest`, `pytest-cov`, `ruff` и `mypy`.
+`make smoke` поднимает `postgres + redis + api`, проверяет `/health`, `schema_migrations`, bootstrap-пути `app`/`api`, repository CRUD smoke и worker end-to-end smoke внутри контейнера.
 `make monitoring-up` поднимает optional `Prometheus` и `Grafana`.
 
 ---
@@ -257,6 +258,21 @@ docker compose exec -T app python scripts/backfill_audio_and_version_fields.py -
 - берёт только `latest_gap` кандидатов
 - смотрит только пользователей, у которых релиз реально доставлялся раньше
 - перед replay повторно прогоняет `explain_delivery`, поэтому без `ready`-статуса ничего не досылает
+
+Для structured release parsing есть отдельный idempotent backfill:
+
+```bash
+docker compose exec -T app python scripts/backfill_parsed_release_fields.py --limit 50
+docker compose exec -T app python scripts/backfill_parsed_release_fields.py --apply --limit 50
+```
+
+Он пересчитывает `parsed_release_json` и derived release fields (`source_year`, `source_format`, `source_episode_progress`, `source_audio_tracks`, `version_signature`) in place, не создаёт новых delivery claims и не делает replay старых уведомлений.
+
+### Debug / Explain
+
+- `explain_delivery` теперь показывает structured subscription explain, compiled subscription snapshot, quiet-hours status, debounce/pending state и blockers.
+- `match-debug` теперь сохраняет TMDB search plan, candidate ranking, features per candidate, validator reject reason и accepted path в `tmdb_match_debug`.
+- `delivery_audit` хранит semantic `event_type` / `event_key`, поэтому можно отличить обычную доставку релиза от `release_text`-апдейта.
 
 `backfill_audio_and_version_fields.py` пересчитывает только derived audio/version поля in place и по умолчанию работает в dry-run.
 

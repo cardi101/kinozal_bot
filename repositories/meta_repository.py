@@ -12,6 +12,30 @@ except Exception:
 
 
 class MetaRepository(BaseRepository):
+    def get_telegram_file_cache(self, cache_key: str) -> Optional[str]:
+        with self.lock:
+            row = self.conn.execute(
+                "SELECT file_id FROM telegram_file_cache WHERE cache_key = ?",
+                (str(cache_key or ""),),
+            ).fetchone()
+            return str(row["file_id"]) if row and row.get("file_id") else None
+
+    def set_telegram_file_cache(self, cache_key: str, file_id: str, file_unique_id: str = "") -> None:
+        ts = utc_ts()
+        with self.lock:
+            self.conn.execute(
+                """
+                INSERT INTO telegram_file_cache(cache_key, file_id, file_unique_id, updated_at)
+                VALUES(?, ?, ?, ?)
+                ON CONFLICT(cache_key) DO UPDATE SET
+                    file_id = excluded.file_id,
+                    file_unique_id = excluded.file_unique_id,
+                    updated_at = excluded.updated_at
+                """,
+                (str(cache_key or ""), str(file_id or ""), str(file_unique_id or ""), ts),
+            )
+            self.conn.commit()
+
     def upsert_genres(self, media_type: str, genre_map: Dict[int, str]) -> None:
         ts = utc_ts()
         with self.lock:

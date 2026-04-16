@@ -20,8 +20,18 @@ class _FakeRepository:
     def get_latest_delivered_related_item(self, tg_user_id: int, item: dict):
         return None
 
-    def begin_delivery_claim(self, tg_user_id: int, item_id: int, primary_sub_id: int, matched_sub_ids, delivery_audit=None, context: str = ""):
-        self.claimed.append((tg_user_id, item_id, primary_sub_id, list(matched_sub_ids), context))
+    def begin_delivery_claim(
+        self,
+        tg_user_id: int,
+        item_id: int,
+        primary_sub_id: int,
+        matched_sub_ids,
+        delivery_audit=None,
+        context: str = "",
+        event_type: str = "",
+        event_key: str = "",
+    ):
+        self.claimed.append((tg_user_id, item_id, primary_sub_id, list(matched_sub_ids), context, event_type, event_key))
         return True
 
     def mark_delivery_claim_failed(self, tg_user_id: int, item_id: int, error: str = ""):
@@ -61,7 +71,7 @@ def test_send_single_claims_and_records(monkeypatch) -> None:
 
     asyncio.run(service.send_single(1001, _candidate()))
 
-    assert repository.claimed == [(1001, 42, 7, [7], "worker")]
+    assert repository.claimed == [(1001, 42, 7, [7], "worker", "release", "release:1001:2128422:v1")]
     assert len(repository.recorded) == 1
     assert repository.failed == []
 
@@ -82,6 +92,6 @@ def test_send_single_marks_claim_failed_on_send_error(monkeypatch) -> None:
     else:
         raise AssertionError("send_single should propagate send failure")
 
-    assert repository.claimed == [(1001, 42, 7, [7], "worker")]
+    assert repository.claimed == [(1001, 42, 7, [7], "worker", "release", "release:1001:2128422:v1")]
     assert repository.recorded == []
     assert repository.failed

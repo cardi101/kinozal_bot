@@ -10,9 +10,12 @@ from aiogram.enums import ParseMode
 from admin_match_review_helpers import item_requires_match_review, notify_admins_about_match_review
 from config import CFG
 from content_buckets import item_content_bucket
+from delivery_events import build_delivery_event_key, resolve_delivery_event_type
 from domain import DeliveryCandidate, ReleaseItem, SubscriptionRecord
+from episode_progress import parse_episode_progress
 from media_detection import is_non_video_release, is_russian_release
-from release_versioning import extract_kinozal_id, format_variant_summary, parse_episode_progress
+from quiet_hours import next_quiet_window_end_ts, quiet_window_status
+from release_versioning import extract_kinozal_id, format_variant_summary
 from service_helpers import ops_alert_chat_ids
 from subscription_matching import match_subscription
 from source_categories import source_category_is_non_video
@@ -203,7 +206,12 @@ class WorkerService:
         sub_ids = [sub_id.strip() for sub_id in str(matched_sub_ids_csv or "").split(",") if sub_id.strip()]
         matcher_db = getattr(self.repository, "db", self.repository)
         subs: List[SubscriptionRecord] = []
-        for sub in [self.repository.get_subscription(int(sub_id)) for sub_id in sub_ids if sub_id.isdigit()]:
+        user_subscriptions = {
+            int(sub["id"]): sub
+            for sub in self.repository.list_user_subscriptions(int(tg_user_id))
+            if sub and sub.get("id") is not None
+        }
+        for sub in [user_subscriptions.get(int(sub_id)) for sub_id in sub_ids if sub_id.isdigit()]:
             if not sub or not int(sub.get("is_enabled") or 0):
                 continue
             if self.subscription_service and hasattr(self.subscription_service, "matches"):
@@ -215,8 +223,7 @@ class WorkerService:
         if subs:
             return subs
         fallback_subs: List[SubscriptionRecord] = []
-        for sub in self.repository.list_user_subscriptions(int(tg_user_id)):
-            sub_full = self.repository.get_subscription(int(sub["id"]))
+        for sub_full in user_subscriptions.values():
             if not sub_full or not int(sub_full.get("is_enabled") or 0):
                 continue
             if self.subscription_service and hasattr(self.subscription_service, "matches"):
@@ -370,7 +377,10 @@ class WorkerService:
                 except Exception:
                     log.warning("Failed to check release text for item=%s", item_id, exc_info=True)
 
-        enabled_subs = self.subscription_service.list_enabled()
+        if self.subscription_service and hasattr(self.subscription_service, "list_enabled_compiled"):
+            enabled_subs = self.subscription_service.list_enabled_compiled()
+        else:
+            enabled_subs = self.subscription_service.list_enabled()
 
         if not first_run_seen and CFG.start_fetch_as_read:
             for item_id in new_item_ids:
@@ -552,6 +562,13 @@ class WorkerService:
                         item_id,
                         sub_ids_str,
                         delay_seconds=120,
+                        event_key=build_delivery_event_key(
+                            tg_user_id,
+                            item,
+                            context="worker",
+                            is_release_text_change=False,
+                            release_text=str(item.get("source_release_text") or ""),
+                        ),
                     )
                     cycle_metrics["debounce_queued_total"] += 1
                     log.info("Debounce queued item=%s kinozal_id=%s to user=%s", item_id, kinozal_id, tg_user_id)
@@ -562,6 +579,18 @@ class WorkerService:
                             subs=list(matched_subs),
                             old_release_text=old_release_texts.get(item_id, ""),
                             is_release_text_change=is_release_text_change,
+                            delivery_context="release_text_update" if is_release_text_change else "worker",
+                            event_type=resolve_delivery_event_type(
+                                "release_text_update" if is_release_text_change else "worker",
+                                is_release_text_change=is_release_text_change,
+                            ),
+                            event_key=build_delivery_event_key(
+                                tg_user_id,
+                                item,
+                                context="release_text_update" if is_release_text_change else "worker",
+                                is_release_text_change=is_release_text_change,
+                                release_text=str(item.get("source_release_text") or ""),
+                            ),
                         )
                     )
 
@@ -575,55 +604,74 @@ class WorkerService:
         await self._deliver_current_cycle(all_pending, current_hour, cycle_metrics)
 
     async def _flush_due_pending_deliveries(self, current_hour: int, cycle_metrics: Dict[str, int]) -> None:
-        due_pending = self.repository.pop_due_pending_deliveries(current_hour)
-        for flush_uid, pending_deliveries in due_pending.items():
-            for pending_delivery in pending_deliveries:
-                pending_item_id = int(pending_delivery["item_id"])
-                if self.repository.delivered_persisted(flush_uid, pending_item_id):
-                    self.repository.delete_pending_delivery(flush_uid, pending_item_id)
+        del current_hour
+        for pending_delivery in self.repository.lease_due_pending_deliveries(utc_ts()):
+            flush_uid = int(pending_delivery["tg_user_id"])
+            pending_item_id = int(pending_delivery["item_id"])
+            lease_token = str(pending_delivery.get("lease_token") or "")
+            event_key = str(pending_delivery.get("event_key") or "")
+            if self.repository.delivered_persisted(flush_uid, pending_item_id):
+                self.repository.delete_pending_delivery(flush_uid, pending_item_id, event_key=event_key)
+                continue
+
+            pending_item_payload = self.repository.get_item_any(pending_item_id)
+            if not pending_item_payload:
+                self.repository.delete_pending_delivery(flush_uid, pending_item_id, event_key=event_key)
+                continue
+
+            start_h, end_h, quiet_timezone = self.repository.get_user_quiet_profile(flush_uid)
+            quiet_status = quiet_window_status(start_h, end_h, quiet_timezone)
+            if quiet_status["active"]:
+                self.repository.release_pending_delivery_lease(
+                    int(pending_delivery["id"]),
+                    lease_token=lease_token,
+                    deliver_not_before_ts=next_quiet_window_end_ts(start_h, end_h, quiet_timezone),
+                )
+                continue
+
+            pending_item = ReleaseItem.from_payload(pending_item_payload)
+            try:
+                pending_item = await self.kinozal_service.enrich_item_with_details(pending_item)
+            except Exception:
+                log.warning("Failed to enrich pending item=%s", pending_item_id, exc_info=True)
+
+            pending_subs = self._resolve_delivery_subscriptions(
+                flush_uid,
+                pending_item,
+                str(pending_delivery.get("matched_sub_ids") or ""),
+            )
+            if not pending_subs:
+                self.repository.delete_pending_delivery(flush_uid, pending_item_id, event_key=event_key)
+                continue
+            try:
+                log.info("Flushing pending delivery item=%s to user=%s", pending_item_id, flush_uid)
+                if not self.delivery_service.begin_delivery_claim(flush_uid, pending_item, pending_subs, context="pending_flush"):
+                    self.repository.release_pending_delivery_lease(int(pending_delivery["id"]), lease_token=lease_token)
                     continue
-
-                pending_item_payload = self.repository.get_item_any(pending_item_id)
-                if not pending_item_payload:
-                    self.repository.delete_pending_delivery(flush_uid, pending_item_id)
-                    continue
-
-                pending_item = ReleaseItem.from_payload(pending_item_payload)
-                try:
-                    pending_item = await self.kinozal_service.enrich_item_with_details(pending_item)
-                except Exception:
-                    log.warning("Failed to enrich pending item=%s", pending_item_id, exc_info=True)
-
-                pending_subs = self._resolve_delivery_subscriptions(
+                await self.delivery_service.deliver_claimed_item(
                     flush_uid,
                     pending_item,
-                    str(pending_delivery.get("matched_sub_ids") or ""),
+                    pending_subs,
+                    context="pending_flush",
+                    old_release_text=str(pending_delivery.get("old_release_text") or ""),
                 )
-                if not pending_subs:
-                    self.repository.delete_pending_delivery(flush_uid, pending_item_id)
-                    continue
-                try:
-                    log.info("Flushing pending delivery item=%s to user=%s", pending_item_id, flush_uid)
-                    if not self.delivery_service.begin_delivery_claim(flush_uid, pending_item, pending_subs, context="pending_flush"):
-                        continue
-                    await self.delivery_service.deliver_claimed_item(
-                        flush_uid,
-                        pending_item,
-                        pending_subs,
-                        context="pending_flush",
-                        old_release_text=str(pending_delivery.get("old_release_text") or ""),
-                    )
-                    cycle_metrics["deliveries_sent_total"] += 1
-                    self.repository.delete_pending_delivery(flush_uid, pending_item_id)
-                except Exception:
-                    log.exception("Failed to flush pending delivery user=%s item=%s", flush_uid, pending_item_id)
+                cycle_metrics["deliveries_sent_total"] += 1
+                self.repository.delete_pending_delivery(flush_uid, pending_item_id, event_key=event_key)
+            except Exception as exc:
+                self.repository.release_pending_delivery_lease(
+                    int(pending_delivery["id"]),
+                    lease_token=lease_token,
+                    error=str(exc),
+                )
+                log.exception("Failed to flush pending delivery user=%s item=%s", flush_uid, pending_item_id)
 
     async def _flush_due_debounce(self, all_pending: Dict[int, List[DeliveryCandidate]]) -> None:
         enriched_cache: Dict[int, ReleaseItem] = {}
-        for entry in self.repository.pop_due_debounce():
+        for entry in self.repository.lease_due_debounce_entries(utc_ts()):
             tg_user_id = int(entry["tg_user_id"])
             item_id = int(entry["item_id"])
             debounce_kinozal_id = str(entry.get("kinozal_id") or "")
+            lease_token = str(entry.get("lease_token") or "")
             if self.repository.delivered_persisted(tg_user_id, item_id):
                 self.repository.delete_debounce_entry(tg_user_id, debounce_kinozal_id)
                 continue
@@ -665,6 +713,16 @@ class WorkerService:
                     old_release_text="",
                     is_release_text_change=False,
                     debounce_kinozal_id=debounce_kinozal_id,
+                    delivery_context="worker",
+                    event_type=resolve_delivery_event_type("worker"),
+                    event_key=build_delivery_event_key(
+                        tg_user_id,
+                        item,
+                        context="worker",
+                        is_release_text_change=False,
+                        release_text=str(item.get("source_release_text") or ""),
+                    ),
+                    queue_lease_token=lease_token,
                 )
             )
 
@@ -676,13 +734,10 @@ class WorkerService:
     ) -> None:
         for tg_user_id, deliveries in all_pending.items():
             try:
-                current_hour = datetime.now(timezone.utc).hour
-                quiet_start, quiet_end = self.repository.get_user_quiet_hours(tg_user_id)
-                if (
-                    quiet_start is not None
-                    and quiet_end is not None
-                    and self._quiet_active(quiet_start, quiet_end, current_hour)
-                ):
+                quiet_start, quiet_end, quiet_timezone = self.repository.get_user_quiet_profile(tg_user_id)
+                quiet_status = quiet_window_status(quiet_start, quiet_end, quiet_timezone)
+                if quiet_status["active"]:
+                    deliver_not_before_ts = next_quiet_window_end_ts(quiet_start, quiet_end, quiet_timezone)
                     for delivery in deliveries:
                         sub_ids_str = ",".join(str(sub.id) for sub in delivery.subs)
                         self.repository.queue_pending_delivery(
@@ -691,16 +746,21 @@ class WorkerService:
                             sub_ids_str,
                             delivery.old_release_text,
                             delivery.is_release_text_change,
+                            event_type=delivery.event_type,
+                            event_key=delivery.event_key,
+                            deliver_not_before_ts=deliver_not_before_ts,
                         )
                         if delivery.debounce_kinozal_id:
                             self.repository.delete_debounce_entry(tg_user_id, delivery.debounce_kinozal_id)
                     cycle_metrics["pending_queued_total"] += len(deliveries)
                     log.info(
-                        "Queued %d deliveries for user=%s (quiet %02d:00-%02d:00 UTC)",
+                        "Queued %d deliveries for user=%s (quiet %02d:00-%02d:00 %s local_hour=%02d)",
                         len(deliveries),
                         tg_user_id,
                         quiet_start,
                         quiet_end,
+                        quiet_status["timezone"],
+                        quiet_status["local_hour"],
                     )
                     continue
 
@@ -737,6 +797,12 @@ class WorkerService:
                             self.repository.delete_debounce_entry(tg_user_id, delivery.debounce_kinozal_id)
                         cycle_metrics["deliveries_sent_total"] += 1
                     except Exception:
+                        if delivery.debounce_kinozal_id and delivery.queue_lease_token:
+                            self.repository.release_debounce_lease(
+                                tg_user_id,
+                                delivery.debounce_kinozal_id,
+                                lease_token=delivery.queue_lease_token,
+                            )
                         log.exception("Error delivering rtc item=%s to user=%s", delivery.item_id, tg_user_id)
 
                 for delivery in without_tmdb:
@@ -750,6 +816,12 @@ class WorkerService:
                             self.repository.delete_debounce_entry(tg_user_id, delivery.debounce_kinozal_id)
                         cycle_metrics["deliveries_sent_total"] += 1
                     except Exception:
+                        if delivery.debounce_kinozal_id and delivery.queue_lease_token:
+                            self.repository.release_debounce_lease(
+                                tg_user_id,
+                                delivery.debounce_kinozal_id,
+                                lease_token=delivery.queue_lease_token,
+                            )
                         log.exception("Error delivering item=%s to user=%s", delivery.item_id, tg_user_id)
 
                 for tmdb_id, group in tmdb_groups.items():
@@ -794,6 +866,13 @@ class WorkerService:
                             except Exception as exc:
                                 for delivery in claimed_group:
                                     self.delivery_service.mark_delivery_claim_failed(tg_user_id, delivery.item, error=str(exc))
+                                    if delivery.debounce_kinozal_id and delivery.queue_lease_token:
+                                        self.repository.release_debounce_lease(
+                                            tg_user_id,
+                                            delivery.debounce_kinozal_id,
+                                            lease_token=delivery.queue_lease_token,
+                                            error=str(exc),
+                                        )
                                 raise
                         else:
                             await self.delivery_service.send_single(tg_user_id, group[0])
@@ -801,6 +880,13 @@ class WorkerService:
                                 self.repository.delete_debounce_entry(tg_user_id, group[0].debounce_kinozal_id)
                             cycle_metrics["deliveries_sent_total"] += 1
                     except Exception:
+                        for delivery in group:
+                            if delivery.debounce_kinozal_id and delivery.queue_lease_token:
+                                self.repository.release_debounce_lease(
+                                    tg_user_id,
+                                    delivery.debounce_kinozal_id,
+                                    lease_token=delivery.queue_lease_token,
+                                )
                         log.exception("Error delivering tmdb_group tmdb=%s to user=%s", tmdb_id, tg_user_id)
             except Exception:
                 log.exception("Unexpected error processing deliveries for user=%s", tg_user_id)
