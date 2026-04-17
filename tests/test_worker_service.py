@@ -258,6 +258,99 @@ class _FakeSubscriptionService:
         return True
 
 
+class _EmptySubscriptionService:
+    def list_enabled(self):
+        return []
+
+
+class _CachedRefreshRepository:
+    def __init__(self) -> None:
+        self.saved_payload = None
+        self.meta = {"bootstrap_done": "1"}
+        self.cached = {
+            "tmdb_id": 86831,
+            "tmdb_title": "Любовь. Смерть. Роботы",
+            "tmdb_match_path": "search",
+            "tmdb_match_confidence": "",
+            "imdb_id": "tt9561862",
+            "media_type": "tv",
+            "cleaned_title": "Любовь после смерти / Mu Xu Ci",
+        }
+
+    def get_meta(self, key: str):
+        return self.meta.get(key)
+
+    def set_meta(self, key: str, value: str) -> None:
+        self.meta[key] = value
+
+    def record_source_observation(self, *args, **kwargs):
+        return 0
+
+    def find_existing_enriched(self, source_uid, source_title):
+        return dict(self.cached)
+
+    def save_item(self, payload: dict):
+        self.saved_payload = dict(payload)
+        return 1, False, True
+
+    def was_delivered_to_anyone(self, item_id: int) -> bool:
+        return False
+
+    def get_item(self, item_id: int):
+        return self.saved_payload
+
+    def find_higher_progress_reference(self, kinozal_id: str, progress: str, item_id: int | None = None):
+        return None
+
+    def lease_due_pending_deliveries(self, current_ts=None):
+        return []
+
+    def lease_due_debounce_entries(self, current_ts=None):
+        return []
+
+
+class _FetchSingleKinozalService:
+    async def fetch_latest(self):
+        return [
+            ReleaseItem.from_payload(
+                {
+                    "source_uid": "kinozal:2134721",
+                    "kinozal_id": "2134721",
+                    "source_title": "Любовь после смерти (Любовь за гранью смерти) (1 сезон: 1-40 серии из 40) / Mu Xu Ci / 2026 / ЛМ (DubLik TV) / WEB-DL (1080p)",
+                    "source_category_id": "46",
+                    "source_category_name": "Сериал - Буржуйский",
+                    "source_year": 2026,
+                    "source_episode_progress": "1 сезон: 1-40 серии из 40",
+                    "source_audio_tracks": ["ЛМ (DubLik TV)"],
+                    "source_format": "1080",
+                    "media_type": "tv",
+                }
+            )
+        ]
+
+    async def enrich_item_with_details(self, item: ReleaseItem, force_refresh: bool = False) -> ReleaseItem:
+        return item
+
+
+class _FakeRefreshTMDBService:
+    def __init__(self) -> None:
+        self.calls: list[dict] = []
+
+    async def enrich_item(self, item: ReleaseItem) -> ReleaseItem:
+        self.calls.append(item.to_dict())
+        enriched = item.clone()
+        enriched.set("tmdb_id", 282503)
+        enriched.set("tmdb_title", "Любовь сильнее смерти")
+        enriched.set("tmdb_match_path", "search")
+        enriched.set("tmdb_match_confidence", "medium")
+        return enriched
+
+
+class _NoopDeliveryService:
+    def record_delivery(self, *args, **kwargs) -> None:
+        return None
+
+
 def test_flush_due_pending_deliveries_uses_archived_item_payload() -> None:
     repository = _FakeWorkerRepository()
     delivery_service = _FakeDeliveryService()
@@ -282,6 +375,29 @@ def test_flush_due_pending_deliveries_uses_archived_item_payload() -> None:
     ]
     assert repository.deleted == [(1001, 42)]
     assert metrics["deliveries_sent_total"] == 1
+
+
+def test_process_new_items_refreshes_cached_match_without_confidence() -> None:
+    repository = _CachedRefreshRepository()
+    tmdb_service = _FakeRefreshTMDBService()
+    worker = WorkerService(
+        repository=repository,
+        kinozal_service=_FetchSingleKinozalService(),
+        tmdb_service=tmdb_service,
+        subscription_service=_EmptySubscriptionService(),
+        delivery_service=_NoopDeliveryService(),
+        bot=None,
+    )
+
+    metrics = worker._new_cycle_metrics()
+    asyncio.run(worker.process_new_items(metrics))
+
+    assert len(tmdb_service.calls) == 1
+    assert tmdb_service.calls[0]["_clear_tmdb_match"] is True
+    assert repository.saved_payload["tmdb_id"] == 282503
+    assert repository.saved_payload["tmdb_title"] == "Любовь сильнее смерти"
+    assert repository.saved_payload["tmdb_match_confidence"] == "medium"
+    assert metrics["items_tmdb_enriched_total"] == 1
 
 
 def test_flush_due_pending_deliveries_keeps_row_when_claim_already_exists() -> None:

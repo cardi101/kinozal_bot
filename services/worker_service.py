@@ -70,6 +70,23 @@ class WorkerService:
             "bootstrap_marked_read_total": 0,
         }
 
+    @staticmethod
+    def _should_refresh_cached_tmdb_match(cached: Dict[str, Any] | None) -> bool:
+        if not cached or not cached.get("tmdb_id"):
+            return False
+        path = compact_spaces(str(cached.get("tmdb_match_path") or "")).lower()
+        confidence = compact_spaces(str(cached.get("tmdb_match_confidence") or "")).lower()
+
+        # Explicit/manual matches should remain sticky until an operator changes them.
+        if path in {"stored_override", "manual_override", "admin_override"}:
+            return False
+
+        # Older rows may have tmdb_id but no confidence because they were matched before
+        # current validation existed; re-enrich those rows instead of freezing them forever.
+        if confidence in {"", "low"}:
+            return True
+        return False
+
     def _meta_int(self, key: str, default: int = 0) -> int:
         try:
             value = self.repository.get_meta(key)
@@ -286,7 +303,7 @@ class WorkerService:
                 continue
 
             cached = self.repository.find_existing_enriched(raw_item.get("source_uid"), raw_item.get("source_title"))
-            if cached:
+            if cached and not self._should_refresh_cached_tmdb_match(cached):
                 enriched = raw_item.clone()
                 for key, value in cached.items():
                     if key.startswith("tmdb_") or key in ("imdb_id", "mal_id", "media_type", "cleaned_title"):
@@ -304,7 +321,10 @@ class WorkerService:
                     )
             else:
                 cycle_metrics["items_tmdb_enriched_total"] += 1
-                enriched = await self.tmdb_service.enrich_item(raw_item.clone())
+                enrich_input = raw_item.clone()
+                if cached and self._should_refresh_cached_tmdb_match(cached):
+                    enrich_input.set("_clear_tmdb_match", True)
+                enriched = await self.tmdb_service.enrich_item(enrich_input)
                 if not enriched.get("tmdb_id") and compact_spaces(str(enriched.get("source_category_name") or "")):
                     log.info(
                         "TMDB no match, using source category fallback title=%s category=%s bucket=%s media=%s",
