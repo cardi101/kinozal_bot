@@ -111,6 +111,8 @@ def _looks_like_tech_segment(segment: str) -> bool:
     value = compact_spaces(segment or "")
     if not value:
         return False
+    if looks_like_simple_numeric_title(value) and value not in {"720", "1080"}:
+        return False
     lowered = value.lower()
     if any(re.fullmatch(pattern, lowered, flags=re.I) for pattern in TECH_ONLY_CANDIDATE_PATTERNS):
         return True
@@ -257,6 +259,13 @@ def looks_like_structured_numeric_title(text: str) -> bool:
     return bool(re.fullmatch(r"\d+(?:\s*[-–—:]\s*\d+){2,}", text))
 
 
+def looks_like_simple_numeric_title(text: str) -> bool:
+    text = compact_spaces(str(text or "")).strip(" /.-")
+    if not text:
+        return False
+    return bool(re.fullmatch(r"\d{2,3}", text))
+
+
 def is_release_group_candidate(text: str) -> bool:
     raw = compact_spaces(str(text or "")).strip(" /.-")
     if not raw:
@@ -381,7 +390,7 @@ def split_title_parts(source_title: str) -> Tuple[str, str]:
     en = ""
 
     def is_good_en_candidate(part: str, strict: bool) -> bool:
-        if looks_like_structured_numeric_title(part):
+        if looks_like_structured_numeric_title(part) or looks_like_simple_numeric_title(part):
             return True
         latin = _latin_letter_count(part)
         cyr = _cyrillic_letter_count(part)
@@ -422,6 +431,8 @@ def is_bad_tmdb_candidate(text: str) -> bool:
     if not raw:
         return True
     if looks_like_structured_numeric_title(raw):
+        return False
+    if looks_like_simple_numeric_title(raw) and raw not in {"720", "1080"}:
         return False
 
     lowered = raw.lower()

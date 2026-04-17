@@ -12,7 +12,7 @@ from match_text import similarity, normalize_match_text, text_tokens
 from media_detection import is_non_video_release
 from source_categories import source_category_forced_media_type
 from parsing_basic import parse_year
-from title_prep import clean_release_title, classify_release_segments, looks_like_structured_numeric_title, normalize_structured_numeric_title, should_skip_tmdb_lookup, is_bad_tmdb_candidate
+from title_prep import clean_release_title, classify_release_segments, looks_like_structured_numeric_title, looks_like_simple_numeric_title, normalize_structured_numeric_title, should_skip_tmdb_lookup, is_bad_tmdb_candidate
 from tmdb_aliases import is_long_latin_tmdb_query, is_short_or_common_tmdb_query, is_short_acronym_tmdb_query, manual_tmdb_override_for_item, title_search_candidates
 from item_years import extract_tv_season_hint
 from tmdb_match_features import extract_tmdb_match_features, score_tmdb_match_candidate
@@ -620,6 +620,9 @@ class TMDBClient:
         if looks_like_structured_numeric_title(raw_query):
             query = normalize_structured_numeric_title(raw_query)
             cleaned_query = query
+        elif looks_like_simple_numeric_title(raw_query):
+            query = raw_query
+            cleaned_query = raw_query
         else:
             query = compact_spaces(clean_release_title(raw_query))
             if not query or is_bad_tmdb_candidate(query):

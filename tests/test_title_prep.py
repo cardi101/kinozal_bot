@@ -2,6 +2,7 @@ from title_prep import (
     clean_release_title,
     extract_title_aliases_from_text,
     is_bad_tmdb_candidate,
+    looks_like_simple_numeric_title,
     looks_like_structured_numeric_title,
     split_title_parts,
 )
@@ -59,6 +60,19 @@ def test_looks_like_structured_numeric():
     assert looks_like_structured_numeric_title("") is False
 
 
+def test_looks_like_simple_numeric_title() -> None:
+    assert looks_like_simple_numeric_title("180") is True
+    assert looks_like_simple_numeric_title("12") is True
+    assert looks_like_simple_numeric_title("1080") is False
+    assert looks_like_simple_numeric_title("1917") is False
+
+
+def test_is_bad_tmdb_candidate_allows_short_numeric_title_but_not_tech_resolution() -> None:
+    assert is_bad_tmdb_candidate("180") is False
+    assert is_bad_tmdb_candidate("720") is True
+    assert is_bad_tmdb_candidate("1080") is True
+
+
 def test_split_title_parts_ru_en():
     ru, en = split_title_parts("Во все тяжкие / Breaking Bad")
     assert "тяжкие" in ru.lower()
@@ -69,6 +83,12 @@ def test_split_title_parts_en_only():
     ru, en = split_title_parts("Breaking Bad")
     assert en != ""
     assert "breaking" in en.lower()
+
+
+def test_split_title_parts_short_numeric_title() -> None:
+    ru, en = split_title_parts("180 / 180 / 2026 / СТ / WEBRip (1080p)")
+    assert ru == ""
+    assert en == "180"
 
 
 def test_split_title_parts_empty():

@@ -309,6 +309,59 @@ def test_enrich_item_rejects_short_prefix_movie_match_and_keeps_full_title_candi
     assert "TRUNCATED_PREFIX_QUERY_MATCH" in result["tmdb_match_debug"]
 
 
+def test_enrich_item_allows_short_numeric_movie_title_candidate(monkeypatch) -> None:
+    client = object.__new__(TMDBClient)
+    client.anime_title_lexicon = None
+    client.anime_mapping_store = None
+    client.cfg = SimpleNamespace(anime_resolver_enabled=False, anime_resolver_log_only=False)
+    client.db = SimpleNamespace(get_match_override=lambda kinozal_id: None)
+    client.cache = SimpleNamespace(client=None)
+    client.log = logging.getLogger("test-tmdb-client")
+    client.token = "token"
+    client.language = "en-US"
+    client.find_by_imdb = None
+    client._is_rejected_match = lambda item, details: False
+
+    async def _fake_search_ranked(query: str, media_type: str, year: int | None, limit: int = 5):
+        if query == "180" and media_type == "movie":
+            return [
+                {
+                    "tmdb_id": 1800,
+                    "media_type": "movie",
+                    "tmdb_title": "180",
+                    "tmdb_original_title": "180",
+                    "search_match_title": "180",
+                    "search_match_original_title": "180",
+                    "tmdb_release_date": "2026-01-01",
+                    "tmdb_rating": 6.9,
+                    "tmdb_vote_count": 120,
+                    "search_score": 2.1,
+                }
+            ]
+        return []
+
+    client.search_ranked = _fake_search_ranked
+
+    item = {
+        "kinozal_id": "2136349",
+        "source_uid": "kinozal:2136349",
+        "source_title": "180 / 180 / 2026 / СТ / WEBRip (1080p)",
+        "source_description": "",
+        "media_type": "movie",
+        "source_year": 2026,
+        "source_category_id": "17",
+        "source_category_name": "Кино - Драма",
+        "source_format": "1080",
+    }
+
+    result = asyncio.run(client.enrich_item(item))
+
+    assert result["tmdb_id"] == 1800
+    assert result["tmdb_title"] == "180"
+    assert result["tmdb_match_path"] == "search"
+    assert "\"query\": \"180\"" in result["tmdb_match_debug"]
+
+
 def test_enrich_item_keeps_on_air_anime_match_with_soft_episode_warning(monkeypatch) -> None:
     client = object.__new__(TMDBClient)
     client.anime_title_lexicon = None

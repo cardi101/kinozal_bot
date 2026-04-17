@@ -5,6 +5,7 @@ from match_text import normalize_match_text, text_tokens, is_generic_cyrillic_ti
 from title_prep import (
     clean_release_title,
     looks_like_structured_numeric_title,
+    looks_like_simple_numeric_title,
     is_bad_tmdb_candidate,
     extract_title_aliases_from_text,
     split_title_parts,
@@ -281,14 +282,14 @@ def manual_alias_candidates_from_text(text: str) -> List[str]:
         value = compact_spaces(value or "").strip(" /.-")
         if not value:
             return
-        if looks_like_structured_numeric_title(value):
+        if looks_like_structured_numeric_title(value) or looks_like_simple_numeric_title(value):
             candidate = value
         else:
             candidate = clean_release_title(value) or value
         candidate = compact_spaces(candidate).strip(" /.-")
         if not candidate:
             return
-        if not looks_like_structured_numeric_title(candidate) and is_bad_tmdb_candidate(candidate):
+        if not looks_like_structured_numeric_title(candidate) and not looks_like_simple_numeric_title(candidate) and is_bad_tmdb_candidate(candidate):
             return
         if candidate not in variants:
             variants.append(candidate)
