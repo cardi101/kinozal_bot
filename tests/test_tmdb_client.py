@@ -233,6 +233,82 @@ def test_enrich_item_keeps_query_variants_for_same_tmdb_candidate(monkeypatch) -
     assert "\"query\": \"Exact Show\"" in result["tmdb_match_debug"]
 
 
+def test_enrich_item_rejects_short_prefix_movie_match_and_keeps_full_title_candidate(monkeypatch) -> None:
+    client = object.__new__(TMDBClient)
+    client.anime_title_lexicon = None
+    client.anime_mapping_store = None
+    client.cfg = SimpleNamespace(anime_resolver_enabled=False, anime_resolver_log_only=False)
+    client.db = SimpleNamespace(get_match_override=lambda kinozal_id: None)
+    client.cache = SimpleNamespace(client=None)
+    client.log = logging.getLogger("test-tmdb-client")
+    client.token = "token"
+    client.language = "en-US"
+    client.find_by_imdb = None
+    client._is_rejected_match = lambda item, details: False
+
+    async def _fake_search_ranked(query: str, media_type: str, year: int | None, limit: int = 5):
+        if media_type != "movie":
+            return []
+        if query == "Good Luck":
+            return [
+                {
+                    "tmdb_id": 1459584,
+                    "media_type": "movie",
+                    "tmdb_title": "Good Luck",
+                    "tmdb_original_title": "グッドラック",
+                    "search_match_title": "Good Luck",
+                    "search_match_original_title": "グッドラック",
+                    "tmdb_release_date": "2025-01-01",
+                    "tmdb_rating": 6.5,
+                    "tmdb_vote_count": 50,
+                    "search_score": 3.498,
+                }
+            ]
+        if query == "Удачи веселья не сдохни":
+            return [
+                {
+                    "tmdb_id": 1119449,
+                    "media_type": "movie",
+                    "tmdb_title": "Удачи, веселья, не сдохни",
+                    "tmdb_original_title": "Good Luck, Have Fun, Don't Die",
+                    "search_match_title": "Удачи, веселья, не сдохни",
+                    "search_match_original_title": "Good Luck, Have Fun, Don't Die",
+                    "tmdb_release_date": "2024-09-12",
+                    "tmdb_rating": 7.1,
+                    "tmdb_vote_count": 200,
+                    "search_score": 1.48,
+                }
+            ]
+        return []
+
+    client.search_ranked = _fake_search_ranked
+    monkeypatch.setattr(
+        tmdb_client_module,
+        "title_search_candidates",
+        lambda source_title, cleaned_title: ["Good Luck", "Удачи веселья не сдохни"],
+    )
+    monkeypatch.setattr(tmdb_client_module, "_extract_slash_title_candidates", lambda source_title: [])
+
+    item = {
+        "kinozal_id": "2136344",
+        "source_uid": "kinozal:2136344",
+        "source_title": "Удачи, веселья, не сдохни / Good Luck, Have Fun, Don't Die / 2025 / ДБ, 2 x ПМ, АП (Яроцкий), ЛМ, СТ / Blu-Ray Remux (1080p)",
+        "source_description": "",
+        "media_type": "movie",
+        "source_year": 2025,
+        "source_category_id": "13",
+        "source_category_name": "Кино - Фантастика",
+        "source_format": "1080",
+    }
+
+    result = asyncio.run(client.enrich_item(item))
+
+    assert result["tmdb_id"] == 1119449
+    assert result["tmdb_title"] == "Удачи, веселья, не сдохни"
+    assert result["tmdb_match_path"] == "search"
+    assert "TRUNCATED_PREFIX_QUERY_MATCH" in result["tmdb_match_debug"]
+
+
 def test_enrich_item_keeps_on_air_anime_match_with_soft_episode_warning(monkeypatch) -> None:
     client = object.__new__(TMDBClient)
     client.anime_title_lexicon = None

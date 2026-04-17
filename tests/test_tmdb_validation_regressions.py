@@ -51,3 +51,26 @@ def test_tmdb_validation_sets_stable_reject_code_for_large_tv_year_delta() -> No
     assert tmdb_match_looks_valid(item, "Matlock", details, "tv") is False
     assert details["tmdb_validation_reject_code"] == "TV_YEAR_DELTA_EXTREME"
     assert details["tmdb_validation_reject_reason"] == "tmdb_match_looks_valid:L441"
+
+
+def test_tmdb_validation_rejects_short_prefix_match_for_long_movie_title() -> None:
+    item = {
+        "source_title": "Удачи, веселья, не сдохни / Good Luck, Have Fun, Don't Die / 2025 / ДБ, 2 x ПМ, АП (Яроцкий), ЛМ, СТ / Blu-Ray Remux (1080p)",
+        "cleaned_title": "Удачи веселья не сдохни / Good Luck Have Fun Don't Die",
+        "source_year": 2025,
+        "media_type": "movie",
+        "source_category_name": "Кино - Фантастика",
+    }
+    details = {
+        "tmdb_id": 1459584,
+        "media_type": "movie",
+        "tmdb_title": "Good Luck",
+        "tmdb_original_title": "グッドラック",
+        "search_match_title": "Good Luck",
+        "search_match_original_title": "グッドラック",
+        "tmdb_release_date": "2025-01-01",
+    }
+
+    assert tmdb_match_looks_valid(item, "Good Luck", details, "movie") is False
+    assert details["tmdb_validation_reject_code"] == "TRUNCATED_PREFIX_QUERY_MATCH"
+    assert details["tmdb_validation_reject_reason"] == "tmdb_match_looks_valid:truncated_prefix_query"

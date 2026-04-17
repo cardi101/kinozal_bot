@@ -30,6 +30,7 @@ TMDB_VALIDATION_REASON_CODE_MAP = {
     "tmdb_match_looks_valid:L208": "SOURCE_TV_CANDIDATE_MOVIE",
     "tmdb_match_looks_valid:L290": "SHORT_COMMON_QUERY_TOKEN_MISMATCH",
     "tmdb_match_looks_valid:L292": "SHORT_COMMON_QUERY_LOW_SIMILARITY",
+    "tmdb_match_looks_valid:truncated_prefix_query": "TRUNCATED_PREFIX_QUERY_MATCH",
     "tmdb_match_looks_valid:derivative_suffix": "DERIVATIVE_SUFFIX_MISMATCH",
     "tmdb_match_looks_valid:L297": "LATIN_TITLE_WEAK_MATCH_TV",
     "tmdb_match_looks_valid:L300": "LATIN_TITLE_WEAK_MATCH",
@@ -345,6 +346,41 @@ def tmdb_match_looks_valid(item: Dict[str, Any], query: str, details: Dict[str, 
                 return reject("tmdb_match_looks_valid:L290")
             if best_similarity_norm < 0.985 and not has_substring:
                 return reject("tmdb_match_looks_valid:L292")
+
+    query_clean = compact_spaces(clean_release_title(query or "") or query or "")
+    query_clean_norm = normalize_match_text(query_clean)
+    query_clean_tokens = text_tokens(query_clean)
+    detail_norms = [normalize_match_text(value) for value in detail_variants if compact_spaces(value)]
+    detail_exact_query = bool(query_clean_norm and any(value == query_clean_norm for value in detail_norms))
+    detail_extends_query = bool(query_clean_norm and any(value.startswith(query_clean_norm + " ") for value in detail_norms))
+    main_title_parts: List[str] = []
+    for main_value in [
+        item.get("cleaned_title") or "",
+        clean_release_title(item.get("source_title") or ""),
+    ]:
+        for part in [compact_spaces(value) for value in str(main_value).split(" / ") if compact_spaces(value)]:
+            part_norm = normalize_match_text(part)
+            if part_norm and all(part_norm != normalize_match_text(existing) for existing in main_title_parts):
+                main_title_parts.append(part)
+
+    if (
+        short_or_common_query
+        and has_exact_normalized
+        and detail_exact_query
+        and not detail_extends_query
+        and len(query_clean_tokens) >= 2
+    ):
+        for part in main_title_parts:
+            part_norm = normalize_match_text(part)
+            part_tokens = text_tokens(part)
+            if not part_norm or part_norm == query_clean_norm:
+                continue
+            if len(part_tokens) < len(query_clean_tokens) + 2:
+                continue
+            if part_tokens[: len(query_clean_tokens)] != query_clean_tokens:
+                continue
+            if best_main_overlap < 0.67 and best_main_similarity < 0.88:
+                return reject("tmdb_match_looks_valid:truncated_prefix_query")
 
     _DERIVATIVE_SUFFIXES = {
         "podcast", "podcasts", "compilation", "compilations",
