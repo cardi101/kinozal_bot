@@ -11,6 +11,7 @@ from genres_helpers import item_genre_names
 from item_years import item_display_year
 from parsing_audio import (
     format_audio_variants,
+    infer_release_type,
     parse_audio_tracks,
     parse_audio_variants,
 )
@@ -117,6 +118,13 @@ def _quality_badge(item: Dict[str, Any]) -> str:
     if not fmt:
         return ""
     return f"{fmt}p" if fmt.isdigit() else fmt
+
+
+def _release_type_badge(item: Dict[str, Any]) -> str:
+    release_type = compact_spaces(str(item.get("source_release_type") or ""))
+    if release_type:
+        return release_type
+    return compact_spaces(str(infer_release_type(str(item.get("source_title") or "")) or ""))
 
 
 def _audio_variant_counts(variants: List[Dict[str, Any]]) -> Dict[str, int]:
@@ -292,10 +300,13 @@ def item_message(
     audio_summary = _compact_audio_summary(audio_variants)
     kinozal_id = _display_kinozal_id(item)
     quality_badge = _quality_badge(item)
+    release_type_badge = _release_type_badge(item)
     is_update = event_label == "🟢 UPDATE"
     change_text = _describe_update_change(item, old_release_text=old_release_text) if is_update else ""
 
     header_parts = [event_label, _message_media_badge(item)]
+    if release_type_badge:
+        header_parts.append(release_type_badge)
     if quality_badge:
         header_parts.append(quality_badge)
 
@@ -365,8 +376,12 @@ def grouped_items_message(db: Any, items: List[Dict[str, Any]], matched_subs: Op
     year = item_display_year(first)
     route_label = _message_route_label(first, matched_subs)
     kinozal_id = _display_kinozal_id(first)
+    release_type_badge = _release_type_badge(first)
 
-    header_parts = ["📦 MULTI", _message_media_badge(first), f"{len(items)} variants"]
+    header_parts = ["📦 MULTI", _message_media_badge(first)]
+    if release_type_badge:
+        header_parts.append(release_type_badge)
+    header_parts.append(f"{len(items)} variants")
     lines = [" • ".join(header_parts)]
     title_line = html.escape(title)
     if original and original.lower() != title.lower():
@@ -390,6 +405,9 @@ def grouped_items_message(db: Any, items: List[Dict[str, Any]], matched_subs: Op
             parts.append(progress)
         if audio_variants:
             parts.append(_compact_audio_summary(audio_variants))
+        release_type = _release_type_badge(item)
+        if release_type:
+            parts.append(release_type)
         if fmt:
             fmt_str = str(fmt)
             parts.append(f"{fmt_str}p" if fmt_str.isdigit() else fmt_str)

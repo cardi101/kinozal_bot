@@ -30,7 +30,7 @@ def test_item_message_uses_clean_user_layout_for_updates() -> None:
 
     text = item_message(db, item, matched_subs=[{"name": "🌍 Новинки — мир"}])
 
-    assert "🟢 UPDATE • TV • 1080p" in text
+    assert "🟢 UPDATE • TV • WEB-DL • 1080p" in text
     assert "Изменение: 1-9 из 12 → 1-10 из 12; добавлена многоголосая дорожка" in text
     assert "Kinozal 2124376" in text
     assert "matched: 1" not in text
@@ -70,7 +70,7 @@ def test_item_message_marks_tv_items_as_new_and_keeps_series_line() -> None:
 
     text = item_message(db, item, matched_subs=[{"name": "🌍 Новинки — мир"}])
 
-    assert "🆕 NEW • TV • 1080p" in text
+    assert "🆕 NEW • TV • WEBRip • 1080p" in text
     assert "Серии: 11 сезон: 1-17 серии из 22" in text
 
 
@@ -103,9 +103,10 @@ def test_grouped_items_message_uses_compact_multi_layout() -> None:
 
     text = grouped_items_message(db, items, matched_subs=[{"name": "🌍 Новинки — мир"}])
 
-    assert "📦 MULTI" in text
+    assert "📦 MULTI • TV • WEB-DL • 2 variants" in text
     assert "Kinozal 4002" in text
     assert "1-4 из 10" in text
+    assert "WEB-DL • 1080p" in text
     assert "Ссылки:" in text
     assert "matched: 1" not in text
 
@@ -130,6 +131,7 @@ def test_item_message_keeps_audio_multiplier_and_shows_countries() -> None:
 
     text = item_message(db, item, matched_subs=[{"name": "🌍 Новинки — мир"}])
 
+    assert "🆕 NEW • MOVIE • BDRip • 1080p" in text
     assert "Озвучка: 2×ДБ, СТ" in text
     assert "Страны: США, Великобритания" in text
 
@@ -187,3 +189,20 @@ def test_item_message_hides_low_vote_tmdb_rating() -> None:
     text = item_message(db, item, matched_subs=[{"name": "🌍 Новинки — мир"}])
 
     assert "TMDB:" not in text
+
+
+def test_item_message_prefers_explicit_release_type_over_inference() -> None:
+    db = _DummyDb()
+    item = {
+        "kinozal_id": "3003",
+        "source_title": "Удачи, веселья, не сдохни / Good Luck, Have Fun, Don't Die / 2025 / ДБ / Blu-Ray Remux (1080p)",
+        "tmdb_title": "Удачи, веселья, не сдохни",
+        "media_type": "movie",
+        "tmdb_release_date": "2025-01-01",
+        "source_format": "1080",
+        "source_release_type": "Blu-Ray Remux",
+    }
+
+    text = item_message(db, item, matched_subs=[{"name": "🌍 Новинки — мир"}])
+
+    assert "🆕 NEW • MOVIE • Blu-Ray Remux • 1080p" in text
