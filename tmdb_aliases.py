@@ -150,6 +150,26 @@ def expand_tmdb_candidate_variants(text: str) -> List[str]:
             return True
         return False
 
+    def should_skip_short_prefix_colon_split(left: str, right: str, original: str) -> bool:
+        left = compact_spaces(left or "").strip(" /.-")
+        right = compact_spaces(right or "").strip(" /.-")
+        original = compact_spaces(original or "").strip(" /.-")
+        if not left or not right or not original:
+            return False
+        left_tail = compact_spaces(left.rsplit("/", 1)[-1]).strip(" /.-")
+        left_tokens = text_tokens(left)
+        left_tail_tokens = text_tokens(left_tail)
+        right_tokens = text_tokens(right)
+        if len(right_tokens) != 1:
+            return False
+        short_left_alias = len(left_tokens) == 1 and re.fullmatch(r"[A-Za-z0-9]{1,3}", left)
+        short_left_tail_alias = len(left_tail_tokens) == 1 and re.fullmatch(r"[A-Za-z0-9]{1,3}", left_tail)
+        if not short_left_alias and not short_left_tail_alias:
+            return False
+        # Re: Zero-like aliases should stay whole; splitting them into "Re" / "Zero"
+        # produces noisy one-word queries and bad anime alias expansions.
+        return True
+
     # Полезный алиас в круглых скобках должен идти отдельным кандидатом:
     # Wolgannamchin (Boyfriend on Demand) -> Boyfriend on Demand
     for match in re.finditer(r"\(([^()]{2,80})\)", base):
@@ -168,6 +188,8 @@ def expand_tmdb_candidate_variants(text: str) -> List[str]:
         parts = re.split(sep_pattern, base, maxsplit=1)
         if len(parts) == 2:
             left, right = parts[0], parts[1]
+            if sep_pattern == r"\s*:\s*" and should_skip_short_prefix_colon_split(left, right, base):
+                continue
             if not should_skip_split_fragment(left, base):
                 add(left)
                 add(clean_release_title(left))

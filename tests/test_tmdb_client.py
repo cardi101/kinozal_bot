@@ -423,6 +423,138 @@ def test_enrich_item_keeps_on_air_anime_match_with_soft_episode_warning(monkeypa
     assert "search_unmatched" not in str(result.get("tmdb_match_path") or "")
 
 
+def test_enrich_item_keeps_anime_parent_series_for_later_season_with_large_year_delta(monkeypatch) -> None:
+    client = object.__new__(TMDBClient)
+    client.anime_title_lexicon = None
+    client.anime_mapping_store = None
+    client.cfg = SimpleNamespace(anime_resolver_enabled=False, anime_resolver_log_only=False)
+    client.db = SimpleNamespace(get_match_override=lambda kinozal_id: None)
+    client.cache = SimpleNamespace(client=None)
+    client.log = logging.getLogger("test-tmdb-client")
+    client.token = "token"
+    client.language = "en-US"
+    client.find_by_imdb = None
+    client._is_rejected_match = lambda item, details: False
+
+    async def _fake_search_ranked(query: str, media_type: str, year: int | None, limit: int = 5):
+        if media_type != "tv":
+            return []
+        if query != "Re: Zero":
+            return []
+        return [
+            {
+                "tmdb_id": 65942,
+                "media_type": "tv",
+                "tmdb_title": "Re: Жизнь в другом мире с нуля",
+                "tmdb_original_title": "Re:Zero kara Hajimeru Isekai Seikatsu",
+                "search_match_title": "Re: Жизнь в другом мире с нуля",
+                "search_match_original_title": "Re:Zero kara Hajimeru Isekai Seikatsu",
+                "tmdb_release_date": "2016-04-04",
+                "tmdb_number_of_seasons": 4,
+                "tmdb_number_of_episodes": 66,
+                "tmdb_rating": 7.8,
+                "tmdb_vote_count": 1200,
+                "tmdb_status": "Returning Series",
+                "search_score": 1.431,
+            }
+        ]
+
+    client.search_ranked = _fake_search_ranked
+    monkeypatch.setattr(
+        tmdb_client_module,
+        "title_search_candidates",
+        lambda source_title, cleaned_title: ["Re: Zero", "Жизнь в альтернативном мире с нуля"],
+    )
+    monkeypatch.setattr(tmdb_client_module, "_extract_slash_title_candidates", lambda source_title: [])
+
+    item = {
+        "kinozal_id": "2135205",
+        "source_uid": "kinozal:2135205",
+        "source_title": "Жизнь в альтернативном мире с нуля (4 сезон: 1-2 серии из 18) / Re: Zero / 2026 / ДБ (AniStar), ЛМ (AniLibria), СТ / WEB-DL (1080p)",
+        "cleaned_title": "Жизнь в альтернативном мире с нуля / Re: Zero",
+        "source_description": "",
+        "media_type": "tv",
+        "source_year": 2026,
+        "source_episode_progress": "4 сезон: 1-2 серии из 18",
+        "source_category_name": "Мульт - Аниме",
+        "source_category_id": "20",
+        "source_format": "1080",
+        "bucket": "anime",
+    }
+
+    result = asyncio.run(client.enrich_item(item))
+
+    assert result["tmdb_id"] == 65942
+    assert result["tmdb_title"] == "Re: Жизнь в другом мире с нуля"
+    assert result["tmdb_match_path"] == "search"
+    assert "search_unmatched" not in str(result.get("tmdb_match_path") or "")
+
+
+def test_enrich_item_keeps_long_running_single_season_anime_parent_series(monkeypatch) -> None:
+    client = object.__new__(TMDBClient)
+    client.anime_title_lexicon = None
+    client.anime_mapping_store = None
+    client.cfg = SimpleNamespace(anime_resolver_enabled=False, anime_resolver_log_only=False)
+    client.db = SimpleNamespace(get_match_override=lambda kinozal_id: None)
+    client.cache = SimpleNamespace(client=None)
+    client.log = logging.getLogger("test-tmdb-client")
+    client.token = "token"
+    client.language = "en-US"
+    client.find_by_imdb = None
+    client._is_rejected_match = lambda item, details: False
+
+    async def _fake_search_ranked(query: str, media_type: str, year: int | None, limit: int = 5):
+        if media_type != "tv":
+            return []
+        if query not in {"Re: Zero", "Жизнь в альтернативном мире с нуля"}:
+            return []
+        return [
+            {
+                "tmdb_id": 65942,
+                "media_type": "tv",
+                "tmdb_title": "Re: Жизнь в другом мире с нуля",
+                "tmdb_original_title": "Re:ゼロから始める異世界生活",
+                "search_match_title": "Re:ZERO -Starting Life in Another World-",
+                "search_match_original_title": "Re:ゼロから始める異世界生活",
+                "tmdb_release_date": "2016-04-04",
+                "tmdb_number_of_seasons": 1,
+                "tmdb_number_of_episodes": 85,
+                "tmdb_rating": 7.8,
+                "tmdb_vote_count": 598,
+                "tmdb_status": "Returning Series",
+                "search_score": 0.66,
+            }
+        ]
+
+    client.search_ranked = _fake_search_ranked
+    monkeypatch.setattr(
+        tmdb_client_module,
+        "title_search_candidates",
+        lambda source_title, cleaned_title: ["Re: Zero", "Жизнь в альтернативном мире с нуля"],
+    )
+    monkeypatch.setattr(tmdb_client_module, "_extract_slash_title_candidates", lambda source_title: [])
+
+    item = {
+        "kinozal_id": "2135205",
+        "source_uid": "kinozal:2135205",
+        "source_title": "Жизнь в альтернативном мире с нуля (4 сезон: 1-2 серии из 18) / Re: Zero / 2026 / ДБ (AniStar), ЛМ (AniLibria), СТ / WEB-DL (1080p)",
+        "cleaned_title": "Жизнь в альтернативном мире с нуля / Re: Zero",
+        "source_description": "",
+        "media_type": "tv",
+        "source_year": 2026,
+        "source_episode_progress": "4 сезон: 1-2 серии из 18",
+        "source_category_name": "Мульт - Аниме",
+        "source_category_id": "20",
+        "source_format": "1080",
+    }
+
+    result = asyncio.run(client.enrich_item(item))
+
+    assert result["tmdb_id"] == 65942
+    assert result["tmdb_title"] == "Re: Жизнь в другом мире с нуля"
+    assert result["tmdb_match_path"] == "search"
+
+
 def test_enrich_item_records_reject_reason_in_debug_when_unmatched(monkeypatch) -> None:
     client = object.__new__(TMDBClient)
     client.anime_title_lexicon = None

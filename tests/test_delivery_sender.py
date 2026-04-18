@@ -86,3 +86,28 @@ def test_send_item_to_user_caches_uploaded_poster_file_id(monkeypatch) -> None:
 
     assert bot.photos
     assert db.saved == [("poster:https://example.com/poster.jpg", "new-file-id", "uniq-1")]
+
+
+def test_send_item_to_user_uses_enriched_poster_when_item_missing_it(monkeypatch) -> None:
+    db = _FakeCacheDB()
+    bot = _FakeBot()
+    item = {"id": 42, "source_title": "Title"}
+
+    async def _fake_enrich(payload: dict, force_refresh: bool = False):
+        payload["tmdb_poster_url"] = "https://example.com/enriched-poster.jpg"
+        return payload
+
+    async def _fake_build_poster_file(poster_url: str, item_id: int):
+        assert poster_url == "https://example.com/enriched-poster.jpg"
+        assert item_id == 42
+        return object()
+
+    monkeypatch.setattr(delivery_sender_module, "enrich_kinozal_item_with_details", _fake_enrich)
+    monkeypatch.setattr(delivery_sender_module, "item_message", lambda db, item, subs, old_release_text="": "Hello")
+    monkeypatch.setattr(delivery_sender_module, "mute_title_kb", lambda tmdb_id: None)
+    monkeypatch.setattr(delivery_sender_module, "_build_poster_file", _fake_build_poster_file)
+
+    asyncio.run(send_item_to_user(db, bot, 1001, item, subs=None))
+
+    assert bot.photos
+    assert db.saved == [("poster:https://example.com/enriched-poster.jpg", "new-file-id", "uniq-1")]

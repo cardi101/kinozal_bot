@@ -350,7 +350,7 @@ async def send_item_to_user(
     tmdb_id = item.get("tmdb_id") or primary_item.get("tmdb_id")
     action_kb: Optional[InlineKeyboardMarkup] = mute_title_kb(int(tmdb_id)) if tmdb_id else None
 
-    poster_url = item.get("tmdb_poster_url")
+    poster_url = item.get("tmdb_poster_url") or primary_item.get("tmdb_poster_url")
     full_html_text = _safe_truncate_html(text, 3900)
     full_plain_text = short(html_to_plain_text(text), 3900)
 

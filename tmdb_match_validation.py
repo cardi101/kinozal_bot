@@ -140,8 +140,6 @@ def is_tv_continuation_parent_match(
     has_substring: bool = False,
 ) -> bool:
     strong_title_match = has_exact_normalized or best_main_overlap >= 0.72 or best_main_similarity >= 0.92 or has_substring
-    if not strong_title_match:
-        return False
     season_hint = extract_tv_season_hint(item)
     if not season_hint or season_hint < 2:
         return False
@@ -149,12 +147,49 @@ def is_tv_continuation_parent_match(
     reference_season = expected_seasons or season_hint
     if not reference_season or reference_season < 2:
         return False
+    source_has_original_latin = bool(re.search(r"/\s*[A-Za-z]", str(item.get("source_title") or "")))
+    active_tv_status = str(details.get("tmdb_status") or "").strip().lower() in {
+        "returning series",
+        "in production",
+        "planned",
+        "pilot",
+    }
+    anime_parent_continuation = (
+        (item_content_bucket(item) == "anime" or anime_fallback_signal_score(item) >= 2)
+        and reference_season >= 2
+        and (best_main_overlap >= 0.62 or best_main_similarity >= 0.64)
+    )
     try:
         tmdb_seasons_int = int(details.get("tmdb_number_of_seasons")) if details.get("tmdb_number_of_seasons") is not None else None
     except Exception:
         tmdb_seasons_int = None
-    if tmdb_seasons_int is None or tmdb_seasons_int < 2:
+    try:
+        tmdb_episodes_int = int(details.get("tmdb_number_of_episodes")) if details.get("tmdb_number_of_episodes") is not None else None
+    except Exception:
+        tmdb_episodes_int = None
+    if tmdb_seasons_int is None:
+        return (
+            active_tv_status
+            and reference_season >= 2
+            and (anime_parent_continuation or source_has_original_latin)
+            and (best_main_overlap >= 0.62 or best_main_similarity >= 0.64 or has_substring)
+        )
+    if tmdb_seasons_int == 1:
+        long_running_parent_anime = (
+            active_tv_status
+            and (item_content_bucket(item) == "anime" or anime_fallback_signal_score(item) >= 2 or source_has_original_latin)
+            and tmdb_episodes_int is not None
+            and tmdb_episodes_int >= 60
+            and (best_main_overlap >= 0.62 or best_main_similarity >= 0.64 or has_substring)
+        )
+        if long_running_parent_anime:
+            return True
+    if tmdb_seasons_int < 2:
         return False
+    if not strong_title_match:
+        anime_parent_continuation = anime_parent_continuation and tmdb_seasons_int + 1 >= reference_season
+        if not anime_parent_continuation:
+            return False
     return tmdb_seasons_int + 1 >= reference_season
 
 
@@ -570,12 +605,21 @@ def tmdb_match_looks_valid(item: Dict[str, Any], query: str, details: Dict[str, 
             long_running_parent_anime_ok = (
                 source_is_tv
                 and details_media == "tv"
-                and item_content_bucket(item) == "anime"
-                and has_exact_normalized
+                and (
+                    item_content_bucket(item) == "anime"
+                    or anime_fallback_signal_score(item) >= 2
+                    or source_has_original_latin
+                )
                 and tmdb_seasons_int == 1
                 and tmdb_episodes_int is not None
                 and expected_episodes is not None
                 and tmdb_episodes_int >= max(expected_episodes * 3, 60)
+                and (
+                    has_exact_normalized
+                    or has_substring
+                    or best_main_overlap >= 0.62
+                    or best_main_similarity >= 0.64
+                )
             )
 
             if (

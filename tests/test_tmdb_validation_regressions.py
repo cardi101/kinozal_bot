@@ -74,3 +74,105 @@ def test_tmdb_validation_rejects_short_prefix_match_for_long_movie_title() -> No
     assert tmdb_match_looks_valid(item, "Good Luck", details, "movie") is False
     assert details["tmdb_validation_reject_code"] == "TRUNCATED_PREFIX_QUERY_MATCH"
     assert details["tmdb_validation_reject_reason"] == "tmdb_match_looks_valid:truncated_prefix_query"
+
+
+def test_tmdb_validation_allows_anime_later_season_parent_series_despite_large_year_delta() -> None:
+    item = {
+        "source_title": "Жизнь в альтернативном мире с нуля (4 сезон: 1-2 серии из 18) / Re: Zero / 2026 / ДБ (AniStar), ЛМ (AniLibria), СТ / WEB-DL (1080p)",
+        "cleaned_title": "Жизнь в альтернативном мире с нуля / Re: Zero",
+        "source_year": 2026,
+        "source_episode_progress": "4 сезон: 1-2 серии из 18",
+        "media_type": "tv",
+        "source_category_name": "Мульт - Аниме",
+        "bucket": "anime",
+    }
+    details = {
+        "tmdb_id": 65942,
+        "media_type": "tv",
+        "tmdb_title": "Re: Жизнь в другом мире с нуля",
+        "tmdb_original_title": "Re:Zero kara Hajimeru Isekai Seikatsu",
+        "search_match_title": "Re: Жизнь в другом мире с нуля",
+        "search_match_original_title": "Re:Zero kara Hajimeru Isekai Seikatsu",
+        "tmdb_release_date": "2016-04-04",
+        "tmdb_number_of_seasons": 4,
+        "tmdb_number_of_episodes": 66,
+        "tmdb_status": "Returning Series",
+    }
+
+    assert tmdb_match_looks_valid(item, "Re: Zero", details, "tv") is True
+
+
+def test_tmdb_validation_allows_anime_later_season_parent_series_when_tmdb_season_count_missing() -> None:
+    item = {
+        "source_title": "Жизнь в альтернативном мире с нуля (4 сезон: 1-2 серии из 18) / Re: Zero / 2026 / ДБ (AniStar), ЛМ (AniLibria), СТ / WEB-DL (1080p)",
+        "cleaned_title": "Жизнь в альтернативном мире с нуля / Re: Zero",
+        "source_year": 2026,
+        "source_episode_progress": "4 сезон: 1-2 серии из 18",
+        "media_type": "tv",
+        "source_category_name": "Мульт - Аниме",
+        "source_category_id": "20",
+    }
+    details = {
+        "tmdb_id": 65942,
+        "media_type": "tv",
+        "tmdb_title": "Re: Жизнь в другом мире с нуля",
+        "tmdb_original_title": "Re:Zero kara Hajimeru Isekai Seikatsu",
+        "search_match_title": "Re: Жизнь в другом мире с нуля",
+        "search_match_original_title": "Re:Zero kara Hajimeru Isekai Seikatsu",
+        "tmdb_release_date": "2016-04-04",
+        "tmdb_number_of_seasons": None,
+        "tmdb_number_of_episodes": 66,
+        "tmdb_status": "Returning Series",
+    }
+
+    assert tmdb_match_looks_valid(item, "Re: Zero", details, "tv") is True
+
+
+def test_tmdb_validation_allows_later_season_parent_series_with_missing_season_count_and_bilingual_title() -> None:
+    item = {
+        "source_title": "Жизнь в альтернативном мире с нуля (4 сезон: 1-2 серии из 18) / Re: Zero / 2026 / ДБ (AniStar), ЛМ (AniLibria), СТ / WEB-DL (1080p)",
+        "cleaned_title": "Жизнь в альтернативном мире с нуля / Re: Zero",
+        "source_year": 2026,
+        "source_episode_progress": "4 сезон: 1-2 серии из 18",
+        "media_type": "tv",
+    }
+    details = {
+        "tmdb_id": 65942,
+        "media_type": "tv",
+        "tmdb_title": "Re: Жизнь в другом мире с нуля",
+        "tmdb_original_title": "Re:Zero kara Hajimeru Isekai Seikatsu",
+        "search_match_title": "Re: Жизнь в другом мире с нуля",
+        "search_match_original_title": "Re:Zero kara Hajimeru Isekai Seikatsu",
+        "tmdb_release_date": "2016-04-04",
+        "tmdb_number_of_seasons": None,
+        "tmdb_number_of_episodes": 66,
+        "tmdb_status": "Returning Series",
+    }
+
+    assert tmdb_match_looks_valid(item, "Re: Zero", details, "tv") is True
+
+
+def test_tmdb_validation_allows_long_running_single_season_anime_parent_series() -> None:
+    item = {
+        "source_title": "Жизнь в альтернативном мире с нуля (4 сезон: 1-2 серии из 18) / Re: Zero / 2026 / ДБ (AniStar), ЛМ (AniLibria), СТ / WEB-DL (1080p)",
+        "cleaned_title": "Жизнь в альтернативном мире с нуля / Re: Zero",
+        "source_year": 2026,
+        "source_episode_progress": "4 сезон: 1-2 серии из 18",
+        "media_type": "tv",
+        "source_category_name": "Мульт - Аниме",
+        "source_category_id": "20",
+    }
+    details = {
+        "tmdb_id": 65942,
+        "media_type": "tv",
+        "tmdb_title": "Re: Жизнь в другом мире с нуля",
+        "tmdb_original_title": "Re:ゼロから始める異世界生活",
+        "search_match_title": "Re:ZERO -Starting Life in Another World-",
+        "search_match_original_title": "Re:ゼロから始める異世界生活",
+        "tmdb_release_date": "2016-04-04",
+        "tmdb_number_of_seasons": 1,
+        "tmdb_number_of_episodes": 85,
+        "tmdb_status": "Returning Series",
+    }
+
+    assert tmdb_match_looks_valid(item, "Re: Zero", details, "tv") is True
