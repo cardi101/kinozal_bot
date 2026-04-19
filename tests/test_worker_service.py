@@ -1,5 +1,6 @@
 import asyncio
 
+from config import CFG
 import services.worker_service as worker_service_module
 from delivery_events import build_delivery_event_key, build_grouped_event_key
 from domain import DeliveryCandidate, ReleaseItem, SubscriptionRecord
@@ -14,6 +15,60 @@ def test_should_emit_anomaly_alert_only_for_impacted_users() -> None:
 def test_should_emit_anomaly_alert_suppresses_duplicates() -> None:
     existing = {"id": 1, "status": "open"}
     assert WorkerService._should_emit_anomaly_alert({123: []}, existing) is False
+
+
+class _AlertBot:
+    def __init__(self) -> None:
+        self.calls = []
+
+    async def send_message(self, chat_id: int, text: str, **kwargs) -> None:
+        self.calls.append((chat_id, text, kwargs))
+
+
+def test_notify_admins_about_anomaly_attaches_inline_actions() -> None:
+    original_admin_ids = CFG.admin_ids
+    original_ops_alert_chat_ids = CFG.ops_alert_chat_ids
+    CFG.admin_ids = ()
+    CFG.ops_alert_chat_ids = (-1003930216844,)
+    bot = _AlertBot()
+    service = WorkerService(
+        repository=None,
+        kinozal_service=None,
+        tmdb_service=None,
+        subscription_service=None,
+        delivery_service=None,
+        bot=bot,
+    )
+    item = ReleaseItem.from_payload(
+        {
+            "id": 6882,
+            "kinozal_id": "2130194",
+            "source_uid": "kinozal:2130194",
+            "source_title": "Клиника",
+            "media_type": "tv",
+            "source_episode_progress": "1 сезон: 1-9 серии из 9",
+        }
+    )
+
+    try:
+        sent = asyncio.run(
+            service._notify_admins_about_anomaly(
+                "2130194",
+                item,
+                "progress_regression",
+                "10 сезон: 1-7 серии из 9",
+                "1 сезон: 1-9 серии из 9",
+            )
+        )
+    finally:
+        CFG.admin_ids = original_admin_ids
+        CFG.ops_alert_chat_ids = original_ops_alert_chat_ids
+
+    assert sent == 1
+    assert bot.calls[0][0] == -1003930216844
+    reply_markup = bot.calls[0][2]["reply_markup"]
+    buttons = [button.callback_data for row in reply_markup.inline_keyboard for button in row]
+    assert buttons == ["anomaly:timeline:2130194", "anomaly:replay:2130194"]
 
 
 class _FakeWorkerRepository:

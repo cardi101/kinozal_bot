@@ -28,6 +28,14 @@ class _FakeDB:
     def find_item_any_by_kinozal_id(self, kinozal_id: str):
         return self.find_item_by_kinozal_id(kinozal_id)
 
+    def get_item(self, item_id: int):
+        item = self.find_item_by_kinozal_id("2128422")
+        item["id"] = item_id
+        return item
+
+    def get_item_any(self, item_id: int):
+        return self.get_item(item_id)
+
     def save_item(self, payload: dict):
         self.saved_payload = dict(payload)
         return 99, True, True
@@ -54,6 +62,7 @@ class _FakeReplayDB:
     def __init__(self) -> None:
         self.recorded = []
         self.meta = {}
+        self.resolved_anomalies = []
         self.conn = SimpleNamespace(execute=lambda *args, **kwargs: SimpleNamespace(fetchone=lambda: None))
 
     def get_user(self, tg_user_id: int):
@@ -71,8 +80,19 @@ class _FakeReplayDB:
     def find_item_any_by_kinozal_id(self, kinozal_id: str):
         return self.find_item_by_kinozal_id(kinozal_id)
 
+    def get_item(self, item_id: int):
+        item = self.find_item_by_kinozal_id("2128422")
+        item["id"] = item_id
+        return item
+
+    def get_item_any(self, item_id: int):
+        return self.get_item(item_id)
+
     def list_user_subscriptions(self, tg_user_id: int):
         return [{"id": 7, "tg_user_id": tg_user_id}]
+
+    def list_enabled_subscriptions(self):
+        return [{"id": 7, "tg_user_id": 1001}]
 
     def get_subscription(self, sub_id: int):
         return {"id": sub_id, "tg_user_id": 1001, "name": "Sub", "is_enabled": 1}
@@ -128,6 +148,10 @@ class _FakeReplayDB:
 
     def set_meta(self, key: str, value: str):
         self.meta[key] = value
+
+    def resolve_release_anomalies(self, kinozal_id: str, *, item_id=None, anomaly_type: str = "", status: str = "resolved"):
+        self.resolved_anomalies.append((kinozal_id, item_id, anomaly_type, status))
+        return 1
 
 
 class _FakeKinozalService:
@@ -217,6 +241,66 @@ def test_replay_delivery_uses_archive_aware_lookup(monkeypatch) -> None:
     assert result["status"] == "sent"
     assert result["item_id"] == 77
     assert db.recorded[0][1] == 77
+
+
+def test_replay_delivery_to_matching_users_forces_replay_and_resolves_anomalies(monkeypatch) -> None:
+    db = _FakeReplayDB()
+    service = AdminApiService(
+        db=db,
+        tmdb_service=None,
+        kinozal_service=None,
+        bot=object(),
+    )
+
+    async def _fake_send_item_to_user(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr(admin_api_module, "send_item_to_user", _fake_send_item_to_user)
+    monkeypatch.setattr(admin_api_module, "match_subscription", lambda db, sub, item: True)
+
+    result = asyncio.run(
+        service.replay_delivery_to_matching_users(
+            "2128422",
+            force=True,
+            resolve_anomalies=True,
+        )
+    )
+
+    assert result["matched_subscriptions"] == 1
+    assert result["matched_users"] == 1
+    assert result["delivered_count"] == 1
+    assert result["status_counts"] == {"sent": 1}
+    assert result["resolved_anomalies"] == 1
+    assert db.resolved_anomalies == [("2128422", 42, "", "resolved")]
+
+
+def test_replay_delivery_to_matching_users_honors_explicit_item_id(monkeypatch) -> None:
+    db = _FakeReplayDB()
+    service = AdminApiService(
+        db=db,
+        tmdb_service=None,
+        kinozal_service=None,
+        bot=object(),
+    )
+
+    async def _fake_send_item_to_user(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr(admin_api_module, "send_item_to_user", _fake_send_item_to_user)
+    monkeypatch.setattr(admin_api_module, "match_subscription", lambda db, sub, item: True)
+
+    result = asyncio.run(
+        service.replay_delivery_to_matching_users(
+            "2128422",
+            item_id=77,
+            force=True,
+            resolve_anomalies=True,
+        )
+    )
+
+    assert result["item_id"] == 77
+    assert db.recorded[0][1] == 77
+    assert db.resolved_anomalies == [("2128422", 77, "", "resolved")]
 
 
 class _ArchivedOnlyDB(_FakeDB):

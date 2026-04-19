@@ -471,6 +471,7 @@ class AdminApiService:
         kinozal_id: str,
         tg_user_id: int,
         force: bool = False,
+        item: Dict[str, Any] | None = None,
     ) -> Dict[str, Any]:
         if self.bot is None:
             raise RuntimeError("admin replay is unavailable without bot context")
@@ -478,8 +479,9 @@ class AdminApiService:
         user = self.db.get_user(int(tg_user_id))
         if not user:
             raise LookupError(f"user {tg_user_id} not found")
-        finder = getattr(self.db, "find_item_any_by_kinozal_id", None) or self.db.find_item_by_kinozal_id
-        item = finder(kinozal_id)
+        if item is None:
+            finder = getattr(self.db, "find_item_any_by_kinozal_id", None) or self.db.find_item_by_kinozal_id
+            item = finder(kinozal_id)
         if not item:
             raise LookupError(f"kinozal_id {kinozal_id} not found")
 
@@ -602,6 +604,75 @@ class AdminApiService:
                 for sub in enabled_subs
             ],
             "mismatches": mismatches,
+        }
+
+    async def replay_delivery_to_matching_users(
+        self,
+        kinozal_id: str,
+        *,
+        item_id: int | None = None,
+        force: bool = False,
+        resolve_anomalies: bool = False,
+    ) -> Dict[str, Any]:
+        if self.bot is None:
+            raise RuntimeError("admin replay is unavailable without bot context")
+
+        item = None
+        if item_id is not None:
+            getter = getattr(self.db, "get_item_any", None) or getattr(self.db, "get_item", None)
+            item = getter(int(item_id)) if getter else None
+        if item is None:
+            finder = getattr(self.db, "find_item_any_by_kinozal_id", None) or self.db.find_item_by_kinozal_id
+            item = finder(kinozal_id)
+        if not item:
+            raise LookupError(f"kinozal_id {kinozal_id} not found")
+
+        matched_subscriptions = 0
+        matched_user_ids: List[int] = []
+        seen_user_ids: set[int] = set()
+        for sub in self.db.list_enabled_subscriptions():
+            sub_full = self.db.get_subscription(int(sub["id"]))
+            if not sub_full:
+                continue
+            if not match_subscription(self.db, sub_full, item):
+                continue
+            matched_subscriptions += 1
+            tg_user_id = int(sub_full["tg_user_id"])
+            if tg_user_id not in seen_user_ids:
+                seen_user_ids.add(tg_user_id)
+                matched_user_ids.append(tg_user_id)
+
+        results: List[Dict[str, Any]] = []
+        status_counts: Dict[str, int] = {}
+        reason_counts: Dict[str, int] = {}
+        for tg_user_id in matched_user_ids:
+            result = await self.replay_delivery(str(kinozal_id), tg_user_id, force=force, item=item)
+            results.append(result)
+            status = str(result.get("status") or "unknown")
+            status_counts[status] = status_counts.get(status, 0) + 1
+            reason = str(result.get("reason") or "")
+            if reason:
+                reason_counts[reason] = reason_counts.get(reason, 0) + 1
+
+        resolved_count = 0
+        if resolve_anomalies:
+            resolved_count = int(
+                self.db.resolve_release_anomalies(
+                    str(kinozal_id),
+                    item_id=int(item["id"]),
+                )
+            )
+
+        return {
+            "kinozal_id": str(kinozal_id),
+            "item_id": int(item["id"]),
+            "matched_subscriptions": matched_subscriptions,
+            "matched_users": len(matched_user_ids),
+            "delivered_count": sum(1 for row in results if str(row.get("status") or "") == "sent"),
+            "results": results,
+            "status_counts": status_counts,
+            "reason_counts": reason_counts,
+            "resolved_anomalies": resolved_count,
         }
 
     def _increment_admin_metric(self, key: str, delta: int) -> None:

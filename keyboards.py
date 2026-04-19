@@ -215,6 +215,14 @@ def match_review_kb(kinozal_id: str, has_tmdb_match: bool) -> InlineKeyboardMark
     return kb.as_markup()
 
 
+def anomaly_alert_kb(kinozal_id: str) -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    kb.button(text="🔎 Timeline", callback_data=f"anomaly:timeline:{kinozal_id}")
+    kb.button(text="📨 Replay", callback_data=f"anomaly:replay:{kinozal_id}")
+    kb.adjust(2)
+    return kb.as_markup()
+
+
 def match_candidates_kb(kinozal_id: str, candidates: List[Dict[str, Any]]) -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
     for row in candidates[:8]:

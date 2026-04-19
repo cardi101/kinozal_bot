@@ -51,6 +51,53 @@ TMDB_CLEARABLE_FIELDS = {
     "mal_id",
 }
 
+NOT_NULL_TEXT_FIELDS = {
+    "parsed_release_json",
+    "tmdb_match_confidence",
+    "tmdb_match_evidence",
+    "tmdb_match_debug",
+    "manual_bucket",
+    "manual_country_codes",
+    "source_release_text",
+}
+
+
+def _normalize_not_null_text_fields(payload: Dict[str, Any]) -> Dict[str, Any]:
+    normalized = dict(payload)
+    for field in NOT_NULL_TEXT_FIELDS:
+        value = normalized.get(field)
+        normalized[field] = compact_spaces(str(value or "")) if field == "tmdb_match_confidence" else (value or "")
+    return normalized
+
+
+def _item_recency_key(item: Dict[str, Any]) -> tuple[int, int, int]:
+    return (
+        int(item.get("source_published_at") or 0),
+        int(item.get("created_at") or 0),
+        int(item.get("id") or item.get("record_id") or 0),
+    )
+
+
+def _pick_best_kinozal_version(items: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    best: Optional[Dict[str, Any]] = None
+    for item in items:
+        if best is None:
+            best = item
+            continue
+        comparison = compare_episode_progress(
+            item.get("source_episode_progress"),
+            best.get("source_episode_progress"),
+        )
+        if comparison == 1:
+            best = item
+            continue
+        if comparison == 0 and _item_recency_key(item) > _item_recency_key(best):
+            best = item
+            continue
+        if comparison is None and _item_recency_key(item) > _item_recency_key(best):
+            best = item
+    return best
+
 
 def _normalize_source_audio_tracks(value: Any) -> List[str]:
     current = value
@@ -293,6 +340,7 @@ class ItemsRepository(BaseRepository):
             "raw_json": json.dumps(item.get("raw_json", {}), ensure_ascii=False, sort_keys=True),
             "created_at": utc_ts(),
         }
+        data = _normalize_not_null_text_fields(data)
 
         def pick_value(field: str, new_value: Any, old_value: Any) -> Any:
             if clear_tmdb_match and field in TMDB_CLEARABLE_FIELDS:
@@ -320,6 +368,7 @@ class ItemsRepository(BaseRepository):
                         merged[key] = existing_data.get(key, data[key])
                         continue
                     merged[key] = pick_value(key, data.get(key), existing_data.get(key))
+                merged = _normalize_not_null_text_fields(merged)
 
                 fields_to_update = [
                     "source_uid",
@@ -517,16 +566,16 @@ class ItemsRepository(BaseRepository):
         if not kinozal_id:
             return None
         with self.lock:
-            row = self.conn.execute(
+            rows = self.conn.execute(
                 """
                 SELECT id FROM items
                 WHERE kinozal_id = ? OR source_uid = ? OR source_uid LIKE ? OR source_link LIKE ?
                 ORDER BY COALESCE(source_published_at, 0) DESC, created_at DESC, id DESC
-                LIMIT 1
                 """,
                 (kinozal_id, f"kinozal:{kinozal_id}", f"%details.php?id={kinozal_id}%", f"%id={kinozal_id}%"),
-            ).fetchone()
-            return self.db.get_item(int(row["id"])) if row else None
+            ).fetchall()
+        candidates = [self.db.get_item(int(row["id"])) for row in rows]
+        return _pick_best_kinozal_version([item for item in candidates if item is not None])
 
     def find_item_any_by_kinozal_id(self, kinozal_id: str) -> Optional[Dict[str, Any]]:
         item = self.find_item_by_kinozal_id(kinozal_id)
@@ -709,6 +758,42 @@ class ItemsRepository(BaseRepository):
                 (kinozal_id, max(1, min(int(limit or 20), 100))),
             ).fetchall()
         return [dict(row) for row in rows]
+
+    def resolve_release_anomalies(
+        self,
+        kinozal_id: str,
+        *,
+        item_id: Optional[int] = None,
+        anomaly_type: str = "",
+        status: str = "resolved",
+    ) -> int:
+        kinozal_id = compact_spaces(str(kinozal_id or ""))
+        anomaly_type = compact_spaces(str(anomaly_type or ""))
+        status = compact_spaces(str(status or "resolved")) or "resolved"
+        if not kinozal_id:
+            return 0
+
+        conditions = ["kinozal_id = ?", "status = 'open'"]
+        params: List[Any] = [kinozal_id]
+        if item_id is not None:
+            conditions.append("item_id = ?")
+            params.append(int(item_id))
+        if anomaly_type:
+            conditions.append("anomaly_type = ?")
+            params.append(anomaly_type)
+
+        with self.lock:
+            rows = self.conn.execute(
+                f"""
+                UPDATE release_anomalies
+                SET status = ?, updated_at = ?
+                WHERE {' AND '.join(conditions)}
+                RETURNING id
+                """,
+                (status, utc_ts(), *params),
+            ).fetchall()
+            self.conn.commit()
+        return len(rows or [])
 
     def find_higher_progress_reference(
         self,

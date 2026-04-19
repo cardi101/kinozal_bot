@@ -3,6 +3,7 @@ import logging
 from typing import Any, Dict, List, Optional
 
 from content_buckets import anime_fallback_signal_score, item_content_bucket
+from country_helpers import has_asian_script, normalize_tmdb_language
 from item_years import (
     item_source_years,
     min_year_delta,
@@ -438,9 +439,71 @@ def tmdb_match_looks_valid(item: Dict[str, Any], query: str, details: Dict[str, 
                 if remainder and any(remainder == s or remainder.endswith(" " + s) for s in _DERIVATIVE_SUFFIXES):
                     return reject("tmdb_match_looks_valid:derivative_suffix")
 
+    def is_cjk_romanized_alias_search_hit() -> bool:
+        if has_exact_normalized or has_substring:
+            return False
+        query_clean = compact_spaces(clean_release_title(query or "") or query or "")
+        query_clean_norm = normalize_match_text(query_clean)
+        if not query_clean_norm:
+            return False
+        source_title_parts = {
+            normalize_match_text(part)
+            for value in [
+                item.get("cleaned_title") or "",
+                clean_release_title(item.get("source_title") or ""),
+            ]
+            for part in [compact_spaces(chunk) for chunk in str(value).split(" / ") if compact_spaces(chunk)]
+            if normalize_match_text(part)
+        }
+        if query_clean_norm not in source_title_parts and query_clean_norm not in alias_norms:
+            return False
+        if normalize_tmdb_language(details.get("tmdb_original_language")) not in {"zh", "ja", "ko"}:
+            return False
+        if not any(has_asian_script(value) for value in detail_variants if compact_spaces(value)):
+            return False
+        latin_tokens = re.findall(r"[A-Za-z][A-Za-z0-9'\-]*", query_clean)
+        if len(latin_tokens) < 3:
+            return False
+        try:
+            search_rank = int(details.get("search_rank")) if details.get("search_rank") is not None else None
+        except Exception:
+            search_rank = None
+        if search_rank not in (None, 0):
+            return False
+        details_year = parse_year(str(details.get("tmdb_release_date") or ""))
+        title_year_delta = min_year_delta(item_source_years(item), details_year)
+        if title_year_delta is None or title_year_delta > 1:
+            return False
+        expected_seasons_local, expected_episodes_local = extract_expected_tv_totals(item)
+        try:
+            tmdb_seasons_local = int(details.get("tmdb_number_of_seasons")) if details.get("tmdb_number_of_seasons") is not None else None
+        except Exception:
+            tmdb_seasons_local = None
+        try:
+            tmdb_episodes_local = int(details.get("tmdb_number_of_episodes")) if details.get("tmdb_number_of_episodes") is not None else None
+        except Exception:
+            tmdb_episodes_local = None
+        seasons_align = bool(
+            expected_seasons_local
+            and tmdb_seasons_local
+            and abs(tmdb_seasons_local - expected_seasons_local) <= 1
+        )
+        episodes_align = bool(
+            expected_episodes_local
+            and tmdb_episodes_local
+            and expected_episodes_local == tmdb_episodes_local
+        )
+        return seasons_align or episodes_align
+
     if re.search(r"[A-Za-z]", query or ""):
         if source_is_tv and details_media == "tv":
-            if best_overlap < 0.18 and best_similarity_norm < 0.50 and best_common_tokens < 2 and not has_substring:
+            if (
+                best_overlap < 0.18
+                and best_similarity_norm < 0.50
+                and best_common_tokens < 2
+                and not has_substring
+                and not is_cjk_romanized_alias_search_hit()
+            ):
                 return reject("tmdb_match_looks_valid:L297")
         else:
             if best_overlap < 0.28 and best_similarity_norm < 0.58 and best_common_tokens < 2 and not has_substring:

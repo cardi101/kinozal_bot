@@ -176,3 +176,59 @@ def test_tmdb_validation_allows_long_running_single_season_anime_parent_series()
     }
 
     assert tmdb_match_looks_valid(item, "Re: Zero", details, "tv") is True
+
+
+def test_tmdb_validation_allows_cjk_tv_match_found_by_romanized_alias() -> None:
+    item = {
+        "source_title": "Возрождение из ледяного озера (1 сезон: 1-26 серии из 40) / Bing hu chong sheng / 2026 / ЛМ / WEB-DL (1080p)",
+        "cleaned_title": "Возрождение из ледяного озера / Bing hu chong sheng",
+        "source_year": 2026,
+        "source_episode_progress": "1 сезон: 1-26 серии из 40",
+        "media_type": "tv",
+        "source_category_name": "Сериал - Буржуйский",
+    }
+    details = {
+        "tmdb_id": 278894,
+        "media_type": "tv",
+        "tmdb_title": "冰湖重生",
+        "tmdb_original_title": "冰湖重生",
+        "search_match_title": "冰湖重生",
+        "search_match_original_title": "冰湖重生",
+        "tmdb_original_language": "zh",
+        "tmdb_release_date": "2026-01-01",
+        "tmdb_number_of_seasons": 1,
+        "tmdb_number_of_episodes": 40,
+        "tmdb_status": "Returning Series",
+        "search_score": 0.94,
+        "search_rank": 0,
+    }
+
+    assert tmdb_match_looks_valid(item, "Bing hu chong sheng", details, "tv") is True
+
+
+def test_tmdb_validation_keeps_rejecting_weak_cjk_tv_alias_match_without_strong_search_signal() -> None:
+    item = {
+        "source_title": "Возрождение из ледяного озера (1 сезон: 1-26 серии из 40) / Bing hu chong sheng / 2026 / ЛМ / WEB-DL (1080p)",
+        "cleaned_title": "Возрождение из ледяного озера / Bing hu chong sheng",
+        "source_year": 2026,
+        "source_episode_progress": "1 сезон: 1-26 серии из 40",
+        "media_type": "tv",
+    }
+    details = {
+        "tmdb_id": 278894,
+        "media_type": "tv",
+        "tmdb_title": "冰湖重生",
+        "tmdb_original_title": "冰湖重生",
+        "search_match_title": "冰湖重生",
+        "search_match_original_title": "冰湖重生",
+        "tmdb_original_language": "zh",
+        "tmdb_release_date": "2026-01-01",
+        "tmdb_number_of_seasons": 3,
+        "tmdb_number_of_episodes": 24,
+        "tmdb_status": "Returning Series",
+        "search_score": 0.94,
+        "search_rank": 0,
+    }
+
+    assert tmdb_match_looks_valid(item, "Bing hu chong sheng", details, "tv") is False
+    assert details["tmdb_validation_reject_code"] == "LATIN_TITLE_WEAK_MATCH_TV"

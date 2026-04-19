@@ -21,6 +21,7 @@ from delivery_sender import send_item_to_user
 from keyboards import match_candidates_kb, match_review_kb
 from match_debug_helpers import build_match_explanation, rematch_item_live, _strip_existing_match_fields
 from release_versioning import describe_variant_change, extract_kinozal_id, format_variant_summary
+from services.admin_api_service import AdminApiService
 from subscription_matching import match_subscription
 from text_access import format_dt, human_media_type
 from utils import compact_spaces, short
@@ -368,6 +369,75 @@ def register_admin_match_handlers(router: Router, db: Any, tmdb: Any) -> None:
             disable_web_page_preview=True,
         )
 
+    async def _send_version_timeline(message: Message, kinozal_id: str) -> None:
+        report = db.get_version_timeline(kinozal_id, limit=10)
+        versions = report.get("versions") or []
+        if not versions:
+            await message.answer(f"Не нашёл версий по Kinozal ID {kinozal_id}.")
+            return
+
+        lines = [
+            f"🔎 История релиза Kinozal ID {kinozal_id}",
+            f"Активных items: {report['active_count']}",
+            f"В архиве: {report['archived_count']}",
+            f"Показано версий: {len(versions)}",
+            "",
+        ]
+        for idx, entry in enumerate(versions):
+            icon = "🟢" if entry.get("state") == "active" else "📦"
+            ts = int(entry.get("source_published_at") or entry.get("created_at") or entry.get("archived_at") or 0)
+            title = short(compact_spaces(str(entry.get("source_title") or "")), 90)
+            lines.append(
+                f"{icon} #{entry.get('record_id')} | {format_dt(ts)} | {human_media_type(str(entry.get('media_type') or 'movie'))}\n"
+                f"{html.escape(title)}\n"
+                f"{html.escape(entry.get('variant_summary') or format_variant_summary(entry))}"
+            )
+            if idx + 1 < len(versions):
+                older = versions[idx + 1]
+                lines.append(f"↳ Изменение к этой версии: {html.escape(describe_variant_change(older, entry))}")
+            if int(entry.get("version_duplicates") or 1) > 1:
+                lines.append(f"↳ Дубликатов этой версии: {int(entry.get('version_duplicates') or 1)}")
+            lines.append("")
+
+        await message.answer(
+            "\n".join(lines).strip(),
+            parse_mode=ParseMode.HTML,
+            disable_web_page_preview=CFG.disable_preview,
+        )
+
+    async def _replay_anomaly(message: Message, kinozal_id: str) -> None:
+        open_anomaly = next(
+            (
+                anomaly
+                for anomaly in db.list_release_anomalies(kinozal_id, limit=10)
+                if str(anomaly.get("status") or "") == "open" and int(anomaly.get("item_id") or 0) > 0
+            ),
+            None,
+        )
+        anomaly_item_id = int(open_anomaly["item_id"]) if open_anomaly else None
+        service = AdminApiService(db=db, tmdb_service=tmdb, kinozal_service=None, bot=message.bot)
+        result = await service.replay_delivery_to_matching_users(
+            kinozal_id,
+            item_id=anomaly_item_id,
+            force=True,
+            resolve_anomalies=True,
+        )
+        lines = [
+            f"📨 Anomaly replay for Kinozal ID {kinozal_id}",
+            f"Item ID: {int(result['item_id'])}",
+            f"Подходящих подписок: {int(result['matched_subscriptions'])}",
+            f"Подходящих пользователей: {int(result['matched_users'])}",
+            f"Новых уведомлений отправлено: {int(result['delivered_count'])}",
+            f"Закрыто anomaly: {int(result['resolved_anomalies'])}",
+        ]
+        if result.get("reason_counts"):
+            reasons = ", ".join(
+                f"{reason}={count}"
+                for reason, count in sorted(result["reason_counts"].items())
+            )
+            lines.append(f"Итоги: {reasons}")
+        await message.answer("\n".join(lines), disable_web_page_preview=True)
+
     async def _override_match(
         message: Message,
         admin_user_id: int,
@@ -707,6 +777,31 @@ def register_admin_match_handlers(router: Router, db: Any, tmdb: Any) -> None:
             return
         await callback.answer("Неизвестное действие", show_alert=True)
 
+    @router.callback_query(F.data.startswith("anomaly:"))
+    async def cb_anomaly(callback: CallbackQuery) -> None:
+        if not is_admin(callback.from_user.id):
+            await callback.answer("Только для администратора.", show_alert=True)
+            return
+        parts = (callback.data or "").split(":", 2)
+        if len(parts) != 3:
+            await callback.answer("Некорректное действие", show_alert=True)
+            return
+        _, action, kinozal_id = parts
+        kinozal_id = extract_kinozal_id(kinozal_id or "")
+        if not kinozal_id:
+            await callback.answer("Некорректный Kinozal ID", show_alert=True)
+            return
+
+        if action == "timeline":
+            await _send_version_timeline(callback.message, kinozal_id)
+            await callback.answer()
+            return
+        if action == "replay":
+            await _replay_anomaly(callback.message, kinozal_id)
+            await callback.answer("Replay выполнен")
+            return
+        await callback.answer("Неизвестное действие", show_alert=True)
+
     @router.callback_query(F.data.startswith("matchpick:"))
     async def cb_matchpick(callback: CallbackQuery) -> None:
         if not is_admin(callback.from_user.id):
@@ -1025,33 +1120,4 @@ def register_admin_match_handlers(router: Router, db: Any, tmdb: Any) -> None:
             await message.answer("Используй: /why <kinozal_id> или ответь этой командой на уведомление бота.")
             return
 
-        report = db.get_version_timeline(kinozal_id, limit=10)
-        versions = report.get("versions") or []
-        if not versions:
-            await message.answer(f"Не нашёл версий по Kinozal ID {kinozal_id}.")
-            return
-
-        lines = [
-            f"🔎 История релиза Kinozal ID {kinozal_id}",
-            f"Активных items: {report['active_count']}",
-            f"В архиве: {report['archived_count']}",
-            f"Показано версий: {len(versions)}",
-            "",
-        ]
-        for idx, entry in enumerate(versions):
-            icon = "🟢" if entry.get("state") == "active" else "📦"
-            ts = int(entry.get("source_published_at") or entry.get("created_at") or entry.get("archived_at") or 0)
-            title = short(compact_spaces(str(entry.get("source_title") or "")), 90)
-            lines.append(
-                f"{icon} #{entry.get('record_id')} | {format_dt(ts)} | {human_media_type(str(entry.get('media_type') or 'movie'))}\n"
-                f"{html.escape(title)}\n"
-                f"{html.escape(entry.get('variant_summary') or format_variant_summary(entry))}"
-            )
-            if idx + 1 < len(versions):
-                older = versions[idx + 1]
-                lines.append(f"↳ Изменение к этой версии: {html.escape(describe_variant_change(older, entry))}")
-            if int(entry.get("version_duplicates") or 1) > 1:
-                lines.append(f"↳ Дубликатов этой версии: {int(entry.get('version_duplicates') or 1)}")
-            lines.append("")
-
-        await message.answer("\n".join(lines).strip(), parse_mode=ParseMode.HTML, disable_web_page_preview=CFG.disable_preview)
+        await _send_version_timeline(message, kinozal_id)

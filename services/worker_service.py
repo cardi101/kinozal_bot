@@ -13,6 +13,7 @@ from content_buckets import item_content_bucket
 from delivery_events import build_delivery_event_key, resolve_delivery_event_type
 from domain import DeliveryCandidate, ReleaseItem, SubscriptionRecord
 from episode_progress import parse_episode_progress
+from keyboards import anomaly_alert_kb
 from media_detection import is_non_video_release, is_russian_release
 from quiet_hours import next_quiet_window_end_ts, quiet_window_status
 from release_versioning import extract_kinozal_id, format_variant_summary
@@ -179,6 +180,7 @@ class WorkerService:
                     text,
                     parse_mode=ParseMode.HTML,
                     disable_web_page_preview=True,
+                    reply_markup=anomaly_alert_kb(kinozal_id),
                 )
                 sent_count += 1
             except Exception:
