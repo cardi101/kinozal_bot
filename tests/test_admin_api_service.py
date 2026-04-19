@@ -29,18 +29,6 @@ class _FakeDB:
         return self.find_item_by_kinozal_id(kinozal_id)
 
     def get_item(self, item_id: int):
-        item = self.find_item_by_kinozal_id("2128422")
-        item["id"] = item_id
-        return item
-
-    def get_item_any(self, item_id: int):
-        return self.get_item(item_id)
-
-    def save_item(self, payload: dict):
-        self.saved_payload = dict(payload)
-        return 99, True, True
-
-    def get_item(self, item_id: int):
         return {
             "id": item_id,
             "kinozal_id": "2128422",
@@ -50,6 +38,13 @@ class _FakeDB:
             "source_episode_progress": "1 сезон: 1-10 серии из 10",
             "media_type": "tv",
         }
+
+    def get_item_any(self, item_id: int):
+        return self.get_item(item_id)
+
+    def save_item(self, payload: dict):
+        self.saved_payload = dict(payload)
+        return 99, True, True
 
     def list_enabled_subscriptions(self):
         return []
