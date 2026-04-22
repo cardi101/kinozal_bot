@@ -32,6 +32,10 @@ def _episode_progress_parts(value: Any) -> Optional[Dict[str, int | None]]:
         return None
 
     patterns = [
+        r"(?P<season_start>\d+)\s*-\s*(?P<season>\d+)\s*сезон:\s*(?P<start>\d+)\s*-\s*(?P<end>\d+)\s*(?:сер(?:ия|ии|ий)|выпуск(?:а|ов)?)\s*из\s*(?P<total>\d+)",
+        r"(?P<season_start>\d+)\s*-\s*(?P<season>\d+)\s*сезон:\s*(?P<start>\d+)\s*(?:сер(?:ия|ии|ий)|выпуск(?:а|ов)?)\s*из\s*(?P<total>\d+)",
+        r"(?P<season_start>\d+)\s*-\s*(?P<season>\d+)\s*сезон:\s*(?P<start>\d+)\s*-\s*(?P<end>\d+)\s*(?:сер(?:ия|ии|ий)|выпуск(?:а|ов)?)",
+        r"(?P<season_start>\d+)\s*-\s*(?P<season>\d+)\s*сезон:\s*(?P<start>\d+)\s*(?:сер(?:ия|ии|ий)|выпуск(?:а|ов)?)",
         r"(?P<season>\d+)\s*сезон:\s*(?P<start>\d+)\s*-\s*(?P<end>\d+)\s*(?:сер(?:ия|ии|ий)|выпуск(?:а|ов)?)\s*из\s*(?P<total>\d+)",
         r"(?P<season>\d+)\s*сезон:\s*(?P<start>\d+)\s*(?:сер(?:ия|ии|ий)|выпуск(?:а|ов)?)\s*из\s*(?P<total>\d+)",
         r"(?P<season>\d+)\s*сезон:\s*(?P<start>\d+)\s*-\s*(?P<end>\d+)\s*(?:сер(?:ия|ии|ий)|выпуск(?:а|ов)?)",

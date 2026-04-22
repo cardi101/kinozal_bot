@@ -26,3 +26,16 @@ def test_parse_release_title_handles_movie_without_episode_progress() -> None:
     assert parsed.episode_progress_text == ""
     assert parsed.release_type == "WEB-DL"
     assert parsed.audio_tracks == ["ДБ", "ПМ", "ЛМ", "СТ"]
+
+
+def test_parse_release_title_keeps_season_range_progress_text() -> None:
+    parsed = parse_release_title(
+        "Криминальное прошлое (1-2 сезон: 1-9 серии из 16) / Criminal Record / 2024-2026 / ПМ (RuDub), СТ / HEVC / WEBRip (1080p)",
+        "tv",
+    )
+
+    assert parsed.episode_progress_text == "1-2 сезон: 1-9 серии из 16"
+    assert parsed.season == 2
+    assert parsed.episode_start == 1
+    assert parsed.episode_end == 9
+    assert parsed.episode_total == 16

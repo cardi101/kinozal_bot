@@ -74,3 +74,35 @@ def test_enrich_kinozal_item_with_details_does_not_override_existing_release_fie
     assert enriched["source_episode_progress"] == "1-2 серии из 10"
     assert enriched["source_release_type"] == "WEB-DL"
     assert enriched["parsed_release_json"] == '{"raw_title":"kept"}'
+
+
+def test_enrich_kinozal_item_with_details_keeps_season_range_progress(monkeypatch) -> None:
+    details_html = """
+    <html>
+      <head><title>Криминальное прошлое (1-2 сезон: 1-9 серии из 16) / Criminal Record / 2024-2026 / ПМ (RuDub), СТ / HEVC / WEBRip (1080p) :: Кинозал.ТВ</title></head>
+      <body>tt21088136</body>
+    </html>
+    """
+
+    async def _fake_fetch(url: str) -> str:
+        if "action=2" in url:
+            return ""
+        return details_html
+
+    monkeypatch.setattr(kinozal_details_module, "fetch_kinozal_html", _fake_fetch)
+    kinozal_details_module._DETAILS_CACHE.clear()
+
+    item = {
+        "source_link": "https://kinozal.tv/details.php?id=2018161",
+        "source_title": "Криминальное прошлое (1-2 сезон: 1-9 серии из 16) / Criminal Record / 2024-2026 / ПМ (RuDub), СТ / HEVC / WEBRip (1080p)",
+        "source_format": "",
+        "source_year": None,
+        "source_audio_tracks": [],
+        "source_episode_progress": "",
+        "source_release_type": "",
+        "parsed_release_json": "",
+    }
+
+    enriched = asyncio.run(kinozal_details_module.enrich_kinozal_item_with_details(dict(item), force_refresh=True))
+
+    assert enriched["source_episode_progress"] == "1-2 сезон: 1-9 серии из 16"
