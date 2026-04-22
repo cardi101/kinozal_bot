@@ -199,9 +199,12 @@ def expand_tmdb_candidate_variants(text: str) -> List[str]:
 
     latin_words = re.findall(r"[A-Za-z][A-Za-z0-9'\-]*", base)
     if len(latin_words) >= 4:
-        for n in (5, 4, 3, 2):
-            if len(latin_words) >= n:
-                add(" ".join(latin_words[:n]))
+        # For colon titles, generic leading prefixes often degrade into false positives
+        # like "The Legend" for "The Legend of Aang: The Last Airbender".
+        if ":" not in base:
+            for n in (5, 4, 3, 2):
+                if len(latin_words) >= n:
+                    add(" ".join(latin_words[:n]))
         if ":" in base:
             left = compact_spaces(base.split(":", 1)[0])
             add(left)

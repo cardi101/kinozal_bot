@@ -76,6 +76,31 @@ def test_tmdb_validation_rejects_short_prefix_match_for_long_movie_title() -> No
     assert details["tmdb_validation_reject_reason"] == "tmdb_match_looks_valid:truncated_prefix_query"
 
 
+def test_tmdb_validation_rejects_short_common_exact_prefix_for_long_movie_title() -> None:
+    item = {
+        "source_title": "Легенда об Аанге: Последний маг воздуха / The Legend of Aang: The Last Airbender / 2026 / 2 x ДБ, ПМ, ЛМ, СТ / WEB-DL (1080p)",
+        "cleaned_title": "Легенда об Аанге: Последний маг воздуха / The Legend of Aang: The Last Airbender",
+        "source_year": 2026,
+        "media_type": "movie",
+        "source_category_name": "Мульт - Буржуйский",
+        "source_category_id": "21",
+    }
+    details = {
+        "tmdb_id": 1635620,
+        "media_type": "movie",
+        "tmdb_title": "The Legend",
+        "tmdb_original_title": "The Legend",
+        "search_match_title": "The Legend",
+        "search_match_original_title": "The Legend",
+        "tmdb_release_date": "",
+        "search_score": 3.71,
+    }
+
+    assert tmdb_match_looks_valid(item, "The Legend", details, "movie") is False
+    assert details["tmdb_validation_reject_code"] == "TRUNCATED_PREFIX_QUERY_MATCH"
+    assert details["tmdb_validation_reject_reason"] == "tmdb_match_looks_valid:truncated_prefix_query"
+
+
 def test_tmdb_validation_allows_anime_later_season_parent_series_despite_large_year_delta() -> None:
     item = {
         "source_title": "Жизнь в альтернативном мире с нуля (4 сезон: 1-2 серии из 18) / Re: Zero / 2026 / ДБ (AniStar), ЛМ (AniLibria), СТ / WEB-DL (1080p)",

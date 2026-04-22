@@ -386,6 +386,7 @@ def tmdb_match_looks_valid(item: Dict[str, Any], query: str, details: Dict[str, 
     query_clean = compact_spaces(clean_release_title(query or "") or query or "")
     query_clean_norm = normalize_match_text(query_clean)
     query_clean_tokens = text_tokens(query_clean)
+    query_raw_tokens = raw_text_tokens(query_clean)
     detail_norms = [normalize_match_text(value) for value in detail_variants if compact_spaces(value)]
     detail_exact_query = bool(query_clean_norm and any(value == query_clean_norm for value in detail_norms))
     detail_extends_query = bool(query_clean_norm and any(value.startswith(query_clean_norm + " ") for value in detail_norms))
@@ -398,22 +399,30 @@ def tmdb_match_looks_valid(item: Dict[str, Any], query: str, details: Dict[str, 
             part_norm = normalize_match_text(part)
             if part_norm and all(part_norm != normalize_match_text(existing) for existing in main_title_parts):
                 main_title_parts.append(part)
+    main_part_exact_query = bool(
+        query_clean_norm
+        and any(normalize_match_text(part) == query_clean_norm for part in main_title_parts)
+    )
 
     if (
         short_or_common_query
         and has_exact_normalized
         and detail_exact_query
         and not detail_extends_query
-        and len(query_clean_tokens) >= 2
+        and query_raw_tokens
+        and not main_part_exact_query
     ):
         for part in main_title_parts:
             part_norm = normalize_match_text(part)
-            part_tokens = text_tokens(part)
             if not part_norm or part_norm == query_clean_norm:
                 continue
-            if len(part_tokens) < len(query_clean_tokens) + 2:
+            part_raw_tokens = raw_text_tokens(part)
+            if len(part_raw_tokens) < len(query_raw_tokens) + 2:
                 continue
-            if part_tokens[: len(query_clean_tokens)] != query_clean_tokens:
+            if part_raw_tokens[: len(query_raw_tokens)] != query_raw_tokens:
+                continue
+            part_tokens = text_tokens(part)
+            if query_clean_tokens and part_tokens[: len(query_clean_tokens)] != query_clean_tokens:
                 continue
             if best_main_overlap < 0.67 and best_main_similarity < 0.88:
                 return reject("tmdb_match_looks_valid:truncated_prefix_query")
