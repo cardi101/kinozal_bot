@@ -5,6 +5,6 @@ python-dotenv==1.2.2
 psycopg[binary]==3.3.3
 redis==7.4.0
 ftfy==6.3.1
-uvicorn==0.44.0
+uvicorn==0.46.0
 prometheus-client==0.25.0
 sentry-sdk==2.58.0
