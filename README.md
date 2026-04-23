@@ -43,11 +43,7 @@ Telegram-бот для мониторинга новых релизов на [Ki
 - Аккаунт на [Kinozal.tv](https://kinozal.tv)
 - [Telegram Bot Token](https://t.me/BotFather)
 - [TMDB API Read Token](https://www.themoviedb.org/settings/api)
-- Redis — бот ожидает его по адресу из `REDIS_URL`. Если Redis не входит в твой стек, проще всего поднять его рядом:
-
-```bash
-docker run -d --name kinozal-redis --restart unless-stopped redis:7-alpine
-```
+- Redis из `docker-compose.yml`; по умолчанию бот использует `redis://redis:6379/0`
 
 ### Установка
 
