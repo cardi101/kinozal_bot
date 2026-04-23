@@ -1,5 +1,4 @@
 import json
-import re
 from dataclasses import asdict, dataclass, field
 from typing import Any, Dict, List, Optional
 
@@ -20,10 +19,10 @@ def _episode_progress_parts(value: Any) -> Dict[str, Optional[int]]:
             "episode_total": None,
         }
     return {
-        "season": int(parts.get("season")) if parts.get("season") is not None else None,
-        "episode_start": int(parts.get("start")) if parts.get("start") is not None else None,
-        "episode_end": int(parts.get("end")) if parts.get("end") is not None else None,
-        "episode_total": int(parts.get("total")) if parts.get("total") is not None else None,
+        "season": parts.get("season"),
+        "episode_start": parts.get("start"),
+        "episode_end": parts.get("end"),
+        "episode_total": parts.get("total"),
     }
 
 
