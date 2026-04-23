@@ -2,7 +2,7 @@ import json
 import re
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
-from episode_progress import parse_episode_progress
+from episode_progress import episode_progress_parts, parse_episode_progress
 from parsing_audio import parse_audio_tracks
 from parsed_release import ParsedRelease, coerce_parsed_release
 from utils import compact_spaces, sha1_text
@@ -30,48 +30,16 @@ def _episode_progress_parts(value: Any) -> Optional[Dict[str, int | None]]:
     text = compact_spaces(str(value or "")).lower().replace("ё", "е")
     if not text:
         return None
-
-    patterns = [
-        r"(?P<season_start>\d+)\s*-\s*(?P<season>\d+)\s*сезон:\s*(?P<start>\d+)\s*-\s*(?P<end>\d+)\s*(?:сер(?:ия|ии|ий)|выпуск(?:а|ов)?)\s*из\s*(?P<total>\d+)",
-        r"(?P<season_start>\d+)\s*-\s*(?P<season>\d+)\s*сезон:\s*(?P<start>\d+)\s*(?:сер(?:ия|ии|ий)|выпуск(?:а|ов)?)\s*из\s*(?P<total>\d+)",
-        r"(?P<season_start>\d+)\s*-\s*(?P<season>\d+)\s*сезон:\s*(?P<start>\d+)\s*-\s*(?P<end>\d+)\s*(?:сер(?:ия|ии|ий)|выпуск(?:а|ов)?)",
-        r"(?P<season_start>\d+)\s*-\s*(?P<season>\d+)\s*сезон:\s*(?P<start>\d+)\s*(?:сер(?:ия|ии|ий)|выпуск(?:а|ов)?)",
-        r"(?P<season>\d+)\s*сезон:\s*(?P<start>\d+)\s*-\s*(?P<end>\d+)\s*(?:сер(?:ия|ии|ий)|выпуск(?:а|ов)?)\s*из\s*(?P<total>\d+)",
-        r"(?P<season>\d+)\s*сезон:\s*(?P<start>\d+)\s*(?:сер(?:ия|ии|ий)|выпуск(?:а|ов)?)\s*из\s*(?P<total>\d+)",
-        r"(?P<season>\d+)\s*сезон:\s*(?P<start>\d+)\s*-\s*(?P<end>\d+)\s*(?:сер(?:ия|ии|ий)|выпуск(?:а|ов)?)",
-        r"(?P<season>\d+)\s*сезон:\s*(?P<start>\d+)\s*(?:сер(?:ия|ии|ий)|выпуск(?:а|ов)?)",
-        r"s(?P<season>\d{1,2})\s*e(?P<start>\d{1,3})\s*-\s*e(?P<end>\d{1,3})",
-        r"s(?P<season>\d{1,2})\s*e(?P<start>\d{1,3})",
-        r"(?P<season>\d{1,2})x(?P<start>\d{1,3})\s*-\s*(?P=season)x(?P<end>\d{1,3})",
-        r"(?P<season>\d{1,2})x(?P<start>\d{1,3})\s*-\s*(?P<end>\d{1,3})",
-        r"(?P<season>\d{1,2})x(?P<start>\d{1,3})",
-        r"(?P<start>\d+)\s*-\s*(?P<end>\d+)\s*(?:сер(?:ия|ии|ий)|выпуск(?:а|ов)?)\s*из\s*(?P<total>\d+)",
-        r"(?P<start>\d+)\s*(?:сер(?:ия|ии|ий)|выпуск(?:а|ов)?)\s*из\s*(?P<total>\d+)",
-        r"(?P<start>\d+)\s*-\s*(?P<end>\d+)\s*(?:сер(?:ия|ии|ий)|выпуск(?:а|ов)?)",
-        r"(?P<start>\d+)\s*(?:сер(?:ия|ии|ий)|выпуск(?:а|ов)?)",
-        r"(?P<start>\d+)\s*-\s*(?P<end>\d+)\s*из\s*(?P<total>\d+)",
-        r"(?P<start>\d+)\s*из\s*(?P<total>\d+)",
-    ]
-    for pattern in patterns:
-        match = re.search(pattern, text, flags=re.I)
-        if not match:
-            continue
-        season_raw = match.groupdict().get("season")
-        start_raw = match.groupdict().get("start")
-        end_raw = match.groupdict().get("end")
-        total_raw = match.groupdict().get("total")
-        start = int(start_raw) if start_raw is not None else None
-        if start is None:
-            continue
-        end = int(end_raw) if end_raw is not None else start
-        return {
-            "season": int(season_raw) if season_raw is not None else None,
-            "start": start,
-            "end": end,
-            "total": int(total_raw) if total_raw is not None else None,
-            "length": len(text),
-        }
-    return None
+    parts = episode_progress_parts(text)
+    if not parts:
+        return None
+    return {
+        "season": int(parts.get("season")) if parts.get("season") is not None else None,
+        "start": int(parts.get("start")) if parts.get("start") is not None else None,
+        "end": int(parts.get("end")) if parts.get("end") is not None else None,
+        "total": int(parts.get("total")) if parts.get("total") is not None else None,
+        "length": len(text),
+    }
 
 
 def episode_progress_sort_key(value: Any) -> Optional[Tuple[int, int, int, int]]:

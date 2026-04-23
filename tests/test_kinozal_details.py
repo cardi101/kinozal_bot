@@ -106,3 +106,35 @@ def test_enrich_kinozal_item_with_details_keeps_season_range_progress(monkeypatc
     enriched = asyncio.run(kinozal_details_module.enrich_kinozal_item_with_details(dict(item), force_refresh=True))
 
     assert enriched["source_episode_progress"] == "1-2 сезон: 1-9 серии из 16"
+
+
+def test_enrich_kinozal_item_with_details_keeps_sparse_episode_ranges(monkeypatch) -> None:
+    details_html = """
+    <html>
+      <head><title>Смурфики (4 сезон: 1-3, 5-13 серии из 13) / The Smurfs / 2025 / ДБ / WEB-DL (1080p) :: Кинозал.ТВ</title></head>
+      <body>tt14670820</body>
+    </html>
+    """
+
+    async def _fake_fetch(url: str) -> str:
+        if "action=2" in url:
+            return ""
+        return details_html
+
+    monkeypatch.setattr(kinozal_details_module, "fetch_kinozal_html", _fake_fetch)
+    kinozal_details_module._DETAILS_CACHE.clear()
+
+    item = {
+        "source_link": "https://kinozal.tv/details.php?id=2103982",
+        "source_title": "Смурфики (4 сезон: 1-3, 5-13 серии из 13) / The Smurfs / 2025 / ДБ / WEB-DL (1080p)",
+        "source_format": "",
+        "source_year": None,
+        "source_audio_tracks": [],
+        "source_episode_progress": "",
+        "source_release_type": "",
+        "parsed_release_json": "",
+    }
+
+    enriched = asyncio.run(kinozal_details_module.enrich_kinozal_item_with_details(dict(item), force_refresh=True))
+
+    assert enriched["source_episode_progress"] == "4 сезон: 1-3, 5-13 серии из 13"

@@ -23,6 +23,12 @@ class WorkerRepository:
     def get_item_any(self, item_id: int) -> Optional[Dict[str, Any]]:
         return self.db.get_item_any(item_id)
 
+    def find_item_any_by_kinozal_id(self, kinozal_id: str) -> Optional[Dict[str, Any]]:
+        finder = getattr(self.db, "find_item_any_by_kinozal_id", None)
+        if callable(finder):
+            return finder(kinozal_id)
+        return None
+
     def update_item_release_text(self, item_id: int, release_text: str) -> None:
         self.db.update_item_release_text(item_id, release_text)
 

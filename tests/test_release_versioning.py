@@ -26,6 +26,11 @@ def test_parse_episode_progress_season_range() -> None:
     assert result == "1-2 сезон: 1-9 серии из 16"
 
 
+def test_parse_episode_progress_season_with_sparse_episode_ranges() -> None:
+    result = parse_episode_progress("4 сезон: 1-3, 5-13 серии из 13")
+    assert result == "4 сезон: 1-3, 5-13 серии из 13"
+
+
 def test_parse_episode_progress_sxxexx():
     result = parse_episode_progress("S02E05")
     assert result is not None

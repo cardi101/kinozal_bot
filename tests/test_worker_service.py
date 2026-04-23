@@ -140,6 +140,10 @@ class _FakeWorkerRepository:
             "source_episode_progress": "1 сезон: 1-8 серии из 10",
         }
 
+    def find_item_any_by_kinozal_id(self, kinozal_id: str):
+        del kinozal_id
+        return None
+
     def get_subscription(self, subscription_id: int):
         return self.subscriptions.get(subscription_id)
 
@@ -432,6 +436,40 @@ def test_flush_due_pending_deliveries_uses_archived_item_payload() -> None:
     assert metrics["deliveries_sent_total"] == 1
 
 
+def test_flush_due_pending_deliveries_prefers_latest_kinozal_version_over_archived_item() -> None:
+    repository = _FakeWorkerRepository()
+
+    def _latest_item(_kinozal_id: str):
+        return {
+            "id": 84,
+            "kinozal_id": "2128422",
+            "source_uid": "kinozal:2128422",
+            "source_title": "Latest release",
+            "media_type": "tv",
+            "source_episode_progress": "1 сезон: 1-10 серии из 10",
+        }
+
+    repository.find_item_any_by_kinozal_id = _latest_item
+    delivery_service = _FakeDeliveryService()
+    worker = WorkerService(
+        repository=repository,
+        kinozal_service=_FakeKinozalService(),
+        tmdb_service=None,
+        subscription_service=_FakeSubscriptionService(),
+        delivery_service=delivery_service,
+        bot=None,
+    )
+
+    metrics = worker._new_cycle_metrics()
+    asyncio.run(worker._flush_due_pending_deliveries(current_hour=12, cycle_metrics=metrics))
+
+    assert delivery_service.sent == [(1001, 84)]
+    assert delivery_service.claimed == [
+        (1001, 84, "pending_flush", "release", "release:1001:2128422:v1")
+    ]
+    assert repository.deleted == [(1001, 42)]
+
+
 def test_process_new_items_refreshes_cached_match_without_confidence() -> None:
     repository = _CachedRefreshRepository()
     tmdb_service = _FakeRefreshTMDBService()
@@ -560,6 +598,37 @@ def test_flush_due_debounce_uses_archived_item_payload() -> None:
     assert 1001 in pending
     assert len(pending[1001]) == 1
     assert pending[1001][0].item_id == 42
+    assert pending[1001][0].debounce_kinozal_id == "2128422"
+
+
+def test_flush_due_debounce_prefers_latest_kinozal_version() -> None:
+    repository = _FakeWorkerRepository()
+
+    def _latest_item(_kinozal_id: str):
+        return {
+            "id": 84,
+            "kinozal_id": "2128422",
+            "source_uid": "kinozal:2128422",
+            "source_title": "Latest release",
+            "media_type": "tv",
+            "source_episode_progress": "1 сезон: 1-10 серии из 10",
+        }
+
+    repository.find_item_any_by_kinozal_id = _latest_item
+    worker = WorkerService(
+        repository=repository,
+        kinozal_service=_FakeKinozalService(),
+        tmdb_service=None,
+        subscription_service=_FakeSubscriptionService(),
+        delivery_service=_FakeDeliveryService(),
+        bot=None,
+    )
+
+    pending: dict[int, list] = {}
+    asyncio.run(worker._flush_due_debounce(pending))
+
+    assert 1001 in pending
+    assert pending[1001][0].item_id == 84
     assert pending[1001][0].debounce_kinozal_id == "2128422"
 
 

@@ -260,6 +260,27 @@ class WorkerService:
                 fallback_subs.append(SubscriptionRecord.from_payload(sub_full))
         return fallback_subs
 
+    def _latest_payload_for_queued_item(self, payload: Dict[str, Any] | None, kinozal_id: str = "") -> Dict[str, Any] | None:
+        if not payload and not compact_spaces(kinozal_id):
+            return payload
+
+        resolved_kinozal_id = compact_spaces(kinozal_id)
+        if not resolved_kinozal_id and payload:
+            resolved_kinozal_id = (
+                compact_spaces(str(payload.get("kinozal_id") or ""))
+                or extract_kinozal_id(payload.get("source_uid"))
+                or extract_kinozal_id(payload.get("source_link"))
+            )
+        if not resolved_kinozal_id:
+            return payload
+
+        finder = getattr(self.repository, "find_item_any_by_kinozal_id", None)
+        if not callable(finder):
+            return payload
+
+        latest_payload = finder(resolved_kinozal_id)
+        return latest_payload or payload
+
     async def process_new_items(self, cycle_metrics: Dict[str, int] | None = None) -> None:
         if cycle_metrics is None:
             cycle_metrics = self._new_cycle_metrics()
@@ -668,6 +689,7 @@ class WorkerService:
                 continue
 
             pending_item_payload = self.repository.get_item_any(pending_item_id)
+            pending_item_payload = self._latest_payload_for_queued_item(pending_item_payload)
             if not pending_item_payload:
                 self.repository.delete_pending_delivery(flush_uid, pending_item_id, event_key=event_key)
                 continue
@@ -745,6 +767,7 @@ class WorkerService:
                         self.repository.delete_pending_delivery(flush_uid, pending_item_id, event_key=event_key)
                         continue
                     pending_item_payload = self.repository.get_item_any(pending_item_id)
+                    pending_item_payload = self._latest_payload_for_queued_item(pending_item_payload)
                     if not pending_item_payload:
                         self.repository.delete_pending_delivery(flush_uid, pending_item_id, event_key=event_key)
                         continue
@@ -840,6 +863,7 @@ class WorkerService:
 
             if item_id not in enriched_cache:
                 raw_item = self.repository.get_item_any(item_id)
+                raw_item = self._latest_payload_for_queued_item(raw_item, str(entry.get("kinozal_id") or ""))
                 if not raw_item:
                     self.repository.delete_debounce_entry(tg_user_id, debounce_kinozal_id)
                     continue

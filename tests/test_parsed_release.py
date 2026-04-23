@@ -39,3 +39,16 @@ def test_parse_release_title_keeps_season_range_progress_text() -> None:
     assert parsed.episode_start == 1
     assert parsed.episode_end == 9
     assert parsed.episode_total == 16
+
+
+def test_parse_release_title_keeps_sparse_episode_ranges_with_season() -> None:
+    parsed = parse_release_title(
+        "Смурфики (4 сезон: 1-3, 5-13 серии из 13) / The Smurfs / 2025 / ДБ / WEB-DL (1080p)",
+        "tv",
+    )
+
+    assert parsed.episode_progress_text == "4 сезон: 1-3, 5-13 серии из 13"
+    assert parsed.season == 4
+    assert parsed.episode_start == 1
+    assert parsed.episode_end == 13
+    assert parsed.episode_total == 13
