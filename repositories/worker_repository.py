@@ -145,6 +145,12 @@ class WorkerRepository:
             cooldown_seconds=cooldown_seconds,
         )
 
+    def list_recent_delivery_users_for_kinozal_id(self, kinozal_id: str, limit: int = 100) -> List[int]:
+        getter = getattr(self.db, "list_recent_delivery_users_for_kinozal_id", None)
+        if callable(getter):
+            return getter(kinozal_id, limit=limit)
+        return []
+
     def upsert_debounce(
         self,
         tg_user_id: int,

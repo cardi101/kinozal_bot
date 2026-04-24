@@ -872,6 +872,51 @@ class DeliveryRepository(BaseRepository):
             ).fetchone()
             return row is not None
 
+    def list_recent_delivery_users_for_kinozal_id(self, kinozal_id: str, limit: int = 100) -> List[int]:
+        normalized_kinozal_id = compact_spaces(str(kinozal_id or ""))
+        if not normalized_kinozal_id:
+            return []
+        fetch_limit = max(1, min(int(limit or 100), 500))
+        with self.lock:
+            rows = self.conn.execute(
+                """
+                SELECT tg_user_id, MAX(delivered_at) AS last_delivered_at
+                FROM (
+                    SELECT d.tg_user_id, d.delivered_at
+                    FROM deliveries d
+                    JOIN items i ON i.id = d.item_id
+                    WHERE i.kinozal_id = ?
+
+                    UNION ALL
+
+                    SELECT da.tg_user_id, da.delivered_at
+                    FROM deliveries_archive da
+                    WHERE da.kinozal_id = ?
+
+                    UNION ALL
+
+                    SELECT dc.tg_user_id, COALESCE(dc.sent_at, dc.claimed_at) AS delivered_at
+                    FROM delivery_claims dc
+                    WHERE dc.kinozal_id = ?
+                      AND (
+                        dc.status = 'sent'
+                        OR (dc.status = 'sending' AND COALESCE(dc.updated_at, dc.claimed_at) > ?)
+                      )
+                ) delivery_rows
+                GROUP BY tg_user_id
+                ORDER BY last_delivered_at DESC, tg_user_id DESC
+                LIMIT ?
+                """,
+                (
+                    normalized_kinozal_id,
+                    normalized_kinozal_id,
+                    normalized_kinozal_id,
+                    utc_ts() - DELIVERY_CLAIM_LEASE_SECONDS,
+                    fetch_limit,
+                ),
+            ).fetchall()
+        return [int(row["tg_user_id"]) for row in rows if row and row.get("tg_user_id") is not None]
+
     def was_delivered_to_anyone(self, item_id: int) -> bool:
         with self.lock:
             row = self.conn.execute(

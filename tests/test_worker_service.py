@@ -322,6 +322,16 @@ class _EmptySubscriptionService:
         return []
 
 
+class _MissingEnabledButMatchingSubscriptionService:
+    def list_enabled_compiled(self):
+        return []
+
+    def matches(self, sub, item: ReleaseItem) -> bool:
+        del item
+        sub_id = int(sub.id if hasattr(sub, "id") else sub["id"])
+        return sub_id == 7
+
+
 class _CachedRefreshRepository:
     def __init__(self) -> None:
         self.saved_payload = None
@@ -410,6 +420,154 @@ class _NoopDeliveryService:
         return None
 
 
+class _FollowupRecoveryRepository:
+    def __init__(self) -> None:
+        self.meta = {"bootstrap_done": "1"}
+        self.saved_item_id = 84
+        self.saved_payload = None
+        self.debounce_calls: list[tuple[int, str, int, str, int, str]] = []
+        self.recent_delivery_users = [1001]
+        self.subscriptions = {
+            7: {
+                "id": 7,
+                "tg_user_id": 1001,
+                "name": "World",
+                "is_enabled": 1,
+            }
+        }
+
+    def get_meta(self, key: str):
+        return self.meta.get(key)
+
+    def set_meta(self, key: str, value: str) -> None:
+        self.meta[key] = value
+
+    def record_source_observation(self, *args, **kwargs):
+        return 0
+
+    def find_existing_enriched(self, source_uid, source_title):
+        del source_uid, source_title
+        return None
+
+    def save_item(self, payload: dict):
+        self.saved_payload = dict(payload)
+        return self.saved_item_id, True, True
+
+    def was_delivered_to_anyone(self, item_id: int) -> bool:
+        del item_id
+        return True
+
+    def get_item(self, item_id: int):
+        if item_id == self.saved_item_id and self.saved_payload is not None:
+            return dict(self.saved_payload)
+        return None
+
+    def get_item_any(self, item_id: int):
+        return self.get_item(item_id)
+
+    def find_item_any_by_kinozal_id(self, kinozal_id: str):
+        del kinozal_id
+        return self.get_item(self.saved_item_id)
+
+    def update_item_release_text(self, item_id: int, release_text: str) -> None:
+        del item_id, release_text
+
+    def list_enabled_subscriptions(self):
+        return []
+
+    def list_user_subscriptions(self, tg_user_id: int):
+        return [sub for sub in self.subscriptions.values() if sub["tg_user_id"] == tg_user_id]
+
+    def get_subscription_genres(self, subscription_id: int):
+        del subscription_id
+        return []
+
+    def is_title_muted(self, tg_user_id: int, tmdb_id: int) -> bool:
+        del tg_user_id, tmdb_id
+        return False
+
+    def delivered(self, tg_user_id: int, item_id: int) -> bool:
+        del tg_user_id, item_id
+        return False
+
+    def delivered_equivalent(self, tg_user_id: int, item: dict) -> bool:
+        del tg_user_id, item
+        return False
+
+    def recently_delivered_kinozal_id(self, tg_user_id: int, kinozal_id: str, cooldown_seconds: int) -> bool:
+        del tg_user_id, kinozal_id, cooldown_seconds
+        return False
+
+    def recently_delivered(self, tg_user_id: int, item_id: int, cooldown_seconds: int) -> bool:
+        del tg_user_id, item_id, cooldown_seconds
+        return False
+
+    def list_recent_delivery_users_for_kinozal_id(self, kinozal_id: str, limit: int = 100):
+        del kinozal_id, limit
+        return list(self.recent_delivery_users)
+
+    def upsert_debounce(
+        self,
+        tg_user_id: int,
+        kinozal_id: str,
+        item_id: int,
+        matched_sub_ids: str,
+        delay_seconds: int,
+        event_key: str = "",
+    ) -> None:
+        self.debounce_calls.append((tg_user_id, kinozal_id, item_id, matched_sub_ids, delay_seconds, event_key))
+
+    def queue_pending_delivery(self, *args, **kwargs) -> None:
+        raise AssertionError("queue_pending_delivery should not be used in this test")
+
+    def find_higher_progress_reference(self, kinozal_id: str, progress: str, item_id: int | None = None):
+        del kinozal_id, progress, item_id
+        return None
+
+    def lease_due_pending_deliveries(self, current_ts=None):
+        del current_ts
+        return []
+
+    def lease_due_debounce_entries(self, current_ts=None):
+        del current_ts
+        return []
+
+
+class _SingleFollowupKinozalService:
+    async def fetch_latest(self):
+        return [
+            ReleaseItem.from_payload(
+                {
+                    "source_uid": "kinozal:2136764",
+                    "kinozal_id": "2136764",
+                    "source_link": "https://kinozal.tv/details.php?id=2136764",
+                    "source_title": "Извне (4 сезон: 1 серия из 10) / From / 2026 / ПМ (HDrezka Studio, LostFilm, AlexFilm, Red Head Sound), ЛМ (LE-Production), СТ / WEB-DL (1080p)",
+                    "source_category_id": "46",
+                    "source_category_name": "Сериал - Буржуйский",
+                    "source_year": 2026,
+                    "source_episode_progress": "4 сезон: 1 серия из 10",
+                    "source_audio_tracks": ["ПМ (HDrezka Studio, LostFilm, AlexFilm, Red Head Sound)", "ЛМ (LE-Production)", "СТ"],
+                    "source_format": "1080",
+                    "media_type": "tv",
+                }
+            )
+        ]
+
+    async def enrich_item_with_details(self, item: ReleaseItem, force_refresh: bool = False) -> ReleaseItem:
+        del force_refresh
+        return item
+
+
+class _SingleFollowupTMDBService:
+    async def enrich_item(self, item: ReleaseItem) -> ReleaseItem:
+        enriched = item.clone()
+        enriched.set("tmdb_id", 124364)
+        enriched.set("tmdb_title", "Извне")
+        enriched.set("tmdb_match_confidence", "high")
+        enriched.set("tmdb_match_path", "search")
+        return enriched
+
+
 def test_flush_due_pending_deliveries_uses_archived_item_payload() -> None:
     repository = _FakeWorkerRepository()
     delivery_service = _FakeDeliveryService()
@@ -491,6 +649,33 @@ def test_process_new_items_refreshes_cached_match_without_confidence() -> None:
     assert repository.saved_payload["tmdb_title"] == "Любовь сильнее смерти"
     assert repository.saved_payload["tmdb_match_confidence"] == "medium"
     assert metrics["items_tmdb_enriched_total"] == 1
+
+
+def test_process_new_items_recovers_followup_matches_from_recent_delivery_users() -> None:
+    repository = _FollowupRecoveryRepository()
+    worker = WorkerService(
+        repository=repository,
+        kinozal_service=_SingleFollowupKinozalService(),
+        tmdb_service=_SingleFollowupTMDBService(),
+        subscription_service=_MissingEnabledButMatchingSubscriptionService(),
+        delivery_service=_NoopDeliveryService(),
+        bot=None,
+    )
+
+    metrics = worker._new_cycle_metrics()
+    asyncio.run(worker.process_new_items(metrics))
+
+    assert repository.debounce_calls == [
+        (
+            1001,
+            "2136764",
+            84,
+            "7",
+            120,
+            "release:1001:2136764:84",
+        )
+    ]
+    assert metrics["debounce_queued_total"] == 1
 
 
 def test_flush_due_pending_deliveries_keeps_row_when_claim_already_exists() -> None:
