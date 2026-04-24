@@ -332,6 +332,16 @@ class _MissingEnabledButMatchingSubscriptionService:
         return sub_id == 7
 
 
+class _TwoUserPartialMatchSubscriptionService:
+    def list_enabled_compiled(self):
+        return [SubscriptionRecord.from_payload({"id": 8, "tg_user_id": 1002, "name": "World B", "is_enabled": 1})]
+
+    def matches(self, sub, item: ReleaseItem) -> bool:
+        del item
+        sub_id = int(sub.id if hasattr(sub, "id") else sub["id"])
+        return sub_id in {7, 8}
+
+
 class _CachedRefreshRepository:
     def __init__(self) -> None:
         self.saved_payload = None
@@ -533,6 +543,29 @@ class _FollowupRecoveryRepository:
         return []
 
 
+class _PartialFollowupRecoveryRepository(_FollowupRecoveryRepository):
+    def __init__(self) -> None:
+        super().__init__()
+        self.subscriptions = {
+            7: {
+                "id": 7,
+                "tg_user_id": 1001,
+                "name": "World A",
+                "is_enabled": 1,
+            },
+            8: {
+                "id": 8,
+                "tg_user_id": 1002,
+                "name": "World B",
+                "is_enabled": 1,
+            },
+        }
+        self.recent_delivery_users = [1001, 1002]
+
+    def list_enabled_subscriptions(self):
+        return [self.subscriptions[8]]
+
+
 class _SingleFollowupKinozalService:
     async def fetch_latest(self):
         return [
@@ -676,6 +709,41 @@ def test_process_new_items_recovers_followup_matches_from_recent_delivery_users(
         )
     ]
     assert metrics["debounce_queued_total"] == 1
+
+
+def test_process_new_items_recovers_missing_historical_users_even_when_some_matches_exist() -> None:
+    repository = _PartialFollowupRecoveryRepository()
+    worker = WorkerService(
+        repository=repository,
+        kinozal_service=_SingleFollowupKinozalService(),
+        tmdb_service=_SingleFollowupTMDBService(),
+        subscription_service=_TwoUserPartialMatchSubscriptionService(),
+        delivery_service=_NoopDeliveryService(),
+        bot=None,
+    )
+
+    metrics = worker._new_cycle_metrics()
+    asyncio.run(worker.process_new_items(metrics))
+
+    assert repository.debounce_calls == [
+        (
+            1002,
+            "2136764",
+            84,
+            "8",
+            120,
+            "release:1002:2136764:84",
+        ),
+        (
+            1001,
+            "2136764",
+            84,
+            "7",
+            120,
+            "release:1001:2136764:84",
+        ),
+    ]
+    assert metrics["debounce_queued_total"] == 2
 
 
 def test_flush_due_pending_deliveries_keeps_row_when_claim_already_exists() -> None:

@@ -269,28 +269,50 @@ class WorkerService:
         kinozal_id: str,
         is_release_text_change: bool,
     ) -> List[SubscriptionRecord]:
+        matched_subs, _ = self._user_match_result(
+            tg_user_id,
+            item,
+            item_id=item_id,
+            kinozal_id=kinozal_id,
+            is_release_text_change=is_release_text_change,
+        )
+        return matched_subs
+
+    def _user_match_result(
+        self,
+        tg_user_id: int,
+        item: ReleaseItem,
+        *,
+        item_id: int,
+        kinozal_id: str,
+        is_release_text_change: bool,
+    ) -> tuple[List[SubscriptionRecord], str]:
         if item.tmdb_id and self.repository.is_title_muted(tg_user_id, item.tmdb_id):
-            return []
+            return [], "title_muted"
 
         if not is_release_text_change:
-            if self.repository.delivered(tg_user_id, item_id) or self.repository.delivered_equivalent(tg_user_id, item.to_dict()):
-                return []
+            if self.repository.delivered(tg_user_id, item_id):
+                return [], "already_delivered_item"
+            if self.repository.delivered_equivalent(tg_user_id, item.to_dict()):
+                return [], "delivered_equivalent"
             if kinozal_id and self.repository.recently_delivered_kinozal_id(
                 tg_user_id,
                 kinozal_id,
                 cooldown_seconds=420,
             ):
-                return []
+                return [], "recently_delivered_kinozal_id"
         else:
             if not self.repository.delivered(tg_user_id, item_id):
-                return []
+                return [], "release_text_without_base_delivery"
             if self.repository.recently_delivered(tg_user_id, item_id, cooldown_seconds=420):
-                return []
+                return [], "recently_delivered_item"
 
         matched_subs: List[SubscriptionRecord] = []
+        enabled_seen = False
         for sub in self.repository.list_user_subscriptions(int(tg_user_id)):
             if not sub or not int(sub.get("is_enabled") or 0):
                 continue
+            enabled_seen = True
             subscription = SubscriptionRecord.from_payload(sub)
             if self.subscription_service and hasattr(self.subscription_service, "matches"):
                 matched = bool(self.subscription_service.matches(subscription, item))
@@ -298,7 +320,11 @@ class WorkerService:
                 matched = match_subscription(getattr(self.repository, "db", self.repository), sub, item.to_dict())
             if matched:
                 matched_subs.append(subscription)
-        return matched_subs
+        if matched_subs:
+            return matched_subs, "matched"
+        if enabled_seen:
+            return [], "subscription_mismatch"
+        return [], "no_enabled_subscriptions"
 
     def _recover_followup_matches_for_delivered_kinozal(
         self,
@@ -307,6 +333,7 @@ class WorkerService:
         item_id: int,
         kinozal_id: str,
         is_release_text_change: bool,
+        existing_user_ids: Set[int] | None = None,
     ) -> Dict[int, List[SubscriptionRecord]]:
         if not kinozal_id or is_release_text_change:
             return {}
@@ -314,17 +341,48 @@ class WorkerService:
         if not callable(getter):
             return {}
 
+        existing = {int(user_id) for user_id in (existing_user_ids or set())}
         recovered: Dict[int, List[SubscriptionRecord]] = {}
+        skipped_by_reason: Dict[str, List[int]] = {}
+        checked_missing_users: List[int] = []
         for tg_user_id in getter(kinozal_id, limit=200):
-            matched_subs = self._user_matches_item(
-                int(tg_user_id),
+            resolved_user_id = int(tg_user_id)
+            if resolved_user_id in existing:
+                continue
+            checked_missing_users.append(resolved_user_id)
+            matched_subs, reason = self._user_match_result(
+                resolved_user_id,
                 item,
                 item_id=item_id,
                 kinozal_id=kinozal_id,
                 is_release_text_change=False,
             )
             if matched_subs:
-                recovered[int(tg_user_id)] = matched_subs
+                recovered[resolved_user_id] = matched_subs
+            else:
+                skipped_by_reason.setdefault(reason, []).append(resolved_user_id)
+        if recovered:
+            log.warning(
+                "Recovered follow-up delivery matches item=%s kinozal_id=%s users=%s recovered_user_ids=%s",
+                item_id,
+                kinozal_id,
+                len(recovered),
+                ",".join(str(user_id) for user_id in sorted(recovered)),
+            )
+        if checked_missing_users and (recovered or skipped_by_reason):
+            reason_summary = ", ".join(
+                f"{reason}:{len(user_ids)}[{','.join(str(user_id) for user_id in user_ids[:5])}{'...' if len(user_ids) > 5 else ''}]"
+                for reason, user_ids in sorted(skipped_by_reason.items())
+            )
+            log.info(
+                "Follow-up recovery audit item=%s kinozal_id=%s existing_users=%s checked_missing=%s recovered=%s skipped=%s",
+                item_id,
+                kinozal_id,
+                len(existing),
+                len(checked_missing_users),
+                len(recovered),
+                reason_summary or "-",
+            )
         return recovered
 
     def _latest_payload_for_queued_item(self, payload: Dict[str, Any] | None, kinozal_id: str = "") -> Dict[str, Any] | None:
@@ -543,21 +601,16 @@ class WorkerService:
                 if matched_subs:
                     matches_by_user[tg_user_id] = matched_subs
 
-            if not matches_by_user and not is_release_text_change and kinozal_id:
+            if not is_release_text_change and kinozal_id:
                 recovered_matches = self._recover_followup_matches_for_delivered_kinozal(
                     item,
                     item_id=item_id,
                     kinozal_id=kinozal_id,
                     is_release_text_change=False,
+                    existing_user_ids=set(matches_by_user),
                 )
                 if recovered_matches:
                     matches_by_user.update(recovered_matches)
-                    log.warning(
-                        "Recovered follow-up delivery matches item=%s kinozal_id=%s users=%s via delivered-kinozal fallback",
-                        item_id,
-                        kinozal_id,
-                        len(recovered_matches),
-                    )
 
             if kinozal_id and not is_release_text_change and progress:
                 higher_progress_item = self.repository.find_higher_progress_reference(
