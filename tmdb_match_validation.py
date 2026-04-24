@@ -390,7 +390,22 @@ def tmdb_match_looks_valid(item: Dict[str, Any], query: str, details: Dict[str, 
     detail_norms = [normalize_match_text(value) for value in detail_variants if compact_spaces(value)]
     detail_exact_query = bool(query_clean_norm and any(value == query_clean_norm for value in detail_norms))
     detail_extends_query = bool(query_clean_norm and any(value.startswith(query_clean_norm + " ") for value in detail_norms))
+    detail_contains_query_as_fragment = bool(
+        query_clean_norm
+        and any(
+            query_clean_norm in value and value != query_clean_norm
+            for value in detail_norms
+        )
+    )
     main_title_parts: List[str] = []
+    prefix_source_parts: List[str] = []
+
+    def add_prefix_source_part(value: str) -> None:
+        part = compact_spaces(value)
+        part_norm = normalize_match_text(part)
+        if part_norm and all(part_norm != normalize_match_text(existing) for existing in prefix_source_parts):
+            prefix_source_parts.append(part)
+
     for main_value in [
         item.get("cleaned_title") or "",
         clean_release_title(item.get("source_title") or ""),
@@ -399,6 +414,9 @@ def tmdb_match_looks_valid(item: Dict[str, Any], query: str, details: Dict[str, 
             part_norm = normalize_match_text(part)
             if part_norm and all(part_norm != normalize_match_text(existing) for existing in main_title_parts):
                 main_title_parts.append(part)
+            add_prefix_source_part(part)
+    for alias in source_aliases:
+        add_prefix_source_part(alias)
     main_part_exact_query = bool(
         query_clean_norm
         and any(normalize_match_text(part) == query_clean_norm for part in main_title_parts)
@@ -412,7 +430,7 @@ def tmdb_match_looks_valid(item: Dict[str, Any], query: str, details: Dict[str, 
         and query_raw_tokens
         and not main_part_exact_query
     ):
-        for part in main_title_parts:
+        for part in prefix_source_parts:
             part_norm = normalize_match_text(part)
             if not part_norm or part_norm == query_clean_norm:
                 continue
@@ -426,6 +444,27 @@ def tmdb_match_looks_valid(item: Dict[str, Any], query: str, details: Dict[str, 
                 continue
             if best_main_overlap < 0.67 and best_main_similarity < 0.88:
                 return reject("tmdb_match_looks_valid:truncated_prefix_query")
+
+    if (
+        short_or_common_query
+        and not detail_exact_query
+        and detail_contains_query_as_fragment
+        and query_raw_tokens
+        and not main_part_exact_query
+    ):
+        for part in prefix_source_parts:
+            part_norm = normalize_match_text(part)
+            if not part_norm or part_norm == query_clean_norm:
+                continue
+            part_raw_tokens = raw_text_tokens(part)
+            if len(part_raw_tokens) < len(query_raw_tokens) + 2:
+                continue
+            for start_idx in range(0, len(part_raw_tokens) - len(query_raw_tokens) + 1):
+                if part_raw_tokens[start_idx : start_idx + len(query_raw_tokens)] != query_raw_tokens:
+                    continue
+                if best_main_overlap < 0.67 and best_main_similarity < 0.88:
+                    return reject("tmdb_match_looks_valid:truncated_prefix_query")
+                break
 
     _DERIVATIVE_SUFFIXES = {
         "podcast", "podcasts", "compilation", "compilations",

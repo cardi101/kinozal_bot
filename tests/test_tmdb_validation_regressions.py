@@ -101,6 +101,60 @@ def test_tmdb_validation_rejects_short_common_exact_prefix_for_long_movie_title(
     assert details["tmdb_validation_reject_reason"] == "tmdb_match_looks_valid:truncated_prefix_query"
 
 
+def test_tmdb_validation_rejects_short_common_tv_alias_prefix_match_for_long_source_title() -> None:
+    item = {
+        "source_title": "Новая таверна дракона (1 сезон: 1-25 серии из 48) / Xin long men ke zhan (The New Dragon Gate Inn) / 2025 / ЛД (RealFake) / WEB-DL (1080p)",
+        "cleaned_title": "Новая таверна дракона / Xin long men ke zhan (The New Dragon Gate Inn)",
+        "source_year": 2025,
+        "source_episode_progress": "1 сезон: 1-25 серии из 48",
+        "media_type": "tv",
+        "source_category_name": "Сериал - Буржуйский",
+    }
+    details = {
+        "tmdb_id": 275509,
+        "media_type": "tv",
+        "tmdb_title": "Гормити",
+        "tmdb_original_title": "The New",
+        "search_match_title": "Гормити",
+        "search_match_original_title": "The New",
+        "tmdb_release_date": "2024-10-12",
+        "tmdb_number_of_seasons": 1,
+        "tmdb_number_of_episodes": 20,
+        "tmdb_status": "Returning Series",
+    }
+
+    assert tmdb_match_looks_valid(item, "The New", details, "tv") is False
+    assert details["tmdb_validation_reject_code"] == "TRUNCATED_PREFIX_QUERY_MATCH"
+    assert details["tmdb_validation_reject_reason"] == "tmdb_match_looks_valid:truncated_prefix_query"
+
+
+def test_tmdb_validation_rejects_short_common_tv_fragment_match_for_unrelated_long_title() -> None:
+    item = {
+        "source_title": "Новая таверна дракона (1 сезон: 1-25 серии из 48) / Xin long men ke zhan (The New Dragon Gate Inn) / 2025 / ЛД (RealFake) / WEB-DL (1080p)",
+        "cleaned_title": "Новая таверна дракона / Xin long men ke zhan (The New Dragon Gate Inn)",
+        "source_year": 2025,
+        "source_episode_progress": "1 сезон: 1-25 серии из 48",
+        "media_type": "tv",
+        "source_category_name": "Сериал - Буржуйский",
+    }
+    details = {
+        "tmdb_id": 275509,
+        "media_type": "tv",
+        "tmdb_title": "Гормити",
+        "tmdb_original_title": "Gormiti - The New Era",
+        "search_match_title": "Gormiti - The New Era",
+        "search_match_original_title": "Gormiti - The New Era",
+        "tmdb_release_date": "2024-10-28",
+        "tmdb_number_of_seasons": 1,
+        "tmdb_number_of_episodes": 20,
+        "tmdb_status": "Returning Series",
+    }
+
+    assert tmdb_match_looks_valid(item, "The New", details, "tv") is False
+    assert details["tmdb_validation_reject_code"] == "TRUNCATED_PREFIX_QUERY_MATCH"
+    assert details["tmdb_validation_reject_reason"] == "tmdb_match_looks_valid:truncated_prefix_query"
+
+
 def test_tmdb_validation_allows_anime_later_season_parent_series_despite_large_year_delta() -> None:
     item = {
         "source_title": "Жизнь в альтернативном мире с нуля (4 сезон: 1-2 серии из 18) / Re: Zero / 2026 / ДБ (AniStar), ЛМ (AniLibria), СТ / WEB-DL (1080p)",
