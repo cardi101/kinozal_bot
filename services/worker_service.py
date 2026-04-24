@@ -287,6 +287,10 @@ class WorkerService:
         kinozal_id: str,
         is_release_text_change: bool,
     ) -> tuple[List[SubscriptionRecord], str]:
+        access_checker = getattr(self.repository, "user_has_access", None)
+        if callable(access_checker) and not access_checker(tg_user_id):
+            return [], "user_access_denied"
+
         if item.tmdb_id and self.repository.is_title_muted(tg_user_id, item.tmdb_id):
             return [], "title_muted"
 
@@ -345,10 +349,8 @@ class WorkerService:
         recovered: Dict[int, List[SubscriptionRecord]] = {}
         skipped_by_reason: Dict[str, List[int]] = {}
         checked_missing_users: List[int] = []
-        for tg_user_id in getter(kinozal_id, limit=200):
+        for tg_user_id in getter(kinozal_id, limit=200, exclude_user_ids=sorted(existing)):
             resolved_user_id = int(tg_user_id)
-            if resolved_user_id in existing:
-                continue
             checked_missing_users.append(resolved_user_id)
             matched_subs, reason = self._user_match_result(
                 resolved_user_id,

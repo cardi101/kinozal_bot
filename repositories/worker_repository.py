@@ -145,11 +145,23 @@ class WorkerRepository:
             cooldown_seconds=cooldown_seconds,
         )
 
-    def list_recent_delivery_users_for_kinozal_id(self, kinozal_id: str, limit: int = 100) -> List[int]:
+    def list_recent_delivery_users_for_kinozal_id(
+        self,
+        kinozal_id: str,
+        limit: int = 100,
+        *,
+        exclude_user_ids: List[int] | None = None,
+    ) -> List[int]:
         getter = getattr(self.db, "list_recent_delivery_users_for_kinozal_id", None)
         if callable(getter):
-            return getter(kinozal_id, limit=limit)
+            return getter(kinozal_id, limit=limit, exclude_user_ids=exclude_user_ids)
         return []
+
+    def user_has_access(self, tg_user_id: int) -> bool:
+        checker = getattr(self.db, "user_has_access", None)
+        if callable(checker):
+            return bool(checker(tg_user_id))
+        return True
 
     def upsert_debounce(
         self,

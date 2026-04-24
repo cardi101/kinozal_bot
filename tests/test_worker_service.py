@@ -437,6 +437,7 @@ class _FollowupRecoveryRepository:
         self.saved_payload = None
         self.debounce_calls: list[tuple[int, str, int, str, int, str]] = []
         self.recent_delivery_users = [1001]
+        self.user_access: dict[int, bool] = {1001: True}
         self.subscriptions = {
             7: {
                 "id": 7,
@@ -512,9 +513,14 @@ class _FollowupRecoveryRepository:
         del tg_user_id, item_id, cooldown_seconds
         return False
 
-    def list_recent_delivery_users_for_kinozal_id(self, kinozal_id: str, limit: int = 100):
-        del kinozal_id, limit
-        return list(self.recent_delivery_users)
+    def user_has_access(self, tg_user_id: int) -> bool:
+        return self.user_access.get(tg_user_id, True)
+
+    def list_recent_delivery_users_for_kinozal_id(self, kinozal_id: str, limit: int = 100, *, exclude_user_ids=None):
+        del kinozal_id
+        excluded = {int(user_id) for user_id in (exclude_user_ids or [])}
+        users = [user_id for user_id in self.recent_delivery_users if int(user_id) not in excluded]
+        return list(users[:limit])
 
     def upsert_debounce(
         self,
@@ -561,6 +567,38 @@ class _PartialFollowupRecoveryRepository(_FollowupRecoveryRepository):
             },
         }
         self.recent_delivery_users = [1001, 1002]
+        self.user_access = {1001: True, 1002: True}
+
+    def list_enabled_subscriptions(self):
+        return [self.subscriptions[8]]
+
+
+class _RecoverySkipsAccessDeniedRepository(_FollowupRecoveryRepository):
+    def __init__(self) -> None:
+        super().__init__()
+        self.recent_delivery_users = [1001]
+        self.user_access = {1001: False}
+
+
+class _RecoveryExcludesExistingUsersRepository(_FollowupRecoveryRepository):
+    def __init__(self) -> None:
+        super().__init__()
+        self.subscriptions = {
+            7: {
+                "id": 7,
+                "tg_user_id": 1001,
+                "name": "World A",
+                "is_enabled": 1,
+            },
+            8: {
+                "id": 8,
+                "tg_user_id": 1002,
+                "name": "World B",
+                "is_enabled": 1,
+            },
+        }
+        self.user_access = {1001: True, 1002: True}
+        self.recent_delivery_users = [1002] + list(range(2000, 2199)) + [1001]
 
     def list_enabled_subscriptions(self):
         return [self.subscriptions[8]]
@@ -713,6 +751,59 @@ def test_process_new_items_recovers_followup_matches_from_recent_delivery_users(
 
 def test_process_new_items_recovers_missing_historical_users_even_when_some_matches_exist() -> None:
     repository = _PartialFollowupRecoveryRepository()
+    worker = WorkerService(
+        repository=repository,
+        kinozal_service=_SingleFollowupKinozalService(),
+        tmdb_service=_SingleFollowupTMDBService(),
+        subscription_service=_TwoUserPartialMatchSubscriptionService(),
+        delivery_service=_NoopDeliveryService(),
+        bot=None,
+    )
+
+    metrics = worker._new_cycle_metrics()
+    asyncio.run(worker.process_new_items(metrics))
+
+    assert repository.debounce_calls == [
+        (
+            1002,
+            "2136764",
+            84,
+            "8",
+            120,
+            "release:1002:2136764:84",
+        ),
+        (
+            1001,
+            "2136764",
+            84,
+            "7",
+            120,
+            "release:1001:2136764:84",
+        ),
+    ]
+    assert metrics["debounce_queued_total"] == 2
+
+
+def test_process_new_items_recovery_skips_users_without_access() -> None:
+    repository = _RecoverySkipsAccessDeniedRepository()
+    worker = WorkerService(
+        repository=repository,
+        kinozal_service=_SingleFollowupKinozalService(),
+        tmdb_service=_SingleFollowupTMDBService(),
+        subscription_service=_MissingEnabledButMatchingSubscriptionService(),
+        delivery_service=_NoopDeliveryService(),
+        bot=None,
+    )
+
+    metrics = worker._new_cycle_metrics()
+    asyncio.run(worker.process_new_items(metrics))
+
+    assert repository.debounce_calls == []
+    assert metrics["debounce_queued_total"] == 0
+
+
+def test_process_new_items_recovery_excludes_existing_users_before_limit() -> None:
+    repository = _RecoveryExcludesExistingUsersRepository()
     worker = WorkerService(
         repository=repository,
         kinozal_service=_SingleFollowupKinozalService(),

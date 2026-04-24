@@ -872,11 +872,24 @@ class DeliveryRepository(BaseRepository):
             ).fetchone()
             return row is not None
 
-    def list_recent_delivery_users_for_kinozal_id(self, kinozal_id: str, limit: int = 100) -> List[int]:
+    def list_recent_delivery_users_for_kinozal_id(
+        self,
+        kinozal_id: str,
+        limit: int = 100,
+        *,
+        exclude_user_ids: List[int] | None = None,
+    ) -> List[int]:
         normalized_kinozal_id = compact_spaces(str(kinozal_id or ""))
         if not normalized_kinozal_id:
             return []
         fetch_limit = max(1, min(int(limit or 100), 500))
+        excluded = sorted({int(user_id) for user_id in (exclude_user_ids or [])})
+        exclusion_sql = ""
+        exclusion_params: List[Any] = []
+        if excluded:
+            placeholders = ", ".join("?" for _ in excluded)
+            exclusion_sql = f"WHERE tg_user_id NOT IN ({placeholders})"
+            exclusion_params.extend(excluded)
         with self.lock:
             rows = self.conn.execute(
                 """
@@ -903,16 +916,20 @@ class DeliveryRepository(BaseRepository):
                         OR (dc.status = 'sending' AND COALESCE(dc.updated_at, dc.claimed_at) > ?)
                       )
                 ) delivery_rows
+                {exclusion_sql}
                 GROUP BY tg_user_id
                 ORDER BY last_delivered_at DESC, tg_user_id DESC
                 LIMIT ?
                 """,
-                (
-                    normalized_kinozal_id,
-                    normalized_kinozal_id,
-                    normalized_kinozal_id,
-                    utc_ts() - DELIVERY_CLAIM_LEASE_SECONDS,
-                    fetch_limit,
+                tuple(
+                    [
+                        normalized_kinozal_id,
+                        normalized_kinozal_id,
+                        normalized_kinozal_id,
+                        utc_ts() - DELIVERY_CLAIM_LEASE_SECONDS,
+                        *exclusion_params,
+                        fetch_limit,
+                    ]
                 ),
             ).fetchall()
         return [int(row["tg_user_id"]) for row in rows if row and row.get("tg_user_id") is not None]
