@@ -892,7 +892,7 @@ class DeliveryRepository(BaseRepository):
             exclusion_params.extend(excluded)
         with self.lock:
             rows = self.conn.execute(
-                """
+                f"""
                 SELECT tg_user_id, MAX(delivered_at) AS last_delivered_at
                 FROM (
                     SELECT d.tg_user_id, d.delivered_at

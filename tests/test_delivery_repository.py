@@ -197,6 +197,20 @@ class _FakeCursorList:
         return list(self._rows)
 
 
+class _StrictPlaceholderConn:
+    def __init__(self, rows):
+        self.rows = rows
+        self.last_query = ""
+        self.last_params = ()
+
+    def execute(self, query: str, params=None):
+        params = tuple(params or ())
+        self.last_query = query
+        self.last_params = params
+        assert query.count("?") == len(params)
+        return _FakeCursorList(self.rows)
+
+
 def test_delivery_claim_is_active_only_while_lease_is_fresh() -> None:
     now = 10_000
     assert _delivery_claim_is_active({"status": "sent", "claimed_at": 1, "updated_at": 1}, now=now) is True
@@ -510,3 +524,27 @@ def test_record_delivery_archived_path_marks_claim_sent_for_new_event_type(monke
 
     assert conn.claim_rows["release_text:1001:2128422:abc"]["status"] == "sent"
     assert len(conn.archive_deliveries) == 2
+
+
+def test_list_recent_delivery_users_applies_exclusion_placeholders(monkeypatch) -> None:
+    conn = _StrictPlaceholderConn([{"tg_user_id": 1003}, {"tg_user_id": 1001}])
+    repository = DeliveryRepository(_FakeDB(conn))
+    monkeypatch.setattr(delivery_repo_module, "utc_ts", lambda: 90_000)
+
+    users = repository.list_recent_delivery_users_for_kinozal_id(
+        "2128422",
+        limit=25,
+        exclude_user_ids=[1002, 1004],
+    )
+
+    assert users == [1003, 1001]
+    assert "WHERE tg_user_id NOT IN (?, ?)" in conn.last_query
+    assert conn.last_params == (
+        "2128422",
+        "2128422",
+        "2128422",
+        90_000 - DELIVERY_CLAIM_LEASE_SECONDS,
+        1002,
+        1004,
+        25,
+    )
