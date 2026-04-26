@@ -6,6 +6,7 @@ from country_helpers import parse_country_codes
 from release_versioning import (
     build_item_variant_signature,
     compare_episode_progress,
+    episode_progress_sort_key,
     extract_kinozal_id,
     format_variant_summary,
     normalize_audio_tracks_signature,
@@ -83,6 +84,16 @@ def _pick_best_kinozal_version(items: List[Dict[str, Any]]) -> Optional[Dict[str
     for item in items:
         if best is None:
             best = item
+            continue
+        item_progress_key = episode_progress_sort_key(item.get("source_episode_progress"))
+        best_progress_key = episode_progress_sort_key(best.get("source_episode_progress"))
+        if item_progress_key is not None and best_progress_key is not None:
+            if item_progress_key > best_progress_key:
+                best = item
+                continue
+            if item_progress_key == best_progress_key and _item_recency_key(item) > _item_recency_key(best):
+                best = item
+                continue
             continue
         comparison = compare_episode_progress(
             item.get("source_episode_progress"),

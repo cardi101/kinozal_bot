@@ -74,3 +74,26 @@ def test_pick_best_kinozal_version_prefers_higher_episode_progress_over_older_pu
     }
 
     assert _pick_best_kinozal_version([older, newer]) == newer
+
+
+def test_pick_best_kinozal_version_handles_episode_total_expansion() -> None:
+    old_total_row = {
+        "id": 1921,
+        "source_episode_progress": "1-17 серии из 19",
+        "source_published_at": 1773500520,
+        "created_at": 1773490027,
+    }
+    newer_19 = {
+        "id": 6050,
+        "source_episode_progress": "1-19 серии из 23",
+        "source_published_at": None,
+        "created_at": 1775973858,
+    }
+    newer_21 = {
+        "id": 7737,
+        "source_episode_progress": "1-21 серии из 23",
+        "source_published_at": None,
+        "created_at": 1777087893,
+    }
+
+    assert _pick_best_kinozal_version([old_total_row, newer_21, newer_19]) == newer_21
