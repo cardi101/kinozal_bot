@@ -847,6 +847,28 @@ class DeliveryRepository(BaseRepository):
             )
             self.conn.commit()
 
+    def has_debounce_for_kinozal_id(self, kinozal_id: str) -> bool:
+        normalized_kinozal_id = compact_spaces(str(kinozal_id or ""))
+        if not normalized_kinozal_id:
+            return False
+        with self.lock:
+            row = self.conn.execute(
+                "SELECT 1 FROM debounce_queue WHERE kinozal_id = ? LIMIT 1",
+                (normalized_kinozal_id,),
+            ).fetchone()
+        return row is not None
+
+    def has_debounce_for_user_kinozal_id(self, tg_user_id: int, kinozal_id: str) -> bool:
+        normalized_kinozal_id = compact_spaces(str(kinozal_id or ""))
+        if not normalized_kinozal_id:
+            return False
+        with self.lock:
+            row = self.conn.execute(
+                "SELECT 1 FROM debounce_queue WHERE tg_user_id = ? AND kinozal_id = ? LIMIT 1",
+                (int(tg_user_id), normalized_kinozal_id),
+            ).fetchone()
+        return row is not None
+
     def recently_delivered_kinozal_id(self, tg_user_id: int, kinozal_id: str, cooldown_seconds: int) -> bool:
         with self.lock:
             row = self.conn.execute(

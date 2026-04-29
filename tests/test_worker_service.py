@@ -436,6 +436,8 @@ class _FollowupRecoveryRepository:
         self.saved_item_id = 84
         self.saved_payload = None
         self.debounce_calls: list[tuple[int, str, int, str, int, str]] = []
+        self.existing_debounce = False
+        self.existing_debounce_user_ids: set[int] = set()
         self.recent_delivery_users = [1001]
         self.user_access: dict[int, bool] = {1001: True}
         self.subscriptions = {
@@ -533,6 +535,14 @@ class _FollowupRecoveryRepository:
     ) -> None:
         self.debounce_calls.append((tg_user_id, kinozal_id, item_id, matched_sub_ids, delay_seconds, event_key))
 
+    def has_debounce_for_kinozal_id(self, kinozal_id: str) -> bool:
+        del kinozal_id
+        return self.existing_debounce
+
+    def has_debounce_for_user_kinozal_id(self, tg_user_id: int, kinozal_id: str) -> bool:
+        del kinozal_id
+        return self.existing_debounce or int(tg_user_id) in self.existing_debounce_user_ids
+
     def queue_pending_delivery(self, *args, **kwargs) -> None:
         raise AssertionError("queue_pending_delivery should not be used in this test")
 
@@ -602,6 +612,32 @@ class _RecoveryExcludesExistingUsersRepository(_FollowupRecoveryRepository):
 
     def list_enabled_subscriptions(self):
         return [self.subscriptions[8]]
+
+
+class _UndeliveredSavedFollowupRepository(_FollowupRecoveryRepository):
+    def save_item(self, payload: dict):
+        self.saved_payload = dict(payload)
+        return self.saved_item_id, False, False
+
+    def was_delivered_to_anyone(self, item_id: int) -> bool:
+        del item_id
+        return False
+
+
+class _PersistedSignatureFollowupRepository(_UndeliveredSavedFollowupRepository):
+    def get_item(self, item_id: int):
+        item = super().get_item(item_id)
+        if item is None:
+            return None
+        item["id"] = item_id
+        item["kinozal_id"] = item.get("kinozal_id") or "2136764"
+        item["version_signature"] = "v-followup"
+        item["media_type"] = "tv"
+        return item
+
+    def delivered_equivalent(self, tg_user_id: int, item: dict) -> bool:
+        del tg_user_id
+        return not bool(item.get("version_signature"))
 
 
 class _SingleFollowupKinozalService:
@@ -835,6 +871,123 @@ def test_process_new_items_recovery_excludes_existing_users_before_limit() -> No
         ),
     ]
     assert metrics["debounce_queued_total"] == 2
+
+
+def test_process_new_items_reprocesses_unchanged_undelivered_followup() -> None:
+    repository = _UndeliveredSavedFollowupRepository()
+    worker = WorkerService(
+        repository=repository,
+        kinozal_service=_SingleFollowupKinozalService(),
+        tmdb_service=_SingleFollowupTMDBService(),
+        subscription_service=_MissingEnabledButMatchingSubscriptionService(),
+        delivery_service=_NoopDeliveryService(),
+        bot=None,
+    )
+
+    metrics = worker._new_cycle_metrics()
+    asyncio.run(worker.process_new_items(metrics))
+
+    assert repository.debounce_calls == [
+        (
+            1001,
+            "2136764",
+            84,
+            "7",
+            120,
+            "release:1001:2136764:84",
+        )
+    ]
+    assert metrics["debounce_queued_total"] == 1
+
+
+def test_process_new_items_uses_persisted_signature_for_reprocessed_followup() -> None:
+    repository = _PersistedSignatureFollowupRepository()
+    worker = WorkerService(
+        repository=repository,
+        kinozal_service=_SingleFollowupKinozalService(),
+        tmdb_service=_SingleFollowupTMDBService(),
+        subscription_service=_MissingEnabledButMatchingSubscriptionService(),
+        delivery_service=_NoopDeliveryService(),
+        bot=None,
+    )
+
+    metrics = worker._new_cycle_metrics()
+    asyncio.run(worker.process_new_items(metrics))
+
+    assert repository.debounce_calls == [
+        (
+            1001,
+            "2136764",
+            84,
+            "7",
+            120,
+            "release:1001:2136764:v-followup",
+        )
+    ]
+    assert metrics["debounce_queued_total"] == 1
+
+
+def test_process_new_items_does_not_reset_existing_followup_debounce() -> None:
+    repository = _UndeliveredSavedFollowupRepository()
+    repository.existing_debounce = True
+    worker = WorkerService(
+        repository=repository,
+        kinozal_service=_SingleFollowupKinozalService(),
+        tmdb_service=_SingleFollowupTMDBService(),
+        subscription_service=_MissingEnabledButMatchingSubscriptionService(),
+        delivery_service=_NoopDeliveryService(),
+        bot=None,
+    )
+
+    metrics = worker._new_cycle_metrics()
+    asyncio.run(worker.process_new_items(metrics))
+
+    assert repository.debounce_calls == []
+    assert metrics["debounce_queued_total"] == 0
+
+
+def test_process_new_items_reprocesses_missing_users_with_partial_existing_debounce() -> None:
+    repository = _UndeliveredSavedFollowupRepository()
+    repository.subscriptions = {
+        7: {
+            "id": 7,
+            "tg_user_id": 1001,
+            "name": "World A",
+            "is_enabled": 1,
+        },
+        8: {
+            "id": 8,
+            "tg_user_id": 1002,
+            "name": "World B",
+            "is_enabled": 1,
+        },
+    }
+    repository.recent_delivery_users = [1001, 1002]
+    repository.user_access = {1001: True, 1002: True}
+    repository.existing_debounce_user_ids = {1001}
+    worker = WorkerService(
+        repository=repository,
+        kinozal_service=_SingleFollowupKinozalService(),
+        tmdb_service=_SingleFollowupTMDBService(),
+        subscription_service=_TwoUserPartialMatchSubscriptionService(),
+        delivery_service=_NoopDeliveryService(),
+        bot=None,
+    )
+
+    metrics = worker._new_cycle_metrics()
+    asyncio.run(worker.process_new_items(metrics))
+
+    assert repository.debounce_calls == [
+        (
+            1002,
+            "2136764",
+            84,
+            "8",
+            120,
+            "release:1002:2136764:84",
+        )
+    ]
+    assert metrics["debounce_queued_total"] == 1
 
 
 def test_flush_due_pending_deliveries_keeps_row_when_claim_already_exists() -> None:

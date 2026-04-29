@@ -219,6 +219,18 @@ class WorkerRepository:
     def delete_debounce_entry(self, tg_user_id: int, kinozal_id: str) -> None:
         self.db.delete_debounce_entry(tg_user_id, kinozal_id)
 
+    def has_debounce_for_kinozal_id(self, kinozal_id: str) -> bool:
+        checker = getattr(self.db, "has_debounce_for_kinozal_id", None)
+        if callable(checker):
+            return bool(checker(kinozal_id))
+        return False
+
+    def has_debounce_for_user_kinozal_id(self, tg_user_id: int, kinozal_id: str) -> bool:
+        checker = getattr(self.db, "has_debounce_for_user_kinozal_id", None)
+        if callable(checker):
+            return bool(checker(tg_user_id, kinozal_id))
+        return False
+
     def release_debounce_lease(
         self,
         tg_user_id: int,

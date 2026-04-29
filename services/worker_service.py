@@ -387,6 +387,29 @@ class WorkerService:
             )
         return recovered
 
+    def _should_reprocess_undelivered_followup(
+        self,
+        item_id: int,
+        kinozal_id: str,
+    ) -> bool:
+        if not kinozal_id:
+            return False
+        if self.repository.was_delivered_to_anyone(item_id):
+            return False
+        getter = getattr(self.repository, "list_recent_delivery_users_for_kinozal_id", None)
+        if not callable(getter):
+            return False
+        try:
+            return bool(getter(kinozal_id, limit=1))
+        except Exception:
+            log.warning(
+                "Failed to check undelivered follow-up recovery item=%s kinozal_id=%s",
+                item_id,
+                kinozal_id,
+                exc_info=True,
+            )
+            return False
+
     def _latest_payload_for_queued_item(self, payload: Dict[str, Any] | None, kinozal_id: str = "") -> Dict[str, Any] | None:
         if not payload and not compact_spaces(kinozal_id):
             return payload
@@ -422,6 +445,7 @@ class WorkerService:
         new_item_ids: List[int] = []
         live_items_by_id: Dict[int, ReleaseItem] = {}
         release_text_changed_ids: Set[int] = set()
+        undelivered_followup_reprocess_ids: Set[int] = set()
         old_release_texts: Dict[int, str] = {}
         poll_ts = utc_ts()
 
@@ -485,6 +509,11 @@ class WorkerService:
                     )
 
             item_id, is_new, materially_changed = self.repository.save_item(enriched.to_dict())
+            persisted_item = self.repository.get_item(item_id)
+            if persisted_item:
+                persisted_payload = dict(persisted_item)
+                persisted_payload["id"] = int(persisted_payload.get("id") or item_id)
+                enriched = ReleaseItem.from_payload(persisted_payload)
             enriched.set("id", item_id)
             live_items_by_id[item_id] = enriched
 
@@ -495,6 +524,20 @@ class WorkerService:
             elif materially_changed:
                 cycle_metrics["items_saved_updated_total"] += 1
                 touched_item_ids.append(item_id)
+            elif first_run_seen:
+                kinozal_id = enriched.kinozal_id or extract_kinozal_id(enriched.source_uid) or extract_kinozal_id(enriched.get("source_link"))
+                if self._should_reprocess_undelivered_followup(
+                    item_id=item_id,
+                    kinozal_id=kinozal_id or "",
+                ):
+                    touched_item_ids.append(item_id)
+                    undelivered_followup_reprocess_ids.add(item_id)
+                    log.warning(
+                        "Reprocessing undelivered follow-up item=%s kinozal_id=%s progress=%s",
+                        item_id,
+                        kinozal_id,
+                        enriched.get("source_episode_progress"),
+                    )
 
             if not is_new and first_run_seen and self.repository.was_delivered_to_anyone(item_id):
                 stored_item = self.repository.get_item(item_id)
@@ -734,6 +777,16 @@ class WorkerService:
 
             for tg_user_id, matched_subs in matches_by_user.items():
                 if kinozal_id and not is_release_text_change:
+                    if item_id in undelivered_followup_reprocess_ids:
+                        debounce_checker = getattr(self.repository, "has_debounce_for_user_kinozal_id", None)
+                        if callable(debounce_checker) and debounce_checker(tg_user_id, kinozal_id):
+                            log.info(
+                                "Skip existing follow-up debounce item=%s kinozal_id=%s user=%s",
+                                item_id,
+                                kinozal_id,
+                                tg_user_id,
+                            )
+                            continue
                     sub_ids_str = ",".join(str(sub.id) for sub in matched_subs)
                     self.repository.upsert_debounce(
                         tg_user_id,
