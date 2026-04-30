@@ -1045,7 +1045,8 @@ class WorkerService:
 
             if item_id not in enriched_cache:
                 raw_item = self.repository.get_item_any(item_id)
-                raw_item = self._latest_payload_for_queued_item(raw_item, str(entry.get("kinozal_id") or ""))
+                if not raw_item:
+                    raw_item = self._latest_payload_for_queued_item(raw_item, str(entry.get("kinozal_id") or ""))
                 if not raw_item:
                     self.repository.delete_debounce_entry(tg_user_id, debounce_kinozal_id)
                     continue
