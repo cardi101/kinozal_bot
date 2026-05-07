@@ -7,4 +7,4 @@ redis==7.4.0
 ftfy==6.3.1
 uvicorn==0.46.0
 prometheus-client==0.25.0
-sentry-sdk==2.58.0
+sentry-sdk==2.59.0
