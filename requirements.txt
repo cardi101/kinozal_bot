@@ -1,4 +1,4 @@
-aiogram==3.27.0
+aiogram==3.28.2
 fastapi==0.136.0
 httpx==0.28.1
 python-dotenv==1.2.2
