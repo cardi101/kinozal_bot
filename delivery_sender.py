@@ -16,7 +16,7 @@ from keyboards import mute_title_kb
 from kinozal_details import enrich_kinozal_item_with_details
 from magnet_links import build_public_magnet_redirect_url
 from text_access import html_to_plain_text
-from utils import compact_spaces, short
+from utils import compact_spaces, looks_like_replacement_mojibake, short
 
 log = logging.getLogger("kinozal-news-bot")
 
@@ -235,6 +235,13 @@ def _normalize_release_text(value: str) -> str:
 def _build_release_followup_messages(item: Dict[str, Any], old_release_text: str = "", limit: int = 3500) -> List[str]:
     release_text = _normalize_release_text(item.get("source_release_text") or "")
     if not release_text:
+        return []
+    if looks_like_replacement_mojibake(release_text) or looks_like_replacement_mojibake(old_release_text):
+        log.warning(
+            "Skip corrupted release followup item=%s kinozal_id=%s",
+            item.get("id"),
+            item.get("kinozal_id") or item.get("source_uid"),
+        )
         return []
 
     release_title = str(item.get("source_title") or item.get("tmdb_title") or "Без названия").strip()

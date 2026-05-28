@@ -138,3 +138,86 @@ def test_enrich_kinozal_item_with_details_keeps_sparse_episode_ranges(monkeypatc
     enriched = asyncio.run(kinozal_details_module.enrich_kinozal_item_with_details(dict(item), force_refresh=True))
 
     assert enriched["source_episode_progress"] == "4 сезон: 1-3, 5-13 серии из 13"
+
+
+def test_enrich_kinozal_item_with_details_accepts_valid_release_tab(monkeypatch) -> None:
+    details_html = """
+    <html>
+      <head><title>Тест / Test / 2026 / WEB-DL (1080p) :: Кинозал.ТВ</title></head>
+      <body><a onclick="showtab(12345, 3); return false;">Релиз</a></body>
+    </html>
+    """
+    release_tab_html = """
+    <div>
+      <p>Аудио: Русский AC3</p>
+      <p>Субтитры: Русские</p>
+    </div>
+    """
+
+    async def _fake_fetch(url: str) -> str:
+        if "pagesd=3" in url:
+            return release_tab_html
+        if "action=2" in url:
+            return ""
+        return details_html
+
+    monkeypatch.setattr(kinozal_details_module, "fetch_kinozal_html", _fake_fetch)
+    kinozal_details_module._DETAILS_CACHE.clear()
+
+    item = {
+        "source_link": "https://kinozal.tv/details.php?id=12345",
+        "source_title": "Тест / Test / 2026 / WEB-DL (1080p)",
+        "source_format": "",
+        "source_year": None,
+        "source_audio_tracks": [],
+        "source_episode_progress": "",
+        "source_release_type": "",
+        "parsed_release_json": "",
+    }
+
+    enriched = asyncio.run(kinozal_details_module.enrich_kinozal_item_with_details(dict(item), force_refresh=True))
+
+    assert enriched["source_release_text"] == "Аудио: Русский AC3\nСубтитры: Русские"
+
+
+def test_enrich_kinozal_item_with_details_ignores_replacement_mojibake(monkeypatch) -> None:
+    details_html = """
+    <html>
+      <head><title>пїЅпїЅпїЅ / 2026 / WEB-DL (1080p) :: Кинозал.ТВ</title></head>
+      <body><a onclick="showtab(12345, 3); return false;">Релиз</a></body>
+    </html>
+    """
+    release_tab_html = """
+    <div>
+      <p>пїЅпїЅпїЅ пїЅпїЅпїЅ пїЅпїЅпїЅ</p>
+      <p>пїЅпїЅпїЅ.GURU</p>
+    </div>
+    """
+
+    async def _fake_fetch(url: str) -> str:
+        if "pagesd=3" in url:
+            return release_tab_html
+        if "action=2" in url:
+            return ""
+        return details_html
+
+    monkeypatch.setattr(kinozal_details_module, "fetch_kinozal_html", _fake_fetch)
+    kinozal_details_module._DETAILS_CACHE.clear()
+
+    item = {
+        "source_link": "https://kinozal.tv/details.php?id=12345",
+        "source_title": "Тест (1 сезон: 1-2 серии из 8) / Test / 2026 / WEB-DL (1080p)",
+        "source_format": "1080",
+        "source_year": 2026,
+        "source_audio_tracks": [],
+        "source_episode_progress": "1 сезон: 1-2 серии из 8",
+        "source_release_type": "WEB-DL",
+        "source_release_text": "Аудио: Русский AC3",
+        "parsed_release_json": "",
+    }
+
+    enriched = asyncio.run(kinozal_details_module.enrich_kinozal_item_with_details(dict(item), force_refresh=True))
+
+    assert enriched["details_title"] == ""
+    assert enriched["source_episode_progress"] == "1 сезон: 1-2 серии из 8"
+    assert enriched["source_release_text"] == "Аудио: Русский AC3"

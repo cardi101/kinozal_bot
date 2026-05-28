@@ -8,6 +8,7 @@ from urllib.parse import quote
 from kinozal_http import KINOZAL_BASE, fetch_kinozal_html
 from parsing_basic import parse_imdb_id
 from parsed_release import parse_release_title
+from utils import looks_like_replacement_mojibake
 
 log = logging.getLogger("kinozal-details")
 
@@ -363,6 +364,10 @@ def _extract_release_text_from_tab_html(tab_html: str) -> str:
     return "\n".join(lines[:200]).strip()
 
 
+def _is_valid_release_text(text: str) -> bool:
+    return bool(str(text or "").strip()) and not looks_like_replacement_mojibake(text)
+
+
 def _score_release_text(text: str) -> int:
     raw = str(text or "").strip()
     if not raw:
@@ -485,7 +490,7 @@ async def _fetch_best_release_text(kinozal_id: str, source_link: str, main_html:
         try:
             body = await fetch_kinozal_html(f"{KINOZAL_BASE}/get_srv_details.php?id={kinozal_id}&pagesd={release_tab_index}")
             parsed = _extract_release_text_from_tab_html(body)
-            if parsed:
+            if _is_valid_release_text(parsed):
                 log.info(
                     "Selected release source for %s mode=pagesd idx=%s score=%s [release-tab-direct]",
                     source_link,
@@ -493,6 +498,12 @@ async def _fetch_best_release_text(kinozal_id: str, source_link: str, main_html:
                     _score_release_text(parsed),
                 )
                 return parsed
+            if parsed:
+                log.warning(
+                    "Ignored corrupted release text for %s mode=pagesd idx=%s",
+                    source_link,
+                    release_tab_index,
+                )
         except Exception:
             log.warning(
                 "Failed release fetch for %s mode=pagesd idx=%s",
@@ -511,6 +522,13 @@ async def _fetch_best_release_text(kinozal_id: str, source_link: str, main_html:
         try:
             body = await fetch_kinozal_html(f"{KINOZAL_BASE}/get_srv_details.php?id={kinozal_id}&pagesd={idx}")
             parsed = _extract_release_text_from_tab_html(body)
+            if parsed and not _is_valid_release_text(parsed):
+                log.warning(
+                    "Ignored corrupted release text for %s mode=pagesd idx=%s",
+                    source_link,
+                    idx,
+                )
+                continue
             score = _score_release_text(parsed)
             if parsed and score > best_score:
                 best_text = parsed
@@ -523,7 +541,7 @@ async def _fetch_best_release_text(kinozal_id: str, source_link: str, main_html:
                 exc_info=True,
             )
 
-    if best_text and useful(best_text):
+    if _is_valid_release_text(best_text) and useful(best_text):
         log.info(
             "Selected release source for %s fallback-best score=%s",
             source_link,
@@ -584,6 +602,9 @@ async def enrich_kinozal_item_with_details(item: Dict[str, Any], force_refresh: 
         file_count = len(file_lines)
 
     details_title = _extract_details_title(main_html)
+    if details_title and looks_like_replacement_mojibake(details_title):
+        log.warning("Ignored corrupted details title for %s", source_link)
+        details_title = ""
     derived_fields = _merge_missing_release_fields_from_details(item, details_title)
 
     extra: Dict[str, Any] = {
@@ -593,7 +614,7 @@ async def enrich_kinozal_item_with_details(item: Dict[str, Any], force_refresh: 
         "source_file_list": file_lines,
         "source_file_list_json": json.dumps(file_lines, ensure_ascii=False) if file_lines else "",
         "source_magnet": _build_magnet_link(info_hash, item.get("source_title") or "") if info_hash else "",
-        "source_release_text": release_text or "",
+        "source_release_text": release_text or item.get("source_release_text") or "",
         "details_title": details_title,
     }
     extra.update(derived_fields)

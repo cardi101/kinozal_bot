@@ -34,6 +34,16 @@ def compact_spaces(text: str) -> str:
     return re.sub(r"\s+", " ", (text or "")).strip()
 
 
+_REPLACEMENT_MOJIBAKE_RE = re.compile(r"(?:\ufffd|пї[Ѕѕ])", flags=re.I)
+
+
+def looks_like_replacement_mojibake(text: str) -> bool:
+    raw = str(text or "")
+    if not raw:
+        return False
+    return bool(_REPLACEMENT_MOJIBAKE_RE.search(raw))
+
+
 def strip_html(text: str) -> str:
     text = html.unescape(text or "")
     text = re.sub(r"(?is)<(script|style).*?>.*?</\1>", " ", text)

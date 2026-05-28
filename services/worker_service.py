@@ -21,7 +21,7 @@ from service_helpers import ops_alert_chat_ids
 from subscription_matching import match_subscription
 from source_categories import source_category_is_non_video
 from source_health import note_source_cycle_failure, note_source_cycle_success
-from utils import compact_spaces, utc_ts
+from utils import compact_spaces, looks_like_replacement_mojibake, utc_ts
 
 log = logging.getLogger(__name__)
 
@@ -548,6 +548,13 @@ class WorkerService:
                         force_refresh=True,
                     )
                     fresh_release_text = detail_enriched.get("source_release_text") or ""
+                    if looks_like_replacement_mojibake(fresh_release_text):
+                        log.warning(
+                            "Ignored corrupted release text update item=%s source_uid=%s",
+                            item_id,
+                            enriched.source_uid,
+                        )
+                        fresh_release_text = ""
                     if fresh_release_text and fresh_release_text != stored_release_text:
                         self.repository.update_item_release_text(item_id, fresh_release_text)
                         enriched.set("source_release_text", fresh_release_text)

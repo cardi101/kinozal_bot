@@ -3,7 +3,7 @@ from types import SimpleNamespace
 
 import delivery_sender as delivery_sender_module
 from aiogram.exceptions import TelegramNetworkError
-from delivery_sender import _tg_retry, send_item_to_user
+from delivery_sender import _build_release_followup_messages, _tg_retry, send_item_to_user
 
 
 class _FakeBot:
@@ -45,6 +45,17 @@ def test_tg_retry_retries_network_errors() -> None:
 
     assert result == "ok"
     assert calls["count"] == 3
+
+
+def test_build_release_followup_messages_skips_replacement_mojibake() -> None:
+    item = {
+        "id": 42,
+        "kinozal_id": "2141436",
+        "source_title": "Паук-Нуар / Spider-Noir",
+        "source_release_text": "пїЅпїЅпїЅ.GURU",
+    }
+
+    assert _build_release_followup_messages(item, old_release_text="Релиз от: Russian Mafia") == []
 
 
 def test_send_item_to_user_prefers_cached_poster_file_id(monkeypatch) -> None:
