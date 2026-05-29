@@ -17,6 +17,42 @@ def test_should_emit_anomaly_alert_suppresses_duplicates() -> None:
     assert WorkerService._should_emit_anomaly_alert({123: []}, existing) is False
 
 
+def test_release_text_update_uses_current_text_when_stored_text_is_mojibake() -> None:
+    item = ReleaseItem.from_payload(
+        {
+            "id": 12087,
+            "kinozal_id": "2138025",
+            "source_uid": "kinozal:2138025",
+            "source_title": "Бухта вдов",
+            "source_release_text": "Без рекламных вставок.\nКачество: WEB-DL 1080p",
+        }
+    )
+    old_release_text = WorkerService._old_release_text_for_update("пїЅпїЅпїЅ")
+    delivery = DeliveryCandidate(
+        item=item,
+        subs=[],
+        old_release_text=old_release_text,
+        is_release_text_change=True,
+        delivery_context="release_text_update",
+    )
+
+    event_type, event_key = _FakeDeliveryService().build_candidate_delivery_event(
+        1001,
+        delivery,
+        context="release_text_update",
+    )
+
+    assert old_release_text == ""
+    assert event_type == "release_text"
+    assert event_key == build_delivery_event_key(
+        1001,
+        item,
+        context="release_text_update",
+        is_release_text_change=True,
+        release_text=item.get("source_release_text"),
+    )
+
+
 class _AlertBot:
     def __init__(self) -> None:
         self.calls = []

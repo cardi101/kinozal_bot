@@ -88,6 +88,12 @@ class WorkerService:
             return True
         return False
 
+    @staticmethod
+    def _old_release_text_for_update(stored_release_text: str) -> str:
+        if looks_like_replacement_mojibake(stored_release_text):
+            return ""
+        return stored_release_text or ""
+
     def _meta_int(self, key: str, default: int = 0) -> int:
         try:
             value = self.repository.get_meta(key)
@@ -560,7 +566,7 @@ class WorkerService:
                         enriched.set("source_release_text", fresh_release_text)
                         live_items_by_id[item_id] = enriched
                         if stored_release_text:
-                            old_release_texts[item_id] = stored_release_text
+                            old_release_texts[item_id] = self._old_release_text_for_update(stored_release_text)
                             release_text_changed_ids.add(item_id)
                             cycle_metrics["release_text_changes_total"] += 1
                             if item_id not in touched_item_ids:
