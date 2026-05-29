@@ -4,7 +4,13 @@ from html import unescape
 from typing import Any, Dict, List, Optional
 from urllib.parse import urljoin
 
-from kinozal_http import close_kinozal_http, fetch_kinozal_html
+from kinozal_http import (
+    close_kinozal_http,
+    fetch_kinozal_html_with_url,
+    get_kinozal_browse_urls,
+    get_kinozal_url_base,
+    kinozal_url,
+)
 from episode_progress import parse_episode_progress
 from parsing_audio import infer_release_type, parse_audio_tracks
 from parsing_basic import parse_format, parse_year
@@ -59,42 +65,54 @@ def _enrich_title_fields(title: str) -> Dict[str, Any]:
 class KinozalSource:
     def __init__(self, base_url: str = ""):
         self.base_url = _compact(base_url).rstrip("/")
-        self.direct_url = "https://kinozal.tv/browse.php?s=&page=0&c=0&d=0&v=0"
+
+    def _browse_urls(self) -> List[str]:
+        if self.base_url:
+            return [kinozal_url("/browse.php?s=&page=0&c=0&d=0&v=0", self.base_url)]
+        return get_kinozal_browse_urls()
 
     async def close(self) -> None:
         await close_kinozal_http()
 
     async def fetch_latest(self) -> List[Dict[str, Any]]:
-        try:
-            html = await fetch_kinozal_html(self.direct_url)
-        except Exception:
-            log.exception("KinozalSource: direct fetch failed")
-            return []
-
-        if "details.php?id=" not in html:
-            title_match = re.search(r"<title[^>]*>(.*?)</title>", html, flags=re.I | re.S)
-            title = _strip_tags(title_match.group(1)) if title_match else ""
-            log.warning(
-                "KinozalSource: html contains no details links title=%s has_t_peer=%s",
-                title,
-                bool(re.search(r"t_peer", html, flags=re.I)),
-            )
-            return []
-
-        row_matches = re.findall(r"(?is)<tr\b[^>]*>.*?</tr>", html)
-        items: List[Dict[str, Any]] = []
-
-        for row_html in row_matches:
-            if "details.php?id=" not in row_html:
+        last_html = ""
+        for url in self._browse_urls():
+            try:
+                response_url, html = await fetch_kinozal_html_with_url(url)
+            except Exception:
+                log.exception("KinozalSource: direct fetch failed url=%s", url)
                 continue
-            item = self._parse_direct_row(row_html)
-            if item:
-                items.append(item)
 
-        log.info("KinozalSource: using direct html parser items=%s", len(items))
-        return items
+            last_html = html
+            if "details.php?id=" not in html:
+                title_match = re.search(r"<title[^>]*>(.*?)</title>", html, flags=re.I | re.S)
+                title = _strip_tags(title_match.group(1)) if title_match else ""
+                log.warning(
+                    "KinozalSource: html contains no details links url=%s title=%s has_t_peer=%s",
+                    response_url,
+                    title,
+                    bool(re.search(r"t_peer", html, flags=re.I)),
+                )
+                continue
 
-    def _parse_direct_row(self, row_html: str) -> Optional[Dict[str, Any]]:
+            row_matches = re.findall(r"(?is)<tr\b[^>]*>.*?</tr>", html)
+            items: List[Dict[str, Any]] = []
+
+            for row_html in row_matches:
+                if "details.php?id=" not in row_html:
+                    continue
+                item = self._parse_direct_row(row_html, response_url)
+                if item:
+                    items.append(item)
+
+            log.info("KinozalSource: using direct html parser url=%s items=%s", response_url, len(items))
+            return items
+
+        if not last_html:
+            log.warning("KinozalSource: all direct fetch attempts failed")
+        return []
+
+    def _parse_direct_row(self, row_html: str, page_url: str = "") -> Optional[Dict[str, Any]]:
         link_match = re.search(
             r'href=["\'](/details\.php\?id=(\d+))["\'][^>]*>(.*?)</a>',
             row_html,
@@ -135,7 +153,7 @@ class KinozalSource:
             "source_id": str(kinozal_id),
             "source_uid": f"kinozal:{kinozal_id}",
             "source_title": title,
-            "source_link": urljoin("https://kinozal.tv/", rel_link),
+            "source_link": urljoin(f"{get_kinozal_url_base(page_url)}/", rel_link),
             "source_description": "",
             "source_category_id": category_fields["source_category_id"],
             "source_category_name": category_fields["source_category_name"],

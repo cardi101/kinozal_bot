@@ -5,7 +5,7 @@ from html import unescape
 from typing import Any, Dict, List, Optional
 from urllib.parse import quote
 
-from kinozal_http import KINOZAL_BASE, fetch_kinozal_html
+from kinozal_http import fetch_kinozal_html, get_kinozal_url_base, kinozal_url
 from parsing_basic import parse_imdb_id
 from parsed_release import parse_release_title
 from utils import looks_like_replacement_mojibake
@@ -488,7 +488,12 @@ async def _fetch_best_release_text(kinozal_id: str, source_link: str, main_html:
     # Если удалось определить точный индекс вкладки "Релиз" — берём её как источник истины.
     if release_tab_index is not None:
         try:
-            body = await fetch_kinozal_html(f"{KINOZAL_BASE}/get_srv_details.php?id={kinozal_id}&pagesd={release_tab_index}")
+            body = await fetch_kinozal_html(
+                kinozal_url(
+                    f"/get_srv_details.php?id={kinozal_id}&pagesd={release_tab_index}",
+                    get_kinozal_url_base(source_link),
+                )
+            )
             parsed = _extract_release_text_from_tab_html(body)
             if _is_valid_release_text(parsed):
                 log.info(
@@ -520,7 +525,12 @@ async def _fetch_best_release_text(kinozal_id: str, source_link: str, main_html:
         if release_tab_index is not None and idx == release_tab_index:
             continue
         try:
-            body = await fetch_kinozal_html(f"{KINOZAL_BASE}/get_srv_details.php?id={kinozal_id}&pagesd={idx}")
+            body = await fetch_kinozal_html(
+                kinozal_url(
+                    f"/get_srv_details.php?id={kinozal_id}&pagesd={idx}",
+                    get_kinozal_url_base(source_link),
+                )
+            )
             parsed = _extract_release_text_from_tab_html(body)
             if parsed and not _is_valid_release_text(parsed):
                 log.warning(
@@ -583,7 +593,12 @@ async def enrich_kinozal_item_with_details(item: Dict[str, Any], force_refresh: 
         log.warning("Failed to fetch kinozal details page for %s", source_link, exc_info=True)
 
     try:
-        ajax_html = await fetch_kinozal_html(f"{KINOZAL_BASE}/get_srv_details.php?id={kinozal_id}&action=2")
+        ajax_html = await fetch_kinozal_html(
+            kinozal_url(
+                f"/get_srv_details.php?id={kinozal_id}&action=2",
+                get_kinozal_url_base(source_link),
+            )
+        )
         ajax_text = _strip_tags(ajax_html)
     except Exception:
         log.warning("Failed to fetch kinozal ajax file list for %s", source_link, exc_info=True)

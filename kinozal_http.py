@@ -3,8 +3,8 @@ import logging
 import os
 import re
 from html import unescape
-from typing import Dict, Optional, Tuple
-from urllib.parse import urljoin
+from typing import Dict, List, Optional, Tuple
+from urllib.parse import urljoin, urlparse, urlunparse
 
 import httpx
 from ftfy import fix_text
@@ -12,6 +12,7 @@ from ftfy import fix_text
 log = logging.getLogger("kinozal-http")
 
 KINOZAL_BASE = "https://kinozal.tv"
+KINOZAL_DEFAULT_MIRRORS = "https://kinozal.guru"
 
 _USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -22,8 +23,89 @@ _USER_AGENT = (
 _client: Optional[httpx.AsyncClient] = None
 _client_lock = asyncio.Lock()
 _login_lock = asyncio.Lock()
-_login_attempted = False
-_login_ok = False
+_login_attempted_by_base: Dict[str, bool] = {}
+_login_ok_by_base: Dict[str, bool] = {}
+
+
+def _normalize_base_url(value: str) -> str:
+    raw = str(value or "").strip().rstrip("/")
+    if not raw:
+        return ""
+    parsed = urlparse(raw if "://" in raw else f"https://{raw}")
+    if not parsed.netloc:
+        return ""
+    scheme = parsed.scheme or "https"
+    return urlunparse((scheme, parsed.netloc, "", "", "", ""))
+
+
+def _split_base_urls(value: str) -> List[str]:
+    urls: List[str] = []
+    for part in re.split(r"[\s,]+", str(value or "")):
+        base = _normalize_base_url(part)
+        if base and base not in urls:
+            urls.append(base)
+    return urls
+
+
+def get_kinozal_base_urls() -> List[str]:
+    primary = _normalize_base_url(os.getenv("KINOZAL_BASE_URL", KINOZAL_BASE)) or KINOZAL_BASE
+    mirrors = _split_base_urls(
+        os.getenv("KINOZAL_MIRROR_BASE_URLS", KINOZAL_DEFAULT_MIRRORS)
+    )
+
+    urls: List[str] = []
+    for base in [primary, *mirrors]:
+        if base and base not in urls:
+            urls.append(base)
+    return urls or [KINOZAL_BASE]
+
+
+def kinozal_url(path: str, base_url: str = "") -> str:
+    base = _normalize_base_url(base_url) or get_kinozal_base_urls()[0]
+    return urljoin(f"{base}/", str(path or "").lstrip("/"))
+
+
+def get_kinozal_browse_urls() -> List[str]:
+    return [
+        kinozal_url("/browse.php?s=&page=0&c=0&d=0&v=0", base)
+        for base in get_kinozal_base_urls()
+    ]
+
+
+def get_kinozal_url_base(url: str) -> str:
+    parsed = urlparse(str(url or ""))
+    if not parsed.netloc:
+        return get_kinozal_base_urls()[0]
+    return (
+        _normalize_base_url(f"{parsed.scheme or 'https'}://{parsed.netloc}")
+        or get_kinozal_base_urls()[0]
+    )
+
+
+def _url_candidates(url: str) -> List[str]:
+    raw = str(url or "").strip()
+    if not raw:
+        return []
+
+    parsed = urlparse(raw)
+    if not parsed.netloc:
+        path = raw
+        return [kinozal_url(path, base) for base in get_kinozal_base_urls()]
+
+    original_base = get_kinozal_url_base(raw)
+    known_bases = get_kinozal_base_urls()
+    known_hosts = {urlparse(base).netloc for base in known_bases}
+    if urlparse(original_base).netloc not in known_hosts:
+        return [raw]
+
+    path = urlunparse(("", "", parsed.path or "/", parsed.params, parsed.query, parsed.fragment))
+    bases = [original_base, *[base for base in known_bases if base != original_base]]
+    urls: List[str] = []
+    for base in bases:
+        candidate = kinozal_url(path, base)
+        if candidate not in urls:
+            urls.append(candidate)
+    return urls
 
 
 def _request_timeout() -> float:
@@ -57,7 +139,7 @@ def _extract_attr(attrs: str, name: str) -> str:
     return ""
 
 
-def _parse_login_form(html: str) -> Tuple[str, Dict[str, str], str, str]:
+def _parse_login_form(html: str, base_url: str = "") -> Tuple[str, Dict[str, str], str, str]:
     form_match = re.search(
         r'(?is)<form[^>]+action=["\']([^"\']*takelogin\.php[^"\']*)["\'][^>]*>(.*?)</form>',
         html,
@@ -65,7 +147,8 @@ def _parse_login_form(html: str) -> Tuple[str, Dict[str, str], str, str]:
     if not form_match:
         return "", {}, "", ""
 
-    action = urljoin(KINOZAL_BASE, unescape(form_match.group(1)))
+    action_base = _normalize_base_url(base_url) or get_kinozal_base_urls()[0]
+    action = urljoin(f"{action_base}/", unescape(form_match.group(1)))
     form_html = form_match.group(2)
 
     inputs: Dict[str, str] = {}
@@ -123,17 +206,16 @@ async def _get_client() -> httpx.AsyncClient:
                     "User-Agent": _USER_AGENT,
                     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
                     "Accept-Language": "ru,en;q=0.9",
-                    "Referer": f"{KINOZAL_BASE}/",
+                    "Referer": f"{get_kinozal_base_urls()[0]}/",
                 },
             )
 
         return _client
 
 
-async def _ensure_login(force: bool = False) -> httpx.AsyncClient:
-    global _login_attempted, _login_ok
-
+async def _ensure_login(base_url: str = "", force: bool = False) -> httpx.AsyncClient:
     client = await _get_client()
+    base_url = _normalize_base_url(base_url) or get_kinozal_base_urls()[0]
     username = os.getenv("KINOZAL_USERNAME", "").strip()
     password = os.getenv("KINOZAL_PASSWORD", "").strip()
 
@@ -142,22 +224,22 @@ async def _ensure_login(force: bool = False) -> httpx.AsyncClient:
 
     async with _login_lock:
         if force:
-            _login_attempted = False
-            _login_ok = False
+            _login_attempted_by_base[base_url] = False
+            _login_ok_by_base[base_url] = False
 
-        if _login_attempted and _login_ok:
+        if _login_attempted_by_base.get(base_url) and _login_ok_by_base.get(base_url):
             return client
 
-        _login_attempted = True
+        _login_attempted_by_base[base_url] = True
 
         try:
-            login_page = await client.get(f"{KINOZAL_BASE}/")
+            login_page = await client.get(f"{base_url}/", headers={"Referer": f"{base_url}/"})
             login_page.raise_for_status()
             login_html = _decode_html_bytes(login_page.content)
 
-            action, form_data, username_field, password_field = _parse_login_form(login_html)
+            action, form_data, username_field, password_field = _parse_login_form(login_html, base_url)
             if not action or not username_field or not password_field:
-                log.warning("Kinozal login form not found or incomplete")
+                log.warning("Kinozal login form not found or incomplete base=%s", base_url)
                 return client
 
             form_data[username_field] = username
@@ -166,24 +248,24 @@ async def _ensure_login(force: bool = False) -> httpx.AsyncClient:
             resp = await client.post(
                 action,
                 data=form_data,
-                headers={"Referer": f"{KINOZAL_BASE}/"},
+                headers={"Referer": f"{base_url}/"},
             )
             resp.raise_for_status()
             _ = _decode_html_bytes(resp.content)
 
-            verify = await client.get(f"{KINOZAL_BASE}/browse.php?s=&page=0&c=0&d=0&v=0")
+            verify = await client.get(kinozal_url("/browse.php?s=&page=0&c=0&d=0&v=0", base_url))
             verify.raise_for_status()
             verify_html = _decode_html_bytes(verify.content)
 
-            _login_ok = not _looks_like_guest_page(verify_html)
+            _login_ok_by_base[base_url] = not _looks_like_guest_page(verify_html)
 
-            if _login_ok:
-                log.info("Kinozal login successful")
+            if _login_ok_by_base.get(base_url):
+                log.info("Kinozal login successful base=%s", base_url)
             else:
-                log.warning("Kinozal login failed: page still looks like guest view")
+                log.warning("Kinozal login failed: page still looks like guest view base=%s", base_url)
 
         except Exception:
-            log.warning("Kinozal login failed with exception", exc_info=True)
+            log.warning("Kinozal login failed with exception base=%s", base_url, exc_info=True)
 
     return client
 
@@ -286,14 +368,15 @@ def _decode_kinozal_bytes(raw: bytes, content_type: str = "") -> str:
     return max(candidates, key=_score_decoded_text)
 
 
-async def get_kinozal_http_client() -> httpx.AsyncClient:
-    return await _ensure_login()
+async def get_kinozal_http_client(base_url: str = "") -> httpx.AsyncClient:
+    return await _ensure_login(base_url)
 
 
-async def _fetch_kinozal_response(url: str) -> httpx.Response:
-    client = await get_kinozal_http_client()
+async def _fetch_single_kinozal_response(url: str) -> httpx.Response:
+    base_url = get_kinozal_url_base(url)
+    client = await get_kinozal_http_client(base_url)
 
-    response = await client.get(url)
+    response = await client.get(url, headers={"Referer": f"{base_url}/"})
     response.raise_for_status()
 
     username = os.getenv("KINOZAL_USERNAME", "").strip()
@@ -305,15 +388,47 @@ async def _fetch_kinozal_response(url: str) -> httpx.Response:
         decoded = _decode_kinozal_bytes(raw, response.headers.get("content-type", ""))
         if _looks_like_guest_page(decoded):
             log.warning("Kinozal request looks unauthorized, retrying after forced login: %s", url)
-            client = await _ensure_login(force=True)
-            response = await client.get(url)
+            client = await _ensure_login(base_url, force=True)
+            response = await client.get(url, headers={"Referer": f"{base_url}/"})
             response.raise_for_status()
             raw2 = response.content or b""
             decoded2 = _decode_kinozal_bytes(raw2, response.headers.get("content-type", ""))
             if _looks_like_guest_page(decoded2):
-                raise RuntimeError("Kinozal login failed: still getting guest page after forced re-login")
+                raise RuntimeError(
+                    "Kinozal login failed: still getting guest page after forced re-login"
+                )
 
     return response
+
+
+async def _fetch_kinozal_response(url: str) -> httpx.Response:
+    candidates = _url_candidates(url)
+    if not candidates:
+        raise ValueError("Kinozal URL is empty")
+
+    last_exc: Exception | None = None
+    for idx, candidate in enumerate(candidates):
+        try:
+            response = await _fetch_single_kinozal_response(candidate)
+            if candidate != candidates[0]:
+                log.info(
+                    "Kinozal mirror request succeeded original=%s mirror=%s",
+                    candidates[0],
+                    candidate,
+                )
+            return response
+        except Exception as exc:
+            last_exc = exc
+            if idx + 1 < len(candidates):
+                log.warning(
+                    "Kinozal request failed, trying mirror url=%s next=%s",
+                    candidate,
+                    candidates[idx + 1],
+                    exc_info=True,
+                )
+
+    assert last_exc is not None
+    raise last_exc
 
 
 async def fetch_kinozal_bytes(url: str) -> bytes:
@@ -327,12 +442,19 @@ async def fetch_kinozal_html(url: str) -> str:
     return _decode_kinozal_bytes(raw, response.headers.get("content-type", ""))
 
 
+async def fetch_kinozal_html_with_url(url: str) -> Tuple[str, str]:
+    response = await _fetch_kinozal_response(url)
+    raw = response.content or b""
+    html = _decode_kinozal_bytes(raw, response.headers.get("content-type", ""))
+    return str(response.url), html
+
+
 async def close_kinozal_http() -> None:
-    global _client, _login_attempted, _login_ok
+    global _client
 
     async with _login_lock:
-        _login_attempted = False
-        _login_ok = False
+        _login_attempted_by_base.clear()
+        _login_ok_by_base.clear()
 
     async with _client_lock:
         if _client is not None and not getattr(_client, "is_closed", False):

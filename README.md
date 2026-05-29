@@ -98,6 +98,8 @@ make monitoring-up
 | `ADMIN_IDS` | Telegram user_id администраторов (через запятую) | ✅ |
 | `KINOZAL_USERNAME` | Логин на Kinozal.tv | ✅ |
 | `KINOZAL_PASSWORD` | Пароль на Kinozal.tv | ✅ |
+| `KINOZAL_BASE_URL` | Основной домен Kinozal (по умолчанию `https://kinozal.tv`) | — |
+| `KINOZAL_MIRROR_BASE_URLS` | Зеркала для fallback через запятую/пробел (по умолчанию `https://kinozal.guru`) | — |
 | `TMDB_TOKEN` | TMDB API Read Access Token | ✅ |
 | `POSTGRES_VOLUME_NAME` | Явное имя Docker volume для Postgres data, чтобы не получить новый пустой volume при смене compose project name | — |
 | `DATABASE_URL` | PostgreSQL DSN | ✅ |
